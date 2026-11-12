@@ -40,6 +40,11 @@ type Device struct {
 	// stop; a test makes it panic and then opens the directory again.
 	Crash func(point string)
 
+	// OnWrite, if set, is called with every data write this device signs,
+	// signed again included: the scenario harness gives them all to the
+	// reference model.
+	OnWrite func(cid []byte, w *tandem.Write)
+
 	home *tandem.Record // all home records, merged per record below
 	recs map[string]*tandem.Record
 	cols map[string]*col
@@ -71,6 +76,7 @@ type col struct {
 	replaced map[string]bool      // write IDs this device has seen superseded
 	resigned map[string]bool      // own old writes already decided: signed again, carried, or left
 	own      map[string]heldWrite // writes this device signed, by write ID, with their epoch
+	dirty    map[string]bool      // epoch||record not yet published (offline edits)
 	unshared map[string]bool      // own writes a key change may have left behind (Unshared)
 }
 
@@ -350,6 +356,9 @@ func (d *Device) sync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := d.flush(ctx); err != nil {
+		return err
+	}
 	for _, r := range added {
 		if _, ok := d.idx[r.ID]; !ok {
 			d.idx[r.ID] = &msgInfo{Tag: r.Tag}
@@ -448,7 +457,7 @@ func (d *Device) colFor(cid []byte) *col {
 	if !ok {
 		c = &col{id: cid, stmts: map[string]*tandem.Write{}, recs: map[string]map[string]*tandem.Record{},
 			invs: map[string]tandem.Inventory{}, frags: map[string]map[int][]byte{}, parts: map[string]int{},
-			replaced: map[string]bool{}, resigned: map[string]bool{}, own: map[string]heldWrite{}, unshared: map[string]bool{}}
+			replaced: map[string]bool{}, resigned: map[string]bool{}, own: map[string]heldWrite{}, unshared: map[string]bool{}, dirty: map[string]bool{}}
 		d.cols[string(cid)] = c
 	}
 	return c

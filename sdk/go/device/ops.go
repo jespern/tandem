@@ -124,6 +124,19 @@ func (d *Device) Delete(ctx context.Context, cid, rec []byte) error {
 }
 
 func (d *Device) set(ctx context.Context, cid, rec []byte, field string, value []byte, op tandem.Op) error {
+	return d.setOp(ctx, cid, rec, field, value, op)
+}
+
+// setOp makes one write: b is the value of an assign, or the element of an
+// add or remove.
+func (d *Device) setOp(ctx context.Context, cid, rec []byte, field string, b []byte, op tandem.Op) error {
+	var value, element []byte
+	switch op {
+	case tandem.OpAssign:
+		value = b
+	case tandem.OpAdd, tandem.OpRemove:
+		element = append([]byte{}, b...)
+	}
 	c, h, ep, err := d.current(cid)
 	if err != nil {
 		return err
@@ -146,14 +159,12 @@ func (d *Device) set(ctx context.Context, cid, rec []byte, field string, value [
 		r = tandem.NewRecord(rec)
 		c.recs[string(ep)][string(rec)] = r
 	}
-	ctxv, base, ok := r.Vectors(op, field, nil, string(ep), h.Body.KeyN)
+	ctxv, base, ok := r.Vectors(op, field, element, string(ep), h.Body.KeyN)
 	if !ok {
 		return errors.New("device: the field needs more than 1,024 vector entries (§9.2)")
 	}
 	w := &tandem.Write{Scope: cid, Record: rec, Field: field, Op: op, Dot: d.tick(), Ref: h.ID, Context: ctxv, Base: base}
-	if op == tandem.OpAssign {
-		w.Value = value
-	}
+	w.Value, w.Element = value, element
 	if err := w.Sign(d.u); err != nil {
 		return err
 	}
@@ -163,7 +174,36 @@ func (d *Device) set(ctx context.Context, cid, rec []byte, field string, value [
 	if err := d.save(); err != nil {
 		return err
 	}
-	return d.publishRecord(ctx, c, ep, k, rec)
+	if d.OnWrite != nil {
+		d.OnWrite(cid, w)
+	}
+	// Offline edits work (§1.1): what can't be published now is queued and
+	// published by the next sync.
+	if err := d.publishRecord(ctx, c, ep, k, rec); err != nil {
+		c.dirty[dirtyKey(ep, rec)] = true
+		return d.save()
+	}
+	return nil
+}
+
+func dirtyKey(epoch, rec []byte) string { return string(epoch) + string(rec) }
+
+// flush publishes the records queued while the hub was unreachable.
+func (d *Device) flush(ctx context.Context) error {
+	for _, c := range d.cols {
+		for key := range c.dirty {
+			ep, rec := []byte(key[:len(key)-16]), []byte(key[len(key)-16:])
+			k := d.key(c.id, ep)
+			if k == nil {
+				continue
+			}
+			if err := d.publishRecord(ctx, c, ep, k, rec); err != nil {
+				return err
+			}
+			delete(c.dirty, key)
+		}
+	}
+	return nil
 }
 
 func (d *Device) publishRecord(ctx context.Context, c *col, epoch, k, rec []byte) error {

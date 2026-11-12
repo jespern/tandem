@@ -137,6 +137,9 @@ func (d *Device) resign(ctx context.Context, c *col) error {
 		nid, _ := nw.ID()
 		c.own[string(nid)] = heldWrite{nw, cur} // a later key change may need it signed again
 		d.mergeData(c, cur, nw)
+		if d.OnWrite != nil {
+			d.OnWrite(c.id, nw)
+		}
 		touched = append(touched, h.W.Record)
 	}
 	if len(touched) > 0 {

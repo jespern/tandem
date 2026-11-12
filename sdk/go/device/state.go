@@ -33,6 +33,7 @@ type savedCol struct {
 	Own       []savedWrite      `json:"own"`
 	Resigned  []string          `json:"resigned"`
 	Unshared  []string          `json:"unshared"`
+	Dirty     []string          `json:"dirty"`
 }
 
 type saved struct {
@@ -104,6 +105,9 @@ func (d *Device) save() error {
 		}
 		for id := range c.unshared {
 			sc.Unshared = append(sc.Unshared, tandem.B64u([]byte(id)))
+		}
+		for key := range c.dirty {
+			sc.Dirty = append(sc.Dirty, tandem.B64u([]byte(key)))
 		}
 		s.Cols = append(s.Cols, sc)
 	}
@@ -225,6 +229,11 @@ func Open(ctx context.Context, dir string, hub store.Store) (*Device, error) {
 		for _, x := range sc.Resigned {
 			if b, err := tandem.ParseB64u(x); err == nil {
 				c.resigned[string(b)] = true
+			}
+		}
+		for _, x := range sc.Dirty {
+			if b, err := tandem.ParseB64u(x); err == nil {
+				c.dirty[string(b)] = true
 			}
 		}
 		for _, x := range sc.Unshared {
