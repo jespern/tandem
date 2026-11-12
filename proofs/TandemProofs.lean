@@ -10,3 +10,4 @@ import TandemProofs.Eligibility
 import TandemProofs.Reissue
 import TandemProofs.VectorLimit
 import TandemProofs.Invite
+import TandemProofs.Encoding
