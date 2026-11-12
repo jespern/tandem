@@ -654,6 +654,24 @@ func (w *World) Opens(devName string) {
 // lost phone does, until it Launches.
 func (w *World) Down(devName string) { w.Dev(devName); w.devs[devName].g.down = true }
 
+// Resets makes a device's appends or fetches fail before reaching the
+// hub (net: reset on those requests), or lets them through again.
+func (w *World) Resets(devName string, appends, fetches bool) {
+	w.Dev(devName)
+	w.devs[devName].g.failAppends, w.devs[devName].g.failFetches = appends, fetches
+}
+
+// CutsAt takes a device off the network, without stopping it, when its
+// key change reaches the named point (a server restart mid-change).
+func (w *World) CutsAt(devName, point string) {
+	x := w.devs[devName]
+	x.d.Crash = func(p string) {
+		if p == point {
+			x.g.off = true
+		}
+	}
+}
+
 // LosesReplies makes a device's appends land without their answers.
 func (w *World) LosesReplies(devName string, lose bool) {
 	w.Dev(devName)

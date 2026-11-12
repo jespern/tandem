@@ -27,9 +27,15 @@ type gate struct {
 	// loseReplies: appends reach the hub but their answers are lost, as
 	// with a connection reset after the request (S-FLAP).
 	loseReplies bool
+	// failAppends, failFetches: those requests are cut before the hub
+	// acts on them (net: reset); everything else gets through.
+	failAppends, failFetches bool
 }
 
-var errReplyLost = fmt.Errorf("%w: the answer was lost", errOffline)
+var (
+	errReplyLost = fmt.Errorf("%w: the answer was lost", errOffline)
+	errReset     = fmt.Errorf("%w: connection reset", errOffline)
+)
 
 func (g *gate) EnsureFolder(c context.Context) error {
 	if g.off || g.down {
@@ -45,6 +51,9 @@ func (g *gate) Append(c context.Context, tag string, env []byte) (string, error)
 		g.Store.Append(c, tag, env)
 		return "", errReplyLost
 	}
+	if g.failAppends {
+		return "", errReset
+	}
 	return g.Store.Append(c, tag, env)
 }
 func (g *gate) Changes(c context.Context) ([]store.Ref, []string, error) {
@@ -56,6 +65,9 @@ func (g *gate) Changes(c context.Context) ([]store.Ref, []string, error) {
 func (g *gate) Fetch(c context.Context, ids []string) (map[string]store.Message, error) {
 	if g.off || g.down {
 		return nil, errOffline
+	}
+	if g.failFetches {
+		return nil, errReset
 	}
 	return g.Store.Fetch(c, ids)
 }
