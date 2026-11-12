@@ -312,7 +312,7 @@ func (w *World) oracleRequest(coll string, ref *dev) map[string]any {
 		writes = append(writes, writeOf(w.writes[string(cid)][id]))
 	}
 	req := map[string]any{"genesis": hx(genesis), "statements": statements(stmts), "writes": writes,
-		"meta": []string{hx(tandem.NamedID("_meta"))}, "named": []string{hx(tandem.NamedID("_meta"))}, "channel": hx(ep)}
+		"meta": hx(tandem.NamedID("_meta")), "named": []string{hx(tandem.NamedID("_meta")), hx(tandem.RosterID)}, "channel": hx(ep)}
 	if inv != nil {
 		m := map[string][]string{}
 		for rec, ids := range inv {

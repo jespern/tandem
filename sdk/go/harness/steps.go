@@ -145,6 +145,21 @@ func (w *World) Shows(devName, coll, item, field string) (string, bool) {
 	return v.Fields[field], true
 }
 
+// TagsField adds or removes an element of any set field.
+func (w *World) TagsField(devName, coll, item, field, el string, add bool) error {
+	return w.Dev(devName).Tag(ctx, w.cid(coll), ItemID(coll, item), field, el, add)
+}
+
+// SetsRecord assigns a field of a record named by its ID (_meta).
+func (w *World) SetsRecord(devName, coll string, rec []byte, field, value string) error {
+	return w.Dev(devName).Set(ctx, w.cid(coll), rec, field, value)
+}
+
+// ListName is the list's name (_meta.name) a device shows.
+func (w *World) ListName(devName, coll string) string {
+	return w.Dev(devName).State(w.cid(coll))[string(tandem.NamedID("_meta"))].Fields["name"]
+}
+
 // Present reports whether a device shows an item.
 func (w *World) Present(devName, coll, item string) bool {
 	_, ok := w.Shows(devName, coll, item, "title")
@@ -535,6 +550,33 @@ func (w *World) Messages(user, coll string, epoch []byte) int {
 	return n
 }
 
+// Payloads are the record messages on the hub in an epoch's channel for
+// one item, each as the writes it holds, read with a key the user holds.
+func (w *World) Payloads(user, coll string, epoch []byte, item string) [][]*tandem.Write {
+	w.T.Helper()
+	k := w.Keys(user, coll)[string(epoch)]
+	if k == nil {
+		w.T.Fatalf("%s holds no key for that epoch", user)
+	}
+	tag := tandem.CollectionTag(k, epoch)
+	var out [][]*tandem.Write
+	for _, m := range w.Hub.Messages() {
+		if m.Tag != tag {
+			continue
+		}
+		_, pt, err := tandem.Open(k, tag, m.Envelope)
+		if err != nil {
+			continue
+		}
+		rs, _, err := tandem.ParseKind1(pt, w.cid(coll))
+		if err != nil || rs == nil || !bytes.Equal(rs.Record, ItemID(coll, item)) {
+			continue
+		}
+		out = append(out, rs.Writes)
+	}
+	return out
+}
+
 // ---- lifecycle ----
 
 type crashed struct{ point string }
@@ -637,9 +679,9 @@ type Forged struct {
 	Context tandem.VV
 	Base    tandem.VV
 	Ref     []byte // default: the head statement the device holds
-	// Signer, if set, signs with this user's key while the author field
-	// names another (forged attribution). Default: the device's user.
-	Signer string
+	// ClaimAuthor, if set, names this user as the author of a write signed
+	// with the device user's key (forged attribution).
+	ClaimAuthor string
 	// Unjudged writes aren't given to the reference model: those every
 	// honest device drops before judging (bad signatures).
 	Unjudged bool
@@ -680,8 +722,8 @@ func (w *World) Sign(devName, coll string, f Forged) *tandem.Write {
 		wr.Element = []byte(f.Element)
 	}
 	w.must(wr.Sign(w.user(user)))
-	if f.Signer != "" {
-		wr.Author = w.UID(f.Signer)
+	if f.ClaimAuthor != "" {
+		wr.Author = w.UID(f.ClaimAuthor)
 	}
 	if !f.Unjudged {
 		w.record(coll, wr)
