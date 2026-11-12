@@ -1,6 +1,6 @@
 # What we assume about Tandem now
 
-Written against `DESIGN.md` of 2026-11-12, 13:05 (973 lines, "cut down to the requirements"), uncommitted in the main checkout, with `model/owner_model.py` as its model (46 tests, all passing). Earlier versions of this note described two withdrawn designs; git history has them.
+Written against the **frozen** `DESIGN.md` (`main` at `f4ce2e6`, 999 lines, merged into this branch), with `model/owner_model.py` as its model (50 tests, all passing). Earlier versions of this note described withdrawn designs and the 13:05 draft; git history has them.
 
 The scenarios on this branch were written against the earliest of those designs and are **out of date**; the refresh waits for Jesper's go-ahead.
 
@@ -25,7 +25,8 @@ The scenarios on this branch were written against the earliest of those designs 
 **Epochs.**
 - An epoch is identified by the ID of its **starting statement**. The channel tag derives from both the key and that ID.
 - Removing a member or lowering a role starts a new epoch with a fresh key. Adding someone doesn't.
-- Rotation is owner-only, needs the network, and runs as a **journalled six-step procedure** that resumes after a crash with the same signed bytes (§11.6). The announcement in the old channel is the moment the change happens.
+- Rotation is owner-only, needs the network, and runs as a **journalled six-step procedure** that resumes after a crash with the same signed bytes (§11.6). The announcement in the old channel is the moment the change happens, and the **only** evidence of it: a missing `flight` note says nothing.
+- An epoch-starting statement that hasn't been announced is a **draft**: not part of the roster, not a successor, not half of a conflict. A discarded draft's channel is the one place a roster copy is destroyed.
 
 **Data validity.**
 - A write names the roster statement it was made under. It is eligible in epoch `E` iff its source epoch is exactly `E`, or it is listed in `E`'s **snapshot inventory**.
@@ -38,32 +39,29 @@ The scenarios on this branch were written against the earliest of those designs 
 - New: a vector may hold at most **1,024 entries**. A field that would need more is reset by deleting the record and creating it again.
 
 **Sharing.**
-- **Invites live in the owner's home**, not the roster. The invite channel is keyed from the invite secret, so only the joiner and the owner's devices can read join requests.
+- **Invites live in the owner's home**, not the roster. The invite channel is keyed from the invite secret, so everyone who holds the invite can read the join requests made on it (not only the owner's devices); members who never held it can't.
+- An invite is **closed for good** once anyone it admitted has been removed, even if they came back another way. A user the roster once listed and no longer lists is **never admitted without the owner being asked**. Both are read from the roster's history (`via`), not from home.
 - Grants are signed by the owner, and one grant catches a device up across any number of missed epochs.
 - A removed member who asks for a key gets the signed statements that removed them.
 - Leaving is a notice that the owner confirms. Declines are hints only.
 - The collection's name and icon are an owner-only data record, `_meta`, so renaming works offline.
 
-**Hub.** The bindings (§10) are unchanged, except that inventory fragments, the roster and the two statements of a dead collection are never pruned. Restoring a wiped hub is an explicit user action.
+**One reading of every message (§5.2, §10.5).** Protocol JSON is rejected whole on a repeated property name (compared as bytes), a number that isn't a plain integer within 2^53, invalid UTF-8, a byte-order mark, an unpaired escaped surrogate, or anything but whitespace around the value. `b64u` has one spelling. Text is compared as UTF-8 bytes everywhere. The Swift SDK needs its own pre-parse checks (Foundation keeps the first duplicate) and byte comparison (Swift's `==` normalizes).
 
-## 2. Still open from our work
+**Hub.** The bindings (§10) are unchanged apart from the testbed findings (below), except that inventory fragments, the roster and the two statements of a dead collection are never pruned. Restoring a wiped hub is an explicit user action.
 
-1. **Garbage-collection tie-break (§10.7).** The lowest-`H(envelope)` tie-break still covers only "messages holding exactly the same writes".
-   - **Mutual domination:** two messages with different writes can dominate each other (`m = {x, y}`, `n = {y}`, where `y` supersedes `x`). Two devices can each destroy one and lose `y`.
-   - **Identical copies:** byte-identical copies tie on the hash itself (hub.md HB-024).
-   - **Fix:** apply the tie-break to any mutual domination, and break hash ties by something both devices see the same way.
-2. **Testbed findings not yet in §10** (`testbed/README.md`):
-   - an `invalidArguments` answer to `Email/changes` must trigger a full resync, like `cannotCalculateChanges`;
-   - reconnecting after missed pings must use the interval the server reports in its pings;
-   - JMAP readers must check `isEncodingProblem` and fall back to the raw message;
-   - the IMAP connection cap can be **per account** (Stalwart: 16), which on a shared hub caps IMAP devices across every user;
-   - a push can arrive before the writer's own `Email/set` response.
-3. **Device ID after a restore (small).** §6.3 says a paired device picks a new device ID, but restoring from the backup key doesn't say so.
-   - **Why it matters:** the device ID sits in app data, which an iPhone migration copies. A restored phone could keep the old phone's device ID while the old phone is still in use.
-   - **The effect:** the two devices' dots would then collide, and a later write covering one device's dot would silently supersede the other's write.
-   - **Fix:** a device ID is only valid alongside the secret it was created with, so a new one is picked whenever the secret is (re)installed.
+## 2. Our findings, and how the frozen draft settled them
 
-The fork-choice defects in the previous version of this note concerned a withdrawn design, and no longer apply. Their substance, one key on two devices looking like equivocation, is now a stated design property: it kills the collection (§11.7, Q20).
+All three are fixed in the frozen draft, and each fix matches what we meant.
+
+1. **Garbage-collection tie-break (§10.7).** Of two messages that dominate each other, whatever writes they hold, only the one with the greater `H(envelope)` may be destroyed on account of the other. Byte-identical copies are removed only by the device that made the envelope, keeping one. "May destroy `m` on account of `n`" is then a strict partial order, so the messages at the top of any chain are never destroyed and nothing is lost, even on stale views. The Lean `GC` module proves this and checks that the old rule's counterexample fails under the new one. The proof assumes a device sees its own destroys (read-your-writes), so that it never keeps different copies in two rounds.
+2. **Testbed findings (§10.2–§10.4).**
+   - `invalidArguments` on `Email/changes` means a full resync.
+   - The push timeout is two of the intervals the server reports.
+   - A JMAP reader checks `isEncodingProblem` and falls back to the raw message.
+   - The IMAP connection cap can be per account (§10.3).
+   - A device knows its own messages by `H(envelope)` and looks for an envelope on the hub before appending it again.
+3. **Device ID after a restore (§5.3, §6.3).** A new device ID whenever the secret is installed, by pairing or from the backup key.
 
 ## 3. What this means for our work
 
@@ -86,13 +84,19 @@ New scenario areas:
 - a removed member's key request answered with statements;
 - the pairing code against a photographed QR code;
 - a restored phone and its device ID;
-- the vector limit and the reset by re-creation.
+- the vector limit and the reset by re-creation;
+- a member removed, the device crashing before closing their invite in home, and the old join request posted again;
+- a removed member let back in by a new invite, with the old invite staying closed to a new identity;
+- a change discarded while another device still holds its key, which must not treat it as made;
+- two JSON properties with the same name; a field name in two Unicode spellings; a `b64u` value in a non-canonical spelling;
+- two hub messages that dominate each other with different contents, and byte-identical copies.
 
 ### Proofs
 
 The cut makes the Lean work smaller and more tractable.
 
-- **Unchanged:** `Supersession`, `Register`, `ORSet`, `Tombstone`, `Display`, `HLC` and `GC` (its counterexample still applies).
+- **Unchanged:** `Supersession`, `Register`, `ORSet`, `Tombstone`, `Display`, `HLC`.
+- **GC:** the counterexample now fails; prove the fixed rule (§2.1).
 - **Update:** `Encoding`. `sigInput` now carries the author's signing key as the user ID, and `ref`; add the canonical inventory bytes (injective and deterministic).
 - **Replace** the roles, log and chain theorems with `Roster`:
   - a statement's validity depends only on its parent;
@@ -103,7 +107,7 @@ The cut makes the Lean work smaller and more tractable.
   - `Eligibility`: a write's eligibility in an epoch never changes;
   - `Reissue`: every device of a user signing an old write again produces the same bytes, and a re-signed write never supersedes a write the snapshot kept;
   - `VectorLimit`: building a write never exceeds 1,024 entries unless it says so.
-- **Cross-check:** the Lean model is the oracle (decided). It is differentially tested against `model/owner_model.py`, whose 46 tests become Lean examples. `tandem_model.py` and `rotation_model.py` model withdrawn designs and are ignored.
+- **Cross-check:** the Lean model is the oracle (decided). It is differentially tested against `model/owner_model.py`, whose 50 tests become Lean examples. `tandem_model.py` and `rotation_model.py` model withdrawn designs and are ignored.
 
 ### Unaffected
 

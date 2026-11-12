@@ -2,7 +2,7 @@
 
 How Tandem is verified, what exists, and what waits. The protocol itself is in `DESIGN.md`.
 
-**Status (2026-11-12): scaffolding.** The design is still being reviewed. Proofs, the reference SDK and executable scenarios start only on Jesper's go-ahead.
+**Status (2026-11-12): building.** The draft is frozen (`main` at `f4ce2e6`) and Jesper gave the go-ahead. Order: test vectors from the Go SDK checked by Swift, mail round trips on the testbed then Fastmail, crash recovery; Lean proofs and the scenario refresh alongside.
 
 ## Layers
 
