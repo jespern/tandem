@@ -93,6 +93,8 @@ Measured on a dedicated account (`liszto@noehr.org`) with API tokens; `sdk/go/st
 - **Q1, pings:** reported as `{"interval":60}`. With `ping=0` the server sends none.
 - **Q2, headers: yes.** `Tandem-Version` and `Tandem-Channel` are stored and returned unchanged. The body is kept as `text/plain`, 7-bit, `us-ascii`. Fastmail writes its own `Date` (here with a −05:00 offset).
 - **Q3, folder size: 100,000 messages work.** Appending them took 5:48. A full resync (`Email/query` paged, plus headers) took 64 s; an incremental change 0.27 s; fetching 100 bodies 0.6 s; destroying all 16 s. At 10,000 messages the full resync took 2.1 s.
+- **IMAP, for the record** (app password; API tokens are refused over IMAP). Every IDLE connection on one credential is told of changes, unlike JMAP's one push connection per token, and 40 simultaneous connections were accepted. An IMAP append reaches other IDLE sessions in about 2 s, but a **JMAP append reaches IMAP IDLE only after about 58 s** (checked with Python's `imaplib` too, so it is Fastmail, not our client). Mixed bindings on Fastmail would leave IMAP devices a minute behind JMAP ones. Envelopes cross intact both ways.
+- **Decision (Jesper, 2026-11-12):** one API token per device on Fastmail, over JMAP.
 - **Found on the way:** the JMAP binding must follow the URLs the server advertises. Fastmail's download URL is on another host, so rewriting it to the session host (which the testbed's proxy needs) is now opt-in. A full resync must page until `total`, not until a short page.
 
 ## 3. What this means for our work

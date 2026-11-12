@@ -278,3 +278,145 @@ func TestFastmailScale(t *testing.T) {
 	msgs, err := fresh.Fetch(ctx, all[:min(100, len(all))])
 	t.Logf("fetching 100 bodies: %d in %v (err %v)", len(msgs), time.Since(start).Round(time.Millisecond), err)
 }
+
+// IMAP on Fastmail, for the record (JMAP is the binding Liszto uses). The app
+// password is read from ~/.config/tandem/fastmail-imap.json.
+func fastmailIMAP(t *testing.T) Descriptor {
+	t.Helper()
+	jd := fastmail(t)
+	home, _ := os.UserHomeDir()
+	pw, err := os.ReadFile(filepath.Join(home, ".config", "tandem", "fastmail-imap.json"))
+	if err != nil {
+		t.Skip("no ~/.config/tandem/fastmail-imap.json")
+	}
+	j := openJMAP(t, jd)
+	r, err := j.do(context.Background(), "GET", jd.Session, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s struct{ Username string }
+	json.Unmarshal(r, &s)
+	return Descriptor{Kind: "imap", Host: "imap.fastmail.com", Port: 993, User: s.Username, Password: string(bytes.TrimSpace(pw))}
+}
+
+// Several devices on one credential, each holding IDLE: does every one of
+// them hear about a JMAP append, and how fast?
+func TestFastmailIMAPIdle(t *testing.T) {
+	id := fastmailIMAP(t)
+	writer := openJMAP(t, fastmail(t))
+	ctx := context.Background()
+	const n = 6
+	type watcher struct {
+		s      Store
+		events chan struct{}
+	}
+	var ws []watcher
+	for i := 0; i < n; i++ {
+		s := open(t, id)
+		if _, _, err := s.Changes(ctx); err != nil {
+			t.Fatal(err)
+		}
+		ev := make(chan struct{}, 64)
+		wctx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { defer close(done); s.Watch(wctx, func() { ev <- struct{}{} }) }()
+		t.Cleanup(func() { cancel(); <-done })
+		<-ev
+		ws = append(ws, watcher{s, ev})
+	}
+	time.Sleep(time.Second) // let every connection enter IDLE
+	tag, env := sealed(t, 200)
+	start := time.Now()
+	jid, err := writer.Append(ctx, tag, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { writer.Destroy(ctx, []string{jid}) })
+	var mu sync.Mutex
+	var lat []time.Duration
+	var wg sync.WaitGroup
+	for i, w := range ws {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			deadline := time.After(60 * time.Second)
+			for {
+				select {
+				case <-w.events:
+				case <-deadline:
+					t.Errorf("IDLE connection %d: no push within 60 s", i)
+					return
+				}
+				added, _, err := w.s.Changes(ctx)
+				if err != nil {
+					t.Errorf("connection %d: %v", i, err)
+					return
+				}
+				for _, a := range added {
+					if a.Tag == tag {
+						mu.Lock()
+						lat = append(lat, time.Since(start))
+						mu.Unlock()
+						return
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	sort.Slice(lat, func(i, k int) bool { return lat[i] < lat[k] })
+	if len(lat) > 0 {
+		t.Logf("%d of %d IDLE connections pushed; JMAP append → seen over IMAP: min %v, max %v", len(lat), n,
+			lat[0].Round(time.Millisecond), lat[len(lat)-1].Round(time.Millisecond))
+	}
+
+	// And the other way: an IMAP append, read back over JMAP.
+	tag2, env2 := sealed(t, 300)
+	uid, err := ws[0].s.Append(ctx, tag2, env2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ws[0].s.Destroy(ctx, []string{uid}) })
+	found := false
+	for i := 0; i < 10 && !found; i++ {
+		added, _, _ := writer.Changes(ctx)
+		var ids []string
+		for _, a := range added {
+			if a.Tag == tag2 {
+				ids = append(ids, a.ID)
+			}
+		}
+		msgs, _ := writer.Fetch(ctx, ids)
+		for _, m := range msgs {
+			found = found || bytes.Equal(m.Envelope, env2)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !found {
+		t.Error("an IMAP append didn't read back intact over JMAP")
+	}
+}
+
+// How many IMAP connections one credential may hold at once.
+func TestFastmailIMAPConnectionCap(t *testing.T) {
+	id := fastmailIMAP(t)
+	ctx := context.Background()
+	var open []*IMAP
+	defer func() {
+		for _, s := range open {
+			s.Close()
+		}
+	}()
+	for i := 0; i < 40; i++ {
+		s, err := OpenIMAP(ctx, id)
+		if err == nil {
+			err = s.EnsureFolder(ctx)
+		}
+		if err != nil {
+			t.Logf("connection %d refused: %v", i+1, err)
+			return
+		}
+		open = append(open, s)
+	}
+	t.Logf("40 concurrent IMAP connections accepted on one credential")
+}
