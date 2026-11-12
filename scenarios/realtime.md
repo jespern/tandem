@@ -74,20 +74,19 @@ A device notices a dead connection within **two reported ping intervals** on JMA
 - **Binding:** any
 - **Setup:** permissions.md standard setup, all in the foreground.
 - **Steps:**
-  1. `J.phone sets role B = admin`.
-  2. `J.phone removes D`.
-  3. A rotation follows.
+  1. `J.phone` makes C a writer.
+  2. `J.phone removes D`; the key change runs.
 - **Expect:**
-  - `B.phone` offers admin actions within budget of step 1, without a relaunch.
-  - `D.phone` shows "House is no longer shared with you" within budget of the genesis appearing.
-  - Every remaining device switches to the new epoch without a relaunch and keeps showing live edits made after it.
+  - `C.phone` offers editing within budget of step 1's statement appearing, without a relaunch.
+  - `D.phone` shows "House is no longer shared with you" within budget of the announcement appearing.
+  - Every remaining device moves to the new epoch, within budget of its grant, without a relaunch and keeps showing live edits made after it.
 - **Invariants:** INV-LIVE, INV-CUT
 
 ### RT-006 Approval while the joiner watches
 - **Kind:** ux
 - **Design:** §11.2–§11.4
 - **Binding:** any
-- **Setup:** A sent B a link; `B.phone` shows "Waiting for Jesper to approve" in the foreground.
+- **Setup:** J sent B a link to House; `B.phone` shows "Waiting for Jesper to approve" in the foreground.
 - **Steps:**
   1. `J.phone approves` B.
 - **Expect:**
@@ -143,7 +142,7 @@ A device notices a dead connection within **two reported ping intervals** on JMA
   - `A.phone` notices within two reported ping intervals (≈60 s on Stalwart), reconnects through the restored path, and shows all five changes within one sync.
   - The indicator shows "reconnecting", not "up to date", once the first interval passes without a ping.
 - **Invariants:** INV-NO-LOSS
-- **Notes:** depends on the design using the server's reported interval (testbed/README finding 3).
+- **Notes:** §10.2 now uses the server's reported interval (testbed/README finding 3).
 
 ### RT-011 An IDLE connection that dies quietly
 - **Kind:** fault
@@ -157,7 +156,7 @@ A device notices a dead connection within **two reported ping intervals** on JMA
 - **Expect:**
   - `A.mac` notices by the next IDLE reissue (≤ 29 min), or sooner if a liveness check is specified, then shows the changes.
 - **Invariants:** INV-NO-LOSS
-- **Notes:** GAP: as faults.md FT-025. Without a liveness check an IMAP device can be silently 29 minutes behind while showing itself online.
+- **Notes:** GAP (G-21): as faults.md FT-025. Without a liveness check an IMAP device can be silently 29 minutes behind while showing itself online.
 
 ### RT-012 A connection reset
 - **Kind:** fault
@@ -219,7 +218,7 @@ A device notices a dead connection within **two reported ping intervals** on JMA
   - The 17th device can't hold an IDLE connection. It falls back to syncing on events it can observe (launch, foreground, background refresh) and tells the user that live updates are unavailable.
   - Nobody else loses their connection.
 - **Invariants:** INV-UX
-- **Notes:** GAP: as hub.md HB-017 / scale.md SC-012. There is no fallback or message in the design.
+- **Notes:** GAP (G-41): as hub.md HB-017 / scale.md SC-012. There is no fallback or message in the design.
 
 ### RT-017 Live updates under a slow network
 - **Kind:** fault

@@ -47,7 +47,7 @@ Every family checks, after the schedule ends and all devices have synced: `INV-C
 
 ### CO-002 The same person on a second device
 - **Kind:** real-world
-- **Design:** §6.5, §6.3, §9.3
+- **Design:** §6.3, §9.3
 - **Binding:** any
 - **Setup:** CO-001 done.
 - **Steps:**
@@ -169,7 +169,7 @@ Every family checks, after the schedule ends and all devices have synced: `INV-C
   - apples is gone on every device.
   - `A.phone`'s app is told that its edit landed on a deleted record (see records.md RC-038, which finds the design gives no such signal).
 - **Invariants:** INV-CONVERGE, INV-ORACLE
-- **Notes:** GAP: as RC-038. Liszto should be able to tell Aimee "Jesper deleted this item"; the design has no event for it.
+- **Notes:** GAP (G-31): as RC-038. Liszto should be able to tell Aimee "Jesper deleted this item"; the design has no event for it.
 
 ### CO-011 Phone asleep in a pocket
 - **Kind:** real-world
@@ -240,7 +240,7 @@ Every family checks, after the schedule ends and all devices have synced: `INV-C
 - **Expect:**
   - Every device renders the same tree, with each item once and nesting one level deep, by Liszto's rendering rules.
 - **Invariants:** INV-CONVERGE, INV-UNIQUE
-- **Notes:** GAP: as records.md RC-016. A `parentID` cycle has no rendering rule in Liszto §6.2: the rule "renders under its top-level ancestor" has no top-level ancestor in a cycle. The reference model needs a deterministic tie-break, e.g. the item with the lower record ID renders at top level.
+- **Notes:** GAP (G-33): as records.md RC-016. A `parentID` cycle has no rendering rule in Liszto §6.2: the rule "renders under its top-level ancestor" has no top-level ancestor in a cycle. The reference model needs a deterministic tie-break, e.g. the item with the lower record ID renders at top level.
 
 ### CO-016 Two people write in the same note
 - **Kind:** edge
@@ -389,10 +389,12 @@ Every family checks, after the schedule ends and all devices have synced: `INV-C
 - **Steps:**
   1. `B.phone leaves Groceries`.
   2. J and A keep editing, including items B added.
+  3. J confirms "Bo left Groceries".
 - **Expect:**
   - Items B added stay, still attributed to B.
-  - A rotation happens, and J's and A's edits continue in the new epoch without interruption.
-  - `B.phone` no longer shows the list and can't decrypt anything published after the rotation (INV-CUT).
+  - Until step 3, B is still listed but his devices no longer follow Groceries.
+  - Step 3 starts a new epoch; J's and A's edits continue in it without interruption, and edits made during the key change are signed again or carried.
+  - `B.phone` no longer shows the list and can't decrypt anything published after the announcement (INV-CUT).
 - **Invariants:** INV-CUT, INV-BYSTANDER, INV-CONVERGE
 
 ### CO-028 The busiest item
@@ -453,7 +455,7 @@ Every family checks, after the schedule ends and all devices have synced: `INV-C
 ### CO-F05 Family: players joining over time
 - **Kind:** real-world
 - **Design:** §11.2–§11.4, §9.3
-- **Parameters:** players 2–10 joining under `S-STAGGER`, each by QR or link (approved by P1 or an admin); ops from `M-LIST`; 100 seeds
+- **Parameters:** players 2–10 joining under `S-STAGGER`, each by QR or link (approved by P1, the owner); ops from `M-LIST`; 100 seeds
 - **Oracle:** the reference model
 - **Expect:**
   - All family checks.
