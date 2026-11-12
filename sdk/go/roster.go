@@ -73,6 +73,16 @@ func Genesis(u *User, name string, k, nonce []byte, dot Dot) (w *Write, collecti
 	return w, id[:16], id, nil
 }
 
+// NextStatement signs a successor of parent carrying st.
+func NextStatement(u *User, collection, parent []byte, st Statement, dot Dot) (*Write, error) {
+	body, err := json.Marshal(st)
+	if err != nil {
+		return nil, err
+	}
+	w := StatementWrite(collection, parent, body, dot)
+	return w, w.Sign(u)
+}
+
 // Inventory maps record IDs to the write IDs carried into a new epoch.
 type Inventory map[string][][]byte // key: string(recordID)
 
