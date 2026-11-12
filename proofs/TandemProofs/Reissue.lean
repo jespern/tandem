@@ -118,7 +118,7 @@ theorem reissued_not_over_new {head : Stmt} {w n x : Write} (h : reissue head w 
 theorem reissued_keeps_replacing {head : Stmt} {w n x : Write} (h : reissue head w = some n)
     (hwx : sup w x) (hlater : w.epoch < n.epoch) : sup n x := by
   obtain ⟨-, hb, hs, -⟩ := reissue_fields h
-  refine ⟨hs.trans hwx.1, Or.inl ⟨lt_of_le_of_lt (sup_epoch_le hwx) hlater, ?_, ?_⟩⟩
+  refine ⟨Write.governs_of_slot hs hwx.1, Or.inl ⟨lt_of_le_of_lt (sup_epoch_le hwx) hlater, ?_, ?_⟩⟩
   · rw [hb]
     rcases hwx.2 with ⟨-, h1, -⟩ | ⟨-, ⟨h1, -⟩, -⟩
     · exact vle_trans h1 (vle_append_left _ _)

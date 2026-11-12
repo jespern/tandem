@@ -6,9 +6,58 @@ import TandemProofs.Model
 
 Nothing here assumes the vectors are honest: a writer may sign any `context` and `base`,
 claim to cover the future, or claim to cover a write that claims to cover it.
+
+Registers (decided 2026-11-12): a write supersedes only writes of its own register, except
+that a delete supersedes any write to its record that it includes. Only a delete supersedes
+a delete. `Write.governs` is transitive, so the order stays strict.
 -/
 
 namespace Tandem
+
+namespace Write
+
+theorem slot_record (w : Write) : w.slot.1 = w.record := by
+  unfold slot; cases w.op <;> rfl
+
+theorem slot_eq_delete {w x : Write} (h : w.slot = x.slot) (hx : x.op = .delete) :
+    w.op = .delete ∧ w.record = x.record := by
+  unfold slot at h
+  rw [hx] at h
+  cases hw : w.op <;> rw [hw] at h <;> simp_all
+
+/-- Only a delete governs a delete. -/
+theorem governs_delete {w x : Write} (h : w.governs x) (hx : x.op = .delete) :
+    w.op = .delete ∧ w.record = x.record := by
+  rcases h with h | h
+  · exact slot_eq_delete h hx
+  · exact h
+
+theorem governs_record {w x : Write} (h : w.governs x) : w.record = x.record := by
+  rcases h with h | h
+  · rw [← slot_record w, ← slot_record x, h]
+  · exact h.2
+
+theorem governs_trans {a b c : Write} (hab : a.governs b) (hbc : b.governs c) : a.governs c := by
+  rcases hab with hab | ⟨had, habr⟩
+  · rcases hbc with hbc | ⟨hbd, hbcr⟩
+    · exact Or.inl (hab.trans hbc)
+    · obtain ⟨had, habr⟩ := slot_eq_delete hab hbd
+      exact Or.inr ⟨had, habr.trans hbcr⟩
+  · exact Or.inr ⟨had, habr.trans (governs_record hbc)⟩
+
+/-- A write with the same slot governs what the other governs (used for signing again). -/
+theorem governs_of_slot {n w x : Write} (hs : n.slot = w.slot) (h : w.governs x) :
+    n.governs x := by
+  rcases h with h | ⟨hd, hr⟩
+  · exact Or.inl (hs.trans h)
+  · obtain ⟨hnd, hnr⟩ := slot_eq_delete hs hd
+    exact Or.inr ⟨hnd, hnr.trans hr⟩
+
+/-- Writes other than deletes govern exactly their own register: for them nothing changed. -/
+theorem governs_iff_slot {w x : Write} (hw : w.op ≠ .delete) : w.governs x ↔ w.slot = x.slot :=
+  ⟨fun h => h.resolve_right fun h => hw h.1, Or.inl⟩
+
+end Write
 
 theorem includes_trans {a b c : Write} (h1 : includes a b) (h2 : includes b c) : includes a c :=
   ⟨vle_trans h2.1 (vle_trans (vle_ctx_reach b) h1.1), vle_trans h2.2 h1.2⟩
@@ -21,7 +70,7 @@ theorem sup_irrefl (w : Write) : ¬ sup w w := by
 theorem sup_trans {a b c : Write} (hab : sup a b) (hbc : sup b c) : sup a c := by
   obtain ⟨sab, hab⟩ := hab
   obtain ⟨sbc, hbc⟩ := hbc
-  refine ⟨sab.trans sbc, ?_⟩
+  refine ⟨Write.governs_trans sab sbc, ?_⟩
   rcases hab with ⟨eab, rab, bab⟩ | ⟨eab, iab, nba⟩ <;>
     rcases hbc with ⟨ebc, rbc, bbc⟩ | ⟨ebc, ibc, ncb⟩
   · -- later, later

@@ -232,15 +232,28 @@ def epoch (w : Write) : Nat := w.ref.epochNum
 /-- `reach(w)`: its context joined with its own dot. -/
 def reach (w : Write) : VV := w.ctx ++ [(w.dev, w.hlc)]
 
-/-- The register a write belongs to. Field names are compared as their bytes (§9.1);
-`String` equality is code-point equality, which is UTF-8 byte equality. Each set element is
-its own register (§9.2). A delete is the record's own register: only a delete supersedes a
-delete (see `Record.lean` for why this needs saying). -/
+/-- The register a write belongs to: (record, field) for `assign`, (record, field, element)
+for `add`/`remove`, the record alone for `delete`. Field names are compared as their bytes
+(§9.1); `String` equality is code-point equality, which is UTF-8 byte equality. A delete's
+register is the one only deletes belong to; `governs` adds what else a delete reaches. -/
 def slot (w : Write) : String × String × Nat × String :=
   match w.op with
   | .assign => (w.record, w.field, 0, "")
   | .add | .remove => (w.record, w.field, 1, w.elem)
   | .delete => (w.record, "", 2, "")
+
+/-- A delete write has an empty field name, no element and an empty value (§9.2), so every
+SDK signs it the same way. Writes of other ops are unconstrained here. -/
+def shapeOK (w : Write) : Bool :=
+  w.op != .delete || (w.field == "" && w.elem == "" && w.value == "")
+
+/-- `w` may supersede `x` as far as registers go (§9.2, decided 2026-11-12): `x` is in `w`'s
+register, or `w` is a delete and `x` is any write to the same record, whatever its field or
+op. A non-delete never governs a delete, since a delete's slot is one only deletes have. -/
+def governs (w x : Write) : Prop :=
+  w.slot = x.slot ∨ (w.op = .delete ∧ w.record = x.record)
+
+instance : DecidableRel governs := fun _ _ => by unfold governs; infer_instance
 end Write
 
 theorem vle_ctx_reach (w : Write) : vle w.ctx w.reach := vle_append_left _ _
@@ -250,9 +263,10 @@ def includes (w x : Write) : Prop := vle x.reach w.ctx ∧ vle x.base w.base
 
 instance : DecidableRel includes := fun _ _ => by unfold includes; infer_instance
 
-/-- §9.2 supersession: `sup w x` reads "`w` supersedes `x`". -/
+/-- §9.2 supersession: `sup w x` reads "`w` supersedes `x`". The vector test is the same for
+every op; `Write.governs` says which pairs it applies to. -/
 def sup (w x : Write) : Prop :=
-  w.slot = x.slot ∧
+  w.governs x ∧
     ((x.epoch < w.epoch ∧ vle x.reach w.base ∧ vle x.base w.base) ∨
      (w.epoch = x.epoch ∧ includes w x ∧ ¬ includes x w))
 

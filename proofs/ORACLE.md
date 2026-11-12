@@ -22,7 +22,7 @@ Every field is optional except `genesis` and `statements`.
 |---|---|
 | `genesis` | ID of the statement the device expects as genesis (the one the collection ID names). |
 | `statements` | Roster statements the device holds, in any order. A repeated ID counts once. Each is `{id, parent, signer, n, epoch, commit, snapshot, deleted, members, announced}`.<br>• `parent` and `snapshot` may be `null`.<br>• `epoch` is the key counter `key.n` and `commit` the key commitment.<br>• `members` is `[{uid, role, uka, name, via}]`; `via` is optional and `role` is any string (only `owner`, `writer` and `reader` are valid).<br>• `announced` (default `true`): for a statement that starts an epoch, whether the device has seen it in the previous epoch's channel. If not, it is a draft. |
-| `writes` | Data writes: `{id, author, ref, record, field, op, elem, value, dev, hlc, ctx, base}`.<br>• `op` is `assign` (default), `add`, `remove` or `delete`.<br>• `hlc` is one integer, the wire's `millis·2^16 + counter`.<br>• `ctx` and `base` are `[[device, hlc], …]` or `{device: hlc}`. |
+| `writes` | Data writes: `{id, author, ref, record, field, op, elem, value, dev, hlc, ctx, base}`.<br>• `op` is `assign` (default), `add`, `remove` or `delete`.<br>• A `delete` must have empty `field`, `elem` and `value`, or it is invalid (§9.2).<br>• `hlc` is one integer, the wire's `millis·2^16 + counter`.<br>• `ctx` and `base` are `[[device, hlc], …]` or `{device: hlc}`. |
 | `meta`, `named` | Record IDs of `_meta`, and of every named record (on which `delete` is invalid). |
 | `channel` | Epoch-start statement ID whose channel is being judged. Default: the epoch of the head. |
 | `inventory` | That epoch's assembled inventory, `{record: [writeID, …]}`, or `null` while it is missing. |
@@ -43,7 +43,7 @@ Every field is optional except `genesis` and `statements`.
 | `channel` | The epoch judged. | |
 | `held` | Writes whose `ref` the device doesn't follow (yet). | |
 | `eligible` | Writes eligible in `channel` (§8.3). | `eligible` |
-| `supersedes` | `[w, x]` pairs, among writes whose `ref` is followed: `w` supersedes `x` (§9.2). | `sup` |
+| `supersedes` | `[w, x]` pairs, among writes whose `ref` is followed: `w` supersedes `x` (§9.2). Registers: (record, field) for `assign`, (record, field, element) for `add`/`remove`; a `delete` supersedes any write to its record that it includes, and only a `delete` supersedes a `delete` (decided 2026-11-12). | `sup`, `Write.governs` |
 | `state` | Per record, the kept eligible writes:<br>• `deleted`;<br>• `fields`: `{field: {kept: [ids], display: id}}`;<br>• `sets`: `{field: [present elements]}`. | `kept`, `display` |
 | `dominated` | `[m, n]`: message `n` dominates message `m` (§10.7). | `dominated` |
 | `mayDestroy` | `[m, n]`: `m` may be destroyed on account of `n`. | `mayDestroy` |
@@ -62,7 +62,7 @@ Each run builds a random history:
 - valid and invalid statements;
 - rotations whose inventories list earlier writes;
 - conflicting successors, and statements signed by others;
-- random writes, some with vectors over the limit;
+- random writes, some with vectors over the limit, and about one in five a delete;
 - fields named `é` in both Unicode spellings;
 - messages with colliding hashes, invites, and late writes.
 
@@ -75,11 +75,19 @@ It delivers a random subset of the history, in random order, to an `OwnerLog`. I
 - eligibility in every followed epoch, with its inventory;
 - inventory bytes.
 
+**Deletes are compared through an adjustment.** `owner_model.py` has no ops: it compares every write by (record, field), so on its own it would treat a delete (field `""`) as a register of its own field and never let it supersede another field. `difftest.py` doesn't edit the model; it wraps the model's `supersedes` (`with_delete_registers`) with the decided register rule and leaves the model's vector test alone:
+
+- a non-delete never supersedes a delete;
+- a delete is tested against any write to its record as if it had that write's field;
+- every other pair goes to the model unchanged.
+
+The model's `dominated`, `may_destroy` and `reissue` call `supersedes` through the module, so they get the same rule. What is still differential for deletes is the vector test, epochs, eligibility and clean-up; the register rule itself is the harness's and is proved in Lean (`Record.lean`). With the wrapper removed, the oracle disagrees with the model on 25 of the first 200 seeds.
+
 The Python model doesn't cover these, so they are checked only in Lean (`Examples.lean`):
 
 - display;
 - sets;
-- tombstones;
+- tombstones, and the state a delete leaves (`delete_built_over_state`);
 - drafts;
 - `_meta` and named-record deletes;
 - JSON and `b64u` strictness (the Go SDK's job).

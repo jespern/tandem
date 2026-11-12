@@ -155,7 +155,6 @@ def handle (req : Json) : Except String Json := do
   -- the channel's state: eligible writes nothing eligible supersedes
   let K := kept sup elig.toFinset
   let keptL := elig.filter (· ∈ K)
-  let slots := (keptL.map Write.slot).eraseDups
   let records := (keptL.map (·.record)).eraseDups
   let recJson := records.map fun r =>
     let mine := keptL.filter (·.record == r)
