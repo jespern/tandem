@@ -30,7 +30,11 @@ func randomWrites(r *rand.Rand, n int) []Entry {
 	for range n {
 		ep := epochs[r.IntN(len(epochs))]
 		op := []Op{OpAssign, OpAssign, OpAdd, OpRemove, OpDelete}[r.IntN(5)]
-		w := &Write{Scope: make([]byte, 16), Record: make([]byte, 16), Field: "f", Op: op,
+		field := "f"
+		if op == OpDelete {
+			field = ""
+		}
+		w := &Write{Scope: make([]byte, 16), Record: make([]byte, 16), Field: field, Op: op,
 			Author: make([]byte, 32), Dot: dot(), Ref: append([]byte{byte(ep.n)}, make([]byte, 31)...), Context: vv(), Base: vv()} // the ref fixes the epoch
 		switch op {
 		case OpAssign:
@@ -148,5 +152,47 @@ func TestHonestMerge(t *testing.T) {
 	rec.Merge(c)
 	if v, _ := rec.Value("title"); !ok || string(v) != "C" || len(rec.Siblings("title")) != 1 {
 		t.Fatal("a write covering all siblings resolves the conflict")
+	}
+}
+
+// A delete supersedes every write of the record it includes, in any field,
+// so a tombstone that saw the record leaves one write; a write concurrent
+// with it survives under it; nothing but a delete supersedes a delete.
+func TestDeleteSupersedesWhatItSaw(t *testing.T) {
+	p, q := [8]byte{1}, [8]byte{2}
+	mk := func(op Op, field string, d Dot, ctx VV) Entry {
+		w := &Write{Scope: make([]byte, 16), Record: make([]byte, 16), Field: field, Op: op,
+			Author: make([]byte, 32), Dot: d, Ref: make([]byte, 32), Context: ctx, Base: VV{}}
+		switch op {
+		case OpAssign:
+			w.Value = []byte("v")
+		case OpAdd:
+			w.Element = []byte("x")
+		}
+		e, err := NewEntry(w, []byte("e"), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	title := mk(OpAssign, "title", Dot{p, 1, 0}, VV{})
+	tag := mk(OpAdd, "tags", Dot{p, 2, 0}, VV{})
+	rec := NewRecord(nil)
+	rec.Merge(title, tag)
+	ctx, _, _ := rec.Vectors(OpDelete, "", nil, "e", 0)
+	del := mk(OpDelete, "", Dot{q, 3, 0}, ctx)
+	concurrent := mk(OpAssign, "notes", Dot{p, 4, 0}, VV{{p, 2, 0}})
+	rec.Merge(del, concurrent)
+	if !rec.Deleted() || len(rec.Kept) != 2 {
+		t.Fatalf("kept %d writes, want the delete and the concurrent edit", len(rec.Kept))
+	}
+	cover := mk(OpAssign, "notes", Dot{p, 5, 0}, Join(reach(del.W), reach(concurrent.W)))
+	rec.Merge(cover)
+	if !rec.Deleted() {
+		t.Fatal("an assign covering the delete must not supersede it")
+	}
+	if _, err := (&Write{Scope: make([]byte, 16), Record: make([]byte, 16), Field: "title", Op: OpDelete,
+		Author: make([]byte, 32), Ref: make([]byte, 32)}).SigInput(); err == nil {
+		t.Fatal("a delete with a field name is invalid")
 	}
 }

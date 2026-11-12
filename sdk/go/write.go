@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 )
 
 // Writes and their signatures (§5.5, §9.1).
@@ -92,6 +91,8 @@ func (w *Write) check() error {
 		return errors.New("tandem: element only on add and remove")
 	case w.Op != OpAssign && len(w.Value) > 0:
 		return errors.New("tandem: value only on assign")
+	case w.Op == OpDelete && w.Field != "":
+		return errors.New("tandem: a delete has an empty field name")
 	case w.Dot.Millis >= maxMillis:
 		return errors.New("tandem: HLC millis beyond 48 bits")
 	}
@@ -240,9 +241,8 @@ func parseVV(j JSON, ok bool) (VV, error) {
 		}
 		v = append(v, d)
 	}
-	// The signed form is sorted by device ID (§5.5); JSON order doesn't
-	// matter, a device twice does.
-	slices.SortFunc(v, func(a, b Dot) int { return bytes.Compare(a.Device[:], b.Device[:]) })
+	// One reading (§10.5): a vector arrives sorted by device ID, as it is
+	// signed (§5.5), and names a device once.
 	return v, v.check()
 }
 

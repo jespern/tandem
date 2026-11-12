@@ -28,6 +28,10 @@
       {
         "bytes": "00000001",
         "why": "count larger than the entries"
+      },
+      {
+        "bytes": "0000000188869ccb305b6142fa31b00844a5d68f00000000",
+        "why": "an entry with no writes"
       }
     ],
     "valid": [
@@ -49,7 +53,7 @@
         "snapshot": "2bd9f3d8bdc3a7c84a62df2651c1861457b95a5ed406798301020e94a6b020e5"
       },
       {
-        "bytes": "0000000337756e7ce5fba04f6eb0bcbad725c0da000000037a6ff4d93a2aa3d0d8e8b6555ab6f011cec667011b954356a4a924598194299aab0fa573d3fb83e521cdf0c8e901eb42cf0c17fab0a6c5efb6c180a50b423170f315bec6ff93c530ebf8fd5587341cfea714f81eb4c8f06887b6fc98caa231ee88869ccb305b6142fa31b00844a5d68f00000000b95519dccb725901ec90e1cb2717a87300000001d9428e9b4f438d56df0583c22c66b4d746f676ea5dd5222dc4d987a42bd936d7",
+        "bytes": "0000000237756e7ce5fba04f6eb0bcbad725c0da000000037a6ff4d93a2aa3d0d8e8b6555ab6f011cec667011b954356a4a924598194299aab0fa573d3fb83e521cdf0c8e901eb42cf0c17fab0a6c5efb6c180a50b423170f315bec6ff93c530ebf8fd5587341cfea714f81eb4c8f06887b6fc98caa231eeb95519dccb725901ec90e1cb2717a87300000001d9428e9b4f438d56df0583c22c66b4d746f676ea5dd5222dc4d987a42bd936d7",
         "entries": [
           {
             "record": "37756e7ce5fba04f6eb0bcbad725c0da",
@@ -60,17 +64,13 @@
             ]
           },
           {
-            "record": "88869ccb305b6142fa31b00844a5d68f",
-            "writes": []
-          },
-          {
             "record": "b95519dccb725901ec90e1cb2717a873",
             "writes": [
               "d9428e9b4f438d56df0583c22c66b4d746f676ea5dd5222dc4d987a42bd936d7"
             ]
           }
         ],
-        "snapshot": "ae80e08470886f0bb920b7ef221e4bb1668b7ad9970179002ecfc98758bee9cc"
+        "snapshot": "ca9f3a57140cfad9191ed4ef4732acf42cd3386f33e64d2145390dd10657cd88"
       }
     ]
   },

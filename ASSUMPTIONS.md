@@ -97,6 +97,16 @@ Measured on a dedicated account (`liszto@noehr.org`) with API tokens; `sdk/go/st
 - **Decision (Jesper, 2026-11-12):** one API token per device on Fastmail, over JMAP.
 - **Found on the way:** the JMAP binding must follow the URLs the server advertises. Fastmail's download URL is on another host, so rewriting it to the session host (which the testbed's proxy needs) is now opt-in. A full resync must page until `total`, not until a short page.
 
+### Applied from Fable's review (2026-11-12, Jesper: "make the corrections now")
+
+In the Go engine, the vectors and the Swift SDK; the draft text waits for Sol's review and Jesper.
+- Deletes: an empty field name; a delete supersedes every write of the record it includes, in any field; only a delete supersedes a delete. Lean is being re-proved for it.
+- JSON vectors must arrive sorted by device ID, as signed.
+- Every inventory entry lists at least one write.
+- Key changes: a draft may always be dropped; a change resumes only while its note is in home and its parent is the head; finishing and discarding act only on the note the user was shown; admitting a member re-checks the head between signing and publishing.
+
+Not yet in the engine, because the engine doesn't have the feature yet: leave notices (G-06), signing again (G-26), pairing payloads with `type`, declines (G-09), split records (G-40), version handling (G-60), HLC loss (G-20).
+
 ## 3. What this means for our work
 
 ### Scenarios (refresh pending)

@@ -299,9 +299,9 @@ func TestCrashThenSecondDevice(t *testing.T) {
 					}
 				}
 			default:
-				err := w.j2.Finish(ctx, w.cid)
+				err := w.j2.Finish(ctx, w.cid, n)
 				if errors.Is(err, ErrCantFinish) {
-					mustOK(t, w.j2.Discard(ctx, w.cid))
+					mustOK(t, w.j2.Discard(ctx, w.cid, n))
 					mustOK(t, w.j2.Remove(ctx, w.cid, w.aimee.UID())) // "do it here"
 				} else {
 					mustOK(t, err)
@@ -316,4 +316,28 @@ func TestCrashThenSecondDevice(t *testing.T) {
 			w.checkRemoved()
 		})
 	}
+}
+
+// Finishing or discarding acts only on the change the user was shown: if the
+// note in home now names another statement, nothing happens.
+func TestStaleNoteIsLeftAlone(t *testing.T) {
+	w := newWorld(t)
+	w.crashAt("3:roster")
+	mustOK(t, w.j2.Sync(ctx))
+	shown := w.j2.Pending(w.cid)
+	if shown == nil {
+		t.Fatal("no pending change")
+	}
+	stale := *shown
+	stale.Stmt = "not-the-statement-in-home"
+	if err := w.j2.Discard(ctx, w.cid, &stale); !errors.Is(err, ErrNoteChanged) {
+		t.Fatalf("discarding a note that changed: %v", err)
+	}
+	if err := w.j2.Finish(ctx, w.cid, &stale); !errors.Is(err, ErrNoteChanged) {
+		t.Fatalf("finishing a note that changed: %v", err)
+	}
+	mustOK(t, w.j2.Finish(ctx, w.cid, shown))
+	w.reopen()
+	mustOK(t, w.j1.Resume(ctx))
+	w.checkRemoved()
 }

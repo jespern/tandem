@@ -94,7 +94,7 @@
       "payload": "{\"rec\":\"2GDgw63u1JP1F_2TEQY0WA\",\"writes\":[{\"f\":\"title\",\"op\":1,\"v\":\"eA\",\"a\":\"tDG9iJQ4vMN2oktUfhAMZbIgqfijalY23OkVtvBbUAY\",\"d\":[\"7ux1xCu7SdI\",1731312000123,0],\"r\":\"ApXzq4UWvYFNBjyE14G-2CFdgCT_Euq6JSBG0Lu31Fk\",\"c\":[[\"1L1MUnDGX74\",1,0],[\"iPmUPPSq2uI\",1,0]],\"b\":[],\"s\":\"NG5_pvG-F8DrD4CjxVRUPkv_QBaD4gNKC5XuYXDg4r6PDgr89I2Nfy-gWxtuXZlc6pKfiRwqh4U290fE7rVTAQ\"}]}",
       "scope": "ec8e84c6d6b3cded4f23db46a3fde7b4",
       "valid": false,
-      "why": "valid: context in any order (it is signed sorted); the signature doesn't cover this unsorted list, so it fails"
+      "why": "context not sorted by device ID, as it is signed (one reading, §10.5)"
     }
   ],
   "description": "Kind-1 payloads that must be rejected whole (§5.5, §9.2, §10.5). scope is the channel's."

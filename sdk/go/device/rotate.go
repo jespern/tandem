@@ -391,7 +391,7 @@ func (d *Device) Resume(ctx context.Context) error {
 	}
 	announced := c != nil && slices.ContainsFunc(c.roster.Announced(), func(id []byte) bool { return bytes.Equal(id, j.StmtID) })
 	note := d.membership(j.Col).flight
-	ours := note != nil && note.Stmt == tandem.B64u(j.StmtID)
+	ours := note != nil && note.Stmt == tandem.B64u(j.StmtID) && c != nil && bytes.Equal(c.roster.Head().ID, j.Parent)
 	switch {
 	case announced:
 		// Made, by this device or by the one that finished it: carry on.
@@ -412,10 +412,13 @@ func (d *Device) Resume(ctx context.Context) error {
 			return d.save()
 		}
 	case ours:
-		// Still pending: resume where the journal says.
+		// Still pending, its note in home and its parent the head: resume
+		// where the journal says.
 	default:
-		// The note is gone and the change was never announced: another
-		// device discarded it. Drop the journal and what was uploaded.
+		// No note of its own, another device's note, or a new head: the
+		// change was discarded or overtaken. A draft may always be dropped
+		// (review/2026-11-12-fable.md §1): drop the journal and what was
+		// uploaded.
 		d.destroyChannel(ctx, tandem.CollectionTag(j.Key, j.StmtID))
 		d.journal = nil
 		if err := d.saveJournal(); err != nil {
@@ -448,18 +451,35 @@ var ErrSuperseded = errors.New("device: the change was discarded or overtaken by
 // finished; it can only be discarded (§11.7).
 var ErrCantFinish = errors.New("device: the pending change can't be finished; discard it")
 
-// Finish completes another device's pending change, if its statement and
-// inventory are on the hub (§11.7).
-func (d *Device) Finish(ctx context.Context, cid []byte) error {
+// ErrNoteChanged means the pending change the user was shown is no longer
+// the one in home: another device finished, discarded or replaced it.
+var ErrNoteChanged = errors.New("device: the pending change was finished, discarded or replaced meanwhile")
+
+// pendingAs returns the note in home if it still names the statement of
+// the note the user was shown.
+func (d *Device) pendingAs(cid []byte, seen *Note) (*Note, error) {
+	n := d.membership(cid).flight
+	if n == nil || seen == nil || n.Stmt != seen.Stmt {
+		return nil, ErrNoteChanged
+	}
+	return n, nil
+}
+
+// Finish completes another device's pending change, the one shown as seen,
+// if its statement and inventory are on the hub (§11.7).
+func (d *Device) Finish(ctx context.Context, cid []byte, seen *Note) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if err := d.sync(ctx); err != nil {
 		return err
 	}
-	n := d.membership(cid).flight
+	n, err := d.pendingAs(cid, seen)
+	if err != nil {
+		return err
+	}
 	c := d.cols[string(cid)]
-	if n == nil || c == nil {
-		return errors.New("device: nothing pending")
+	if c == nil {
+		return errors.New("device: collection not followed")
 	}
 	stmt, _ := tandem.ParseB64u(n.Stmt)
 	k, _ := tandem.ParseB64u(n.K)
@@ -483,17 +503,18 @@ func (d *Device) Finish(ctx context.Context, cid []byte) error {
 	return d.run(ctx)
 }
 
-// Discard drops another device's pending change: the note and its key leave
-// home, and whatever was uploaded is destroyed (§11.7).
-func (d *Device) Discard(ctx context.Context, cid []byte) error {
+// Discard drops another device's pending change, the one shown as seen:
+// the note and its key leave home, and whatever was uploaded is destroyed
+// (§11.7). It does nothing if the note in home names another statement now.
+func (d *Device) Discard(ctx context.Context, cid []byte, seen *Note) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if err := d.sync(ctx); err != nil {
 		return err
 	}
-	n := d.membership(cid).flight
-	if n == nil {
-		return errors.New("device: nothing pending")
+	n, err := d.pendingAs(cid, seen)
+	if err != nil {
+		return err
 	}
 	stmt, _ := tandem.ParseB64u(n.Stmt)
 	k, _ := tandem.ParseB64u(n.K)

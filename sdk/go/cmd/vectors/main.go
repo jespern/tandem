@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"crypto/ecdh"
 	"crypto/ed25519"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -23,6 +24,9 @@ import (
 
 	tandem "github.com/jespern/tandem/sdk/go"
 )
+
+//go:embed testdata/ed25519-speccheck.json
+var speccheck []byte
 
 func main() {
 	out := flag.String("out", "vectors/v1", "directory to write into")
@@ -428,7 +432,7 @@ func invalidWrites(a *tandem.User) []obj {
 		{"why": "context names a device twice", "payload": rep(`"c":[]`, `"c":[["`+d1+`",1,0],["`+d1+`",2,0]]`)},
 		{"why": "context over 1,024 entries", "payload": rep(`"c":[]`, `"c":[`+strings.Join(big, ",")+`]`)},
 		{"why": "device ID of 7 bytes", "payload": rep(`"c":[]`, `"c":[["`+tandem.B64u(rnd("d7", 7))+`",1,0]]`)},
-		{"why": "valid: context in any order (it is signed sorted); the signature doesn't cover this unsorted list, so it fails", "payload": rep(`"c":[]`, `"c":[["`+d2+`",1,0],["`+d1+`",1,0]]`)},
+		{"why": "context not sorted by device ID, as it is signed (one reading, §10.5)", "payload": rep(`"c":[]`, `"c":[["`+d2+`",1,0],["`+d1+`",1,0]]`)},
 	}
 	for _, c := range cases {
 		_, _, err := tandem.ParseKind1([]byte(c["payload"].(string)), coll)
@@ -466,7 +470,7 @@ func inventory() obj {
 	invs := []tandem.Inventory{
 		{},
 		{r(1): {w(1)}},
-		{r(1): {w(3), w(1), w(2)}, r(2): {w(4)}, r(3): {}},
+		{r(1): {w(3), w(1), w(2)}, r(2): {w(4)}},
 	}
 	var valid []obj
 	for _, inv := range invs {
@@ -502,6 +506,7 @@ func inventory() obj {
 		{"bytes": hx(two[:len(two)-1]), "why": "short"},
 		{"bytes": "", "why": "empty: the empty inventory is a zero count"},
 		{"bytes": "00000001", "why": "count larger than the entries"},
+		{"bytes": "00000001" + hx([]byte(r(3))) + "00000000", "why": "an entry with no writes"},
 	}
 	for _, c := range invalid {
 		b, _ := hex.DecodeString(c["bytes"].(string))
@@ -559,14 +564,12 @@ func pairing(u *tandem.User) []obj {
 }
 
 func ed() obj {
-	data, err := os.ReadFile(filepath.Join("testdata", "ed25519-speccheck.json"))
-	must(err)
 	var spec []struct {
 		Message   string `json:"message"`
 		PubKey    string `json:"pub_key"`
 		Signature string `json:"signature"`
 	}
-	must(json.Unmarshal(data, &spec))
+	must(json.Unmarshal(speccheck, &spec))
 	accept := map[int]bool{2: true, 3: true} // see sig_test.go for why each other case fails
 	var cases []obj
 	for i, c := range spec {

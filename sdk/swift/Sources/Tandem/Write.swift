@@ -53,6 +53,7 @@ public struct Write: Sendable {
         else { throw TandemError.invalid("write has an ID of the wrong length") }
         guard (op == .add || op == .remove) == (element != nil) else { throw TandemError.invalid("element only on add and remove") }
         guard op == .assign || value.isEmpty else { throw TandemError.invalid("value only on assign") }
+        guard op != .delete || field.isEmpty else { throw TandemError.invalid("a delete has an empty field name") }
         guard dot.millis < maxMillis else { throw TandemError.invalid("HLC millis beyond 48 bits") }
         try checkVV(context)
         try checkVV(base)
@@ -138,8 +139,8 @@ func parseDot(_ j: JSON) throws -> Dot {
 
 func parseVV(_ j: JSON?) throws -> VV {
     guard case let .array(items)? = j else { throw TandemError.invalid("vector missing") }
-    // Signed sorted by device ID (§5.5): JSON order doesn't matter, a device twice does.
-    let v = try items.map(parseDot).sorted { lexLess($0.device, $1.device) }
+    // One reading (§10.5): sorted by device ID, as signed (§5.5), each device once.
+    let v = try items.map(parseDot)
     try checkVV(v)
     return v
 }

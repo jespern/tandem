@@ -18,9 +18,9 @@ Bytes are hex unless the protocol itself uses another text form (tags in b32, pa
 | `tags.json` | All five channel tags, invite and pairing keys, key commitment, named record IDs (`é` in two spellings names two records) | |
 | `envelopes.json` | Symmetric envelopes (kinds 1 and 3) with their message keys and AAD; an inbox envelope and a pairing reply to open | another channel, a tag in upper case, changed ciphertext, changed kind, version 2, wrong key, wrong recipient |
 | `writes.json` | Writes of every op, with vectors, an empty value, an empty element, a home write, a field name in two Unicode spellings: sigInput, write ID, signature, payload | |
-| `writes-invalid.json` | Kind-1 payloads | bad signature, repeated properties, unknown op, `v`/`e` on the wrong op, both payload forms, non-canonical b64u, fractions, HLC out of range, a device twice in a vector, 1,025 entries, short device ID, a context re-ordered after signing |
+| `writes-invalid.json` | Kind-1 payloads | bad signature, repeated properties, unknown op, `v`/`e` on the wrong op, both payload forms, non-canonical b64u, fractions, HLC out of range, a device twice in a vector, a vector out of order, 1,025 entries, short device ID |
 | `genesis.json` | A genesis statement: bytes, statement ID, collection ID, epoch ID, epoch tag | |
-| `inventory.json` | Canonical inventories and their hash | unsorted, repeated, trailing, short, empty |
+| `inventory.json` | Canonical inventories and their hash | unsorted, repeated, trailing, short, empty, an entry with no writes |
 | `signed.json` | Signed inputs of join requests (`sig` and `isig`), grants, key requests, leave notices and pairing challenges | |
 | `pairing.json` | Pairing codes | |
 | `ed25519.json` | The 12 ed25519-speccheck cases under Tandem's rules (only 2 and 3 verify), a valid signature and the same with `S + L`; public keys that are never valid (the eight small-order points, five non-canonical encodings) | |
@@ -34,9 +34,11 @@ The vectors had to pick bytes where `DESIGN.md` (frozen at `f4ce2e6`) is silent.
 2. **Genesis:** `n` and `key.n` start at 0, and the 16 random bytes of §7.1 are a `nonce` field.
 3. **Home record names:** `membership:<collectionID>` and `invite:<inviteID>` spell the ID in b64u.
 4. **Key requests:** `have` is the 32-byte ID of the latest statement the member holds.
-5. **Vectors in JSON:** any order (they are signed sorted by device ID); a device twice is invalid.
+5. **Vectors in JSON:** sorted by device ID, as signed, with each device once; anything else is rejected (Fable, 2026-11-12, replacing "any order").
 6. **Op and payload fields:** `v` is present exactly on `assign`, `e` exactly on `add`/`remove`; other ops sign `H("")`.
 7. **HLC millis** at or beyond 2^48 make a write invalid, although `sigInput` has room for 64 bits.
+8. **Inventory entries** list at least one write (Lean F3; Fable).
+9. **Deletes** have an empty field name, no element and no value (Fable).
 
 ## What the Swift check found
 

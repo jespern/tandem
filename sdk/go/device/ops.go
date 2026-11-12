@@ -206,6 +206,15 @@ func (d *Device) AddMember(ctx context.Context, cid, uid, uka []byte, name, role
 		return err
 	}
 	id, _ := w.ID()
+	// Between signing and publishing, the check of §11.6 step 4: if another
+	// device changed the roster or started a change meanwhile, this
+	// statement is dropped unpublished (review/2026-11-12-fable.md, "Missed").
+	if err := d.sync(ctx); err != nil {
+		return err
+	}
+	if !bytes.Equal(c.roster.Head().ID, h.ID) || d.membership(cid).flight != nil {
+		return ErrSuperseded
+	}
 	d.addStatement(c, w, ep)
 	if err := d.save(); err != nil {
 		return err

@@ -100,6 +100,9 @@ func (inv Inventory) Bytes() ([]byte, error) {
 	b := u32(nil, uint32(len(recs)))
 	for _, r := range recs {
 		ws := slices.Clone(inv[r])
+		if len(ws) == 0 {
+			return nil, errors.New("tandem: an inventory entry lists at least one write")
+		}
 		slices.SortFunc(ws, bytes.Compare)
 		for i, w := range ws {
 			if len(w) != 32 {
@@ -143,6 +146,9 @@ func ParseInventory(b []byte) (Inventory, error) {
 			return nil, bad
 		}
 		prev = r
+		if be32(c) == 0 {
+			return nil, bad // every entry lists at least one write
+		}
 		var ws [][]byte
 		for range be32(c) {
 			w, ok := take(32)

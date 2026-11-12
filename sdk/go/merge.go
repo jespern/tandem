@@ -41,7 +41,7 @@ func slotOf(w *Write) slot {
 	case OpAdd, OpRemove:
 		return slot{w.Field, true, string(w.Element)}
 	case OpDelete:
-		return slot{field: "\x00delete"} // its own register; any kept one deletes the record
+		return slot{field: "\x00delete"} // the record's tombstones; see Supersedes
 	}
 	return slot{field: w.Field}
 }
@@ -98,9 +98,18 @@ func includes(w, x *Write) bool {
 }
 
 // Supersedes reports whether w supersedes x (§9.2). Both are writes to the
-// same record; writes to different slots never supersede each other.
+// same record. Registers are (field) for assign and (field, element) for
+// add/remove, and writes in different registers never supersede each other,
+// except that a delete supersedes any write of the record it includes,
+// whatever its field, and only a delete supersedes a delete (decided
+// 2026-11-12, review/2026-11-12-fable.md §2). A tombstone that saw the whole
+// record therefore leaves one write.
 func Supersedes(w, x Entry) bool {
-	if slotOf(w.W) != slotOf(x.W) || bytes.Equal(w.ID, x.ID) {
+	if bytes.Equal(w.ID, x.ID) || !bytes.Equal(w.W.Record, x.W.Record) {
+		return false
+	}
+	wd, xd := w.W.Op == OpDelete, x.W.Op == OpDelete
+	if xd && !wd || !wd && slotOf(w.W) != slotOf(x.W) {
 		return false
 	}
 	switch {
@@ -227,7 +236,7 @@ func (r *Record) Vectors(op Op, field string, element []byte, epoch string, n in
 	var ctxs, bases []VV
 	for _, id := range r.order {
 		k := r.Kept[id]
-		if slotOf(k.W) != s {
+		if op != OpDelete && slotOf(k.W) != s { // a delete covers every kept write of the record
 			continue
 		}
 		bases = append(bases, k.W.Base)
