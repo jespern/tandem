@@ -36,7 +36,7 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
   - `A.mac` shows House with its contents within one sync of step 3.
   - `J.mac` and `A.mac` hold the same House.
 - **Invariants:** INV-CONVERGE, INV-NO-LOSS
-- **Notes:** GAP: §10.2 makes a JMAP client fall back to `Tandem` directly under the inbox, to meet IMAP clients whose namespace prefix is `INBOX.`. An IMAP client whose prefix is empty runs `LIST "" Tandem`, finds nothing, and creates a top-level `Tandem` (§10.3). From then on the two bindings use different folders. If `J.mac` cached the mailbox id, it never sees `A.mac`'s messages. If it re-resolves on launch, it moves to the new top-level folder and leaves its earlier messages behind. Neither binding says how the two must agree. Neither says whether the mailbox is resolved once or on every sync (see HB-041). Possible fix: IMAP also looks under the inbox, or both bindings prefer whichever candidate already holds `Tandem-Channel` messages.
+- **Notes:** GAP (G-53): §10.2 makes a JMAP client fall back to `Tandem` directly under the inbox, to meet IMAP clients whose namespace prefix is `INBOX.`. An IMAP client whose prefix is empty runs `LIST "" Tandem`, finds nothing, and creates a top-level `Tandem` (§10.3). From then on the two bindings use different folders. If `J.mac` cached the mailbox id, it never sees `A.mac`'s messages. If it re-resolves on launch, it moves to the new top-level folder and leaves its earlier messages behind. Neither binding says how the two must agree. Neither says whether the mailbox is resolved once or on every sync (see HB-041). Possible fix: IMAP also looks under the inbox, or both bindings prefer whichever candidate already holds `Tandem-Channel` messages.
 
 ### HB-003 Two devices create the folder at the same moment
 - **Kind:** edge
@@ -51,7 +51,7 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
   - All three appends land in it.
   - `A.mac` treats `ALREADYEXISTS` as success. A JMAP device whose create fails queries again and uses the existing mailbox. No device shows an error.
 - **Invariants:** INV-CONVERGE
-- **Notes:** GAP (minor): §10.2 says "on a duplicate-name error, query again", but RFC 8621 defines no duplicate-name `SetError` for `Mailbox/set`. Servers return `invalidProperties` or a type of their own. The rule should be "query again after any failed create".
+- **Notes:** GAP (G-54, minor): §10.2 says "on a duplicate-name error, query again", but RFC 8621 defines no duplicate-name `SetError` for `Mailbox/set`. Servers return `invalidProperties` or a type of their own. The rule should be "query again after any failed create".
 
 ### HB-004 `Email/set` batches, limits and partial failure
 - **Kind:** fault
@@ -68,7 +68,7 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
   - After step 3, the new epoch holds every record and `A.mac` shows all 40.
   - Once GC has run, each record has exactly one message in the new channel.
 - **Invariants:** INV-NO-LOSS, INV-GC-SAFE, INV-QUIESCE
-- **Notes:** GAP: §10.2 names only `maxObjectsInSet`. The session also limits `maxSizeRequest`, `maxCallsInRequest` and `maxObjectsInGet` (RFC 8620 §2). Five 1 MiB messages can exceed a server's request size, and `changes`/`fetch` must page `Email/get`. Nothing says how to handle `notCreated`: which errors are retried (`overQuota`, `tooLarge`, `rateLimit`), and what a rotation does when part of its snapshot fails (see FT-011, FT-029).
+- **Notes:** GAP (G-55): §10.2 names only `maxObjectsInSet`. The session also limits `maxSizeRequest`, `maxCallsInRequest` and `maxObjectsInGet` (RFC 8620 §2). Five 1 MiB messages can exceed a server's request size, and `changes`/`fetch` must page `Email/get`. Nothing says how to handle `notCreated`: which errors are retried (`overQuota`, `tooLarge`, `rateLimit`), and what a rotation does when part of its snapshot fails (see FT-011, FT-029).
 
 ### HB-005 `Email/changes` with `hasMoreChanges`
 - **Kind:** edge
@@ -118,7 +118,7 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
   - After step 3, `J.phone` knows every message in Tandem, including the 3 appended in step 2, and none it doesn't hold is missed.
   - `J.phone` publishes nothing, because everything is dominated on the hub.
 - **Invariants:** INV-CONVERGE, INV-QUIESCE
-- **Notes:** GAP: the design doesn't say which state the client stores after a full resync. `Email/query` returns a `queryState`, not an Email state. The client must read the Email state (for example `Email/get` with no ids) before it starts paging. If it stores a state read after paging, the 3 appends from step 2 are never reported. Paging by position also skips messages when earlier ones are destroyed mid-query; this needs anchors or a final `Email/changes` pass from the pre-query state.
+- **Notes:** GAP (G-56): the design doesn't say which state the client stores after a full resync. `Email/query` returns a `queryState`, not an Email state. The client must read the Email state (for example `Email/get` with no ids) before it starts paging. If it stores a state read after paging, the 3 appends from step 2 are never reported. Paging by position also skips messages when earlier ones are destroyed mid-query; this needs anchors or a final `Email/changes` pass from the pre-query state.
 
 ### HB-008 A device's own appends don't move its change cursor
 - **Kind:** fault
@@ -133,25 +133,26 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
   - `J.mac` shows Bread and Eggs after step 3.
   - Under IMAP, `J.mac`'s next `UID FETCH` range starts at 101 or lower.
   - Under JMAP, `J.mac`'s next `Email/changes` starts from `s1`, or from a state reported by an earlier `Email/changes`. It never starts from `s3`.
+  - `J.mac` recognises UID 102 as its own by `H(envelope)`.
 - **Invariants:** INV-CONVERGE, INV-NO-LOSS
-- **Notes:** GAP: §10.3 fetches from "last known UID + 1" and §10.2 uses "the stored state". Neither says what may move them. A client that counts the `APPENDUID` of its own message as known, or stores the `newState` its own `Email/set` returned, skips `A.mac`'s message for good. With QRESYNC there is no `UID SEARCH ALL` to catch it, and under JMAP it never comes up again. The cursor should move only from `changes` results.
+- **Notes:** GAP (G-46): §10.2 now has a device know its own messages by `H(envelope)`, "not by the id in an answer", which points the right way, but neither binding says what may move the stored cursor. A client that stores its own `APPENDUID` or `newState` skips `A.mac`'s message for good. The cursor should move only from `changes` results.
 
 ### HB-009 EventSource ping and a silent stream
 - **Kind:** fault
 - **Design:** §10.2
 - **Binding:** jmap
-- **Setup:** `J.phone` is in the foreground with an open EventSource.
+- **Setup:** `J.phone` is in the foreground with an open EventSource. Stalwart reports its own ping interval `i` in every ping (testbed finding: it clamps the requested 60 s).
 - **Steps:**
   1. `net: blackhole J.phone` (all bytes dropped, connection left open, no reset).
   2. `J.mac adds Milk to House`.
-  3. `wait 150 s`; the harness then removes the blackhole.
+  3. `wait 4 × i`; the harness then removes the blackhole.
 - **Expect:**
   - `J.phone`'s EventSource URL has `types=Email`, `closeafter=no` and `ping=60`.
-  - Between 120 s and 130 s after the last ping or event it received, `J.phone` abandons the stream and opens a new one. The proxy log shows the new connection.
+  - Between `2 × i` and `2 × i + 10 s` after the last ping or event it received, `J.phone` abandons the stream and opens a new one: two of the intervals the server reports, not of the one requested. The proxy log shows the new connection.
   - Within 10 s of step 3, `J.phone` has a working stream, has run `Email/changes`, and shows Milk.
   - With no blackhole, `J.phone` opens no new stream for 10 minutes.
 - **Invariants:** INV-CONVERGE
-- **Notes:** `net: blackhole` is not in the vocabulary. It is a Toxiproxy `timeout` toxic with timeout 0.
+- **Notes:** `net: blackhole` is a Toxiproxy `timeout` toxic with timeout 0.
 
 ### HB-010 IMAP namespace prefix
 - **Kind:** edge
@@ -179,7 +180,7 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
   - Without `UIDPLUS` or `IDLE`: `J.mac` creates no Tandem folder and appends nothing; it shows a named error that the server lacks a feature Tandem needs; local data is untouched.
   - Without `QRESYNC`/`CONDSTORE`: `J.mac` connects normally (they are only recommended) and uses `UID SEARCH ALL` to find removals.
 - **Invariants:** INV-UX
-- **Notes:** GAP: §13.3 has no message for a server that lacks a required IMAP extension, or a JMAP session without the mail capability or an EventSource URL. It also doesn't say what happens if a server loses `UIDPLUS` after setup, for example after a server move. The capability filter is a harness addition.
+- **Notes:** GAP (G-57): §13.3 has no message for a server that lacks a required IMAP extension, or a JMAP session without the mail capability or an EventSource URL. It also doesn't say what happens if a server loses `UIDPLUS` after setup, for example after a server move. The capability filter is a harness addition.
 
 ### HB-012 The `n:*` quirk after the newest message is destroyed
 - **Kind:** edge
@@ -261,27 +262,26 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
 - **Invariants:** INV-CONVERGE
 - **Notes:** Must run in real time.
 
-### HB-017 Connection cap in a household behind one address
+### HB-017 The IMAP connection cap
 - **Kind:** fault
 - **Design:** §10.3, §13.3, §17
 - **Binding:** imap
-- **Setup:** Stalwart allows at most 4 concurrent IMAP sessions per account. `J.phone`, `J.mac`, `J.ipad`, `A.phone` and `A.mac` all use IMAP from one address.
+- **Setup:** Stalwart's cap is 16 concurrent IMAP sessions per account, whatever the address. The harness lowers it to 4 for this run. `J.phone`, `J.mac`, `J.ipad`, `A.phone` and `A.mac` all use IMAP.
 - **Steps:**
   1. All five devices launch and stay in the foreground.
   2. `A.phone` shares a URL into House through the share extension while its app is running.
   3. `J.ipad quits`.
 - **Expect:**
+  - Each running device holds one connection, leaving IDLE to run commands (§10.3).
   - No device shows "Sync access was revoked or changed" because of the cap. The credential is valid.
-  - Every refused device shows the offline indicator or a named message, and retries no more than once every 30 s.
+  - The refused device shows the offline indicator or a named message, and retries no more than once every 30 s.
   - The shared URL reaches the hub, at the latest once a slot is free.
   - Within the refused device's next retry after step 3, all four remaining devices converge.
 - **Invariants:** INV-UX, INV-NO-LOSS
 - **Notes:**
-  - GAP: §10.3 says a device uses a single connection, but §17 has the share extension append on its own while the app keeps its IDLE connection. One device can therefore need two.
-  - GAP: there is no handling for a refusal because of too many connections (`BYE`, or `NO` with a limit code). It must not be read as a rejected credential, and §13.3 has no message for it.
-  - GAP: nothing says a suspended app closes its connection first. Suspended iPhones hold slots until the server times them out.
+  - GAP (G-47): §10.3 says a device uses a single connection, but §17 has the share extension append on its own while the app keeps its IDLE connection. One device can therefore need two.
+  - GAP (G-41): there is no handling for a refusal because of too many connections (`BYE`, or `NO` with a limit code). It must not be read as a rejected credential, and §13.3 has no message for it. Nothing says a suspended app closes its connection first; suspended iPhones hold slots until the server times them out.
   - The 30 s retry bound is the harness's choice; the design gives none.
-  - The Stalwart per-account concurrency setting must be confirmed in the testbed.
 
 ### HB-018 Mixed bindings on one account
 - **Kind:** real-world
@@ -315,7 +315,7 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
   - Groceries is unaffected.
   - `A.mac` uses exactly one credential afterwards, and the harness records which one.
 - **Invariants:** INV-CONVERGE, INV-UX
-- **Notes:** GAP: §11.2 step 1 and §13.3 compare hubs, but nothing defines hub identity. The same account can appear as a JMAP descriptor and an IMAP descriptor (§4), or with different per-person tokens (§13.1). Comparing descriptors rejects this invite. Comparing hosts would accept an invite for a different account with the same provider (every Fastmail account shares one session URL). The design also doesn't say whether a device that receives a new token for its own hub keeps its old one or switches.
+- **Notes:** GAP (G-13): §11.2 step 1 and §13.3 compare hubs, but nothing defines hub identity. The same account can appear as a JMAP descriptor and an IMAP descriptor (§4), or with different per-person tokens (§13.1). Comparing descriptors rejects this invite. Comparing hosts would accept an invite for a different account with the same provider (every Fastmail account shares one session URL). The design also doesn't say whether a device that receives a new token for its own hub keeps its old one or switches.
 
 ### HB-020 Bodies stored in other charsets and transfer encodings
 - **Kind:** fault
@@ -339,7 +339,7 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
 
 ### HB-021 A charset the reader can't decode
 - **Kind:** fault
-- **Design:** §10.4, §12.2, §10.7
+- **Design:** §10.2 (`isEncodingProblem`), §10.4, §12.2, §10.7
 - **Binding:** jmap+imap (`J.mac` JMAP, `A.mac` IMAP)
 - **Setup:** House has Milk and Bread, one message each.
 - **Steps:**
@@ -347,10 +347,11 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
   2. `hub: rewrite charset <Bread> as x-unknown`, with the bytes left as ASCII.
   3. Both devices sync. `wait 1 hour`.
 - **Expect:**
+  - Where Stalwart flags `isEncodingProblem`, `J.mac` downloads the raw message by `blobId` and decodes it as `A.mac` does.
   - `J.mac` and `A.mac` give the same verdict on each message: both merge it or both ignore it.
   - After quiescence, the hub holds at most two messages each for Milk and Bread, and no device keeps republishing them.
 - **Invariants:** INV-QUIESCE, INV-CONVERGE
-- **Notes:** GAP: step 2 of §10.4 doesn't list the charsets a reader must decode, or say what to do with a body in a charset it can't decode. A UTF-7 body read as ASCII corrupts every `+`. An unknown label may be decoded by the JMAP server but not by the IMAP client, or the other way round. A device that can't read the message sees the record as missing and heals it. On a server that re-encodes every JMAP body, the healed message comes back in the same charset and the loop repeats. Possible fix: a fixed list of charsets (us-ascii, utf-8, utf-16 with LE/BE, iso-8859-1), with unreadable bodies blocking healing of that channel the way §15 does.
+- **Notes:** GAP (G-48): step 2 of §10.4 still doesn't list the charsets a reader must decode, or say what to do with a body in a charset it can't decode. A device that can't read the message sees the record as missing and heals it; on a server that re-encodes every JMAP body, the healed message comes back in the same charset and the loop repeats. Possible fix: a fixed list of charsets (us-ascii, utf-8, utf-16 with LE/BE, iso-8859-1), with unreadable bodies blocking healing of that channel the way §15 does.
 
 ### HB-022 Two `Tandem-Channel` headers
 - **Kind:** adversarial
@@ -365,7 +366,7 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
   - Milk is unchanged on all devices.
   - After quiescence, the hub holds at most two messages for Milk, and no device publishes Milk more than once.
 - **Invariants:** INV-QUIESCE, INV-CONVERGE, INV-GC-SAFE
-- **Notes:** GAP: §10.4 takes "the `Tandem-Channel` value" without saying what to do with several.
+- **Notes:** GAP (G-58): §10.4 takes "the `Tandem-Channel` value" without saying what to do with several.
   - JMAP's `header:Tandem-Channel:asText` returns the last instance (RFC 8621 §4.1.3). An IMAP `HEADER.FIELDS` fetch returns both, and a reader that takes the first one fails AEAD under the wrong tag.
   - The IMAP device then sees Milk missing and heals it.
   - The JMAP devices see the healed message and `m*` holding the same writes, so they dominate each other. If `m*` has the lower `H(envelope)`, they destroy the healed one. The IMAP device heals again, and the loop has no end.
@@ -384,25 +385,27 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
   - `J.mac` and `A.mac` give the same verdict on each injected message.
   - After quiescence, the hub holds at most two messages each for Milk and Bread.
 - **Invariants:** INV-QUIESCE, INV-CONVERGE
-- **Notes:** GAP: §10.4 doesn't require a single-part `text/plain` body.
+- **Notes:** GAP (G-58): §10.4 doesn't require a single-part `text/plain` body.
   - In step 1, JMAP's `fetchTextBodyValues` returns the `text/plain` part, which decodes to an envelope. IMAP's `BODY[TEXT]` is the whole multipart body, boundaries included, and doesn't decode.
   - In step 2 it is the other way round: JMAP's `textBody` is empty, while the IMAP reader undoes `base64` and gets the envelope.
   - Either way the two bindings disagree, which leads to the heal and destroy loop of HB-022. Both readers should ignore any message that isn't single-part `text/plain`.
 
 ### HB-024 Byte-identical copies of one envelope
 - **Kind:** edge
-- **Design:** §10.4, §10.7
+- **Design:** §10.2, §10.4, §10.7
 - **Binding:** jmap+imap (`J.mac` JMAP, `A.mac` IMAP)
-- **Setup:** House; Milk is in one message `m`.
+- **Setup:** House; Milk is in one message `m`, made by `A.mac`.
 - **Steps:**
-  1. `hub: replay m` twice, making copies `m2` and `m3` with identical raw bytes. IMAP UIDs ascend; JMAP ids are in whatever order Stalwart assigns.
+  1. `hub: replay m` twice, making copies `m2` and `m3` with identical raw bytes.
   2. `J.mac syncs`; `A.mac syncs` at the same moment. Both garbage-collect.
+  3. Variant: `A.mac` is gone for good before step 2.
 - **Expect:**
-  - At every moment, at least one of `m`, `m2` and `m3` is on the hub (harness polls every 100 ms).
-  - After GC, exactly one remains.
+  - `J.mac` destroys none of the copies: no hash can tell it which to keep.
+  - `A.mac`, which made the envelope, removes two copies and keeps one.
+  - At every moment, at least one copy is on the hub (harness polls every 100 ms).
   - No device republishes Milk.
+  - Variant: all three copies stay until a later write to Milk dominates them; they are then destroyed as ordinary dominated messages.
 - **Invariants:** INV-GC-SAFE, INV-QUIESCE
-- **Notes:** GAP: message identity is `H(envelope)` (§10.4), and §10.7 keeps "the one with the lowest `H(envelope)`". Byte-identical copies tie, and nothing says which copy stays. A JMAP device that keeps the lowest id and an IMAP device that keeps the lowest UID can destroy each other's choice and leave none, which is the failure §10.7's tie-break exists to prevent. Healing then republishes. There is also no tie-break that works across bindings, since JMAP ids and IMAP UIDs are unrelated. Identical copies come from replays, retried appends (FT-003, FT-004) and IMAP `COPY` in a mail client.
 
 ### HB-025 Two devices publish the same merge
 - **Kind:** real-world
@@ -414,9 +417,9 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
   2. Both devices see `m1` and `m2` and each publishes a merge: `n1` and `n2`.
   3. Latency is removed; both devices sync and garbage-collect.
 - **Expect:**
-  - `n1` and `n2` hold the same write IDs.
+  - `n1` and `n2` hold the same write IDs and dominate each other.
   - `m1` and `m2` are destroyed.
-  - Of `n1` and `n2`, only the one with the lower `H(envelope)` remains.
+  - Of `n1` and `n2`, only the one with the greater `H(envelope)` is destroyed, by either device; the other remains.
   - At every moment the hub holds a set of messages that together dominate Milk (harness polls).
   - Neither device publishes Milk again.
 - **Invariants:** INV-GC-SAFE, INV-QUIESCE
@@ -438,38 +441,39 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
 - **Invariants:** INV-QUIESCE, INV-CONVERGE
 - **Notes:** "A few seconds at most" is read as 5 s.
 
-### HB-027 Garbage collection doesn't reach across epochs
+### HB-027 Garbage collection across epochs, and what is never pruned
 - **Kind:** edge
-- **Design:** §10.7, §11.6, §12.2, §12.3, §6.6
+- **Design:** §10.7, §11.6 (S6), §12.2
 - **Binding:** any
-- **Setup:** House is at epoch 3. J is owner (`J.mac`), A and B are writers.
+- **Setup:** House is at `E3`. J is owner (`J.mac`), A and B are writers.
 - **Steps:**
-  1. `J.mac removes B`. House rotates to epoch 4; `A.mac` switches and holds both keys.
-  2. `wait 1 day`; `J.mac syncs`; `A.mac syncs`.
-  3. `wait 40 days` (simulated); all sync.
+  1. `J.mac removes B`. House moves to `E4`; `A.mac` moves and holds both keys.
+  2. Before `J.mac` reaches S6, `A.mac` garbage-collects.
+  3. `J.mac` finishes S6; `wait 40 days`; all sync.
 - **Expect:**
-  - Until day 30, no epoch-3 message is destroyed except by GC against another epoch-3 message.
-  - After day 30, the epoch-3 `_epoch` message is still on the hub, and it stays until day 180.
-  - No device destroys an epoch-3 message because an epoch-4 message holds the same writes.
+  - `A.mac` may destroy a channel-`E3` data message that a channel-`E4` message dominates: every write of it is in channel `E4` or superseded there, so nothing is lost.
+  - Channel `E3`'s `_roster` is never destroyed, by `A.mac` or by S6.
+  - Channel `E4`'s inventory fragments are never destroyed as dominated.
+  - After step 3, channel `E3` holds only its `_roster`; it stays for good.
 - **Invariants:** INV-GC-SAFE
-- **Notes:** GAP: §10.7 defines domination between messages "of the same record" without requiring the same channel. Record IDs and write IDs survive a rotation, and the new channel's log message holds every write of the old `_epoch` message. Read literally, a device holding both keys may destroy the old channel's `_epoch` message, and its records, as soon as the snapshot is up. That removes the pointer §11.6 and §12.3 keep until the horizon, and opens the gap of HB-032 for every member who was offline. Home generations are affected in the same way (§6.6). §10.7 should say "a message `n` in the same channel".
+- **Notes:** §10.7 compares messages "of the same record" in any channel. Because record and write IDs survive a key change, that is safe here; the scenario pins it down.
 
 ### HB-028 A record split across messages
 - **Kind:** edge
-- **Design:** §10.6, §10.7, §12.2
+- **Design:** §10.6, §10.7, §12.2, Q16
 - **Binding:** any
-- **Setup:** `J.mac` owns House. `J.mac` creates 400 link invites, so the `_roster` log passes 64 KiB and is published in several messages. `A.mac` (admin) follows House.
+- **Setup:** `J.mac` owns House with 40 members; after 200 changes the roster passes 64 KiB and is published in several messages. `A.mac` follows House.
 - **Steps:**
   1. Both devices sync.
   2. `wait 10 min` with no edits.
-  3. `A.mac` creates one more invite. Both sync. `wait 10 min`.
+  3. J admits one more member. Both sync. `wait 10 min`.
 - **Expect:**
   - Within 1 minute of the last edit, neither device publishes `_roster` again.
-  - The `_roster` messages on the hub together hold every log write.
-  - The total size of the `_roster` messages is at most twice the size of the log.
+  - The `_roster` messages on the hub together hold every statement.
+  - The total size of the `_roster` messages is at most twice the size of the roster.
 - **Invariants:** INV-QUIESCE, INV-GC-SAFE
-- **Notes:** GAP:
-  1. §10.6 doesn't say whether "doesn't fit" means 64 KiB (SHOULD) or 1 MiB (MUST), nor how a record is split. Two devices split the same log differently.
+- **Notes:** GAP (G-40, G-43):
+  1. §10.6 doesn't say whether "doesn't fit" means 64 KiB (SHOULD) or 1 MiB (MUST), what the size counts, nor how a record is split. Two devices split the same record differently.
   2. §10.7's trigger, "messages for one record that none of them dominates", is always true of a record split into parts. Read literally, every online device republishes it after its random delay, again and again.
   3. GC compares one message with one message. A part is collected only when a single message holds all its writes, so copies split differently are never collected.
   - Domination should be by a set of messages, as §12.2 already uses ("taken together"), with a deterministic split.
@@ -478,18 +482,18 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
 - **Kind:** adversarial
 - **Design:** §12.2, §10.7, §1.2
 - **Binding:** any
-- **Setup:** House is at epoch 2 with 200 records, 20 of them tombstoned. `J.phone`, `J.mac`, `J.ipad`, `A.phone` and `A.mac` are in the foreground.
+- **Setup:** House is at `E2` with 200 records, 20 of them tombstoned. `J.phone`, `J.mac`, `J.ipad`, `A.phone` and `A.mac` are in the foreground.
 - **Steps:**
-  1. `hub: destroy channel <House epoch 2>`.
+  1. `hub: destroy channel <House E2>`.
   2. All devices sync. `wait 10 min`.
 - **Expect:**
-  - Within one sync, the hub again holds messages that together dominate every device's state of every House record, the log included.
+  - Within one sync, the hub again holds messages that together dominate every device's state of every House record, the roster and inventory fragments included.
   - Tombstoned records stay deleted.
   - Nothing is appended to any other channel.
   - After quiescence, each record has one message.
   - The harness records the total number of appends during healing; a design-conformant client may make up to 5 × 201.
 - **Invariants:** INV-GC-SAFE, INV-QUIESCE, INV-NO-LOSS
-- **Notes:** GAP: healing (§12.2) has no random delay and no "unless a dominating message has appeared" check, unlike concurrent publishing (§10.7). After a mass deletion, every online replica republishes every record at once, and GC then removes four copies out of five. On a server with rate limits or a nearly full quota (FT-029), that burst can itself fail. Applying §10.7's delay rule to healing would fix this.
+- **Notes:** GAP (G-59): healing (§12.2) has no random delay and no "unless a dominating message has appeared" check, unlike concurrent publishing (§10.7). After a mass deletion, every online replica republishes every record at once, and GC then removes four copies out of five. On a server with rate limits or a nearly full quota (FT-029), that burst can itself fail. Applying §10.7's delay rule to healing would fix this.
 
 ### HB-030 The hub rolls a record back
 - **Kind:** adversarial
@@ -512,99 +516,86 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
 - **Kind:** edge
 - **Design:** §12.2, §11.6, §8.3
 - **Binding:** any
-- **Setup:** House rotated from epoch 2 to epoch 3 when B was removed. `J.ipad` was offline from before the rotation and holds unsynced epoch-2 edits to Milk. After 30 days, `J.mac` destroyed the epoch-2 messages except `_epoch`.
+- **Setup:** House moved from `E2` to `E3` when B was removed; `J.mac` finished S6, so channel `E2` holds only its `_roster`. `J.ipad` was offline from before the change and holds unsynced `E2` edits to Milk.
 - **Steps:**
-  1. Day 31: `J.ipad online`; `J.ipad syncs`.
+  1. A month later: `J.ipad online`; `J.ipad syncs`.
 - **Expect:**
-  - `J.ipad` appends nothing under the epoch-2 tag.
-  - It switches to epoch 3, using the key in J's home.
-  - It forwards its Milk edits into epoch 3 with a `_carried` list it signs.
+  - `J.ipad` reads the announcement in channel `E2`'s `_roster` and appends no data under the `E2` tag (a channel whose `_roster` shows a later epoch is never refilled).
+  - It moves to `E3`, using the key in J's home, and signs its Milk edits again into `E3`.
   - Other devices show the edits.
-  - No message is appended under the epoch-2 tag by any device after the day-30 cleanup.
 - **Invariants:** INV-NO-LOSS, INV-MONOTONE-EPOCH, INV-CUT
 
-### HB-032 The old-`_epoch` gap
+### HB-032 The old roster destroyed under an offline member
 - **Kind:** adversarial
 - **Design:** §12.2, §11.6, §11.4, §3.3
 - **Binding:** any
-- **Setup:** House is at epoch 4. J is owner (`J.mac`), A and B are writers. A's only device, `A.phone`, is offline and has unsynced edits.
+- **Setup:** House is at `E4`. J is owner (`J.mac`), A and B are writers. A's only device, `A.phone`, is offline and has unsynced edits.
 - **Steps:**
-  1. `J.mac removes B`. House rotates to epoch 5, and the grant for A sits in A's inbox.
-  2. `hub: destroy` the epoch-4 `_epoch` message; `hub: destroy grants for A`.
-  3. Variant a: `wait 10 days`. Variant b: `wait 40 days`.
-  4. `A.phone online`; `A.phone syncs`; `J.mac syncs`.
+  1. `J.mac removes B`. House moves to `E5`, and the grant for A sits in A's inbox.
+  2. `hub: destroy` channel `E4`'s `_roster` messages; `hub: destroy grants for A`.
+  3. Variant a: `J.mac` syncs before `A.phone` comes online. Variant b: `A.phone online` first, with `J.mac` offline for a day.
+  4. All sync.
 - **Expect:**
-  - In both variants, `A.phone` ends in epoch 5 with House converged.
-  - In both variants, its edits appear on `J.mac`.
-  - In both variants, nothing `A.phone` writes after step 4 is readable with the epoch-4 key.
-  - In variant a, `J.mac` re-posts the epoch-5 genesis in the epoch-4 channel, and a grant for A, within one sync of `A.phone`'s first epoch-4 append.
+  - Variant a: `J.mac` restores channel `E4`'s `_roster` (devices that moved on keep it complete, §12.2). `A.phone` reads the announcement, waits 10 minutes, sends a key request, and gets `K(E5)`.
+  - Variant b: `A.phone` finds no `_roster` in channel `E4`: it doesn't heal there, looks in home and inbox, and sends a key request. It holds its edits until `J.mac` answers.
+  - In both, `A.phone` ends in `E5` with its edits signed again there, and nothing it writes after step 3 is readable with `K(E4)` alone.
 - **Invariants:** INV-CUT, INV-MONOTONE-EPOCH, INV-NO-LOSS
-- **Notes:** GAP: §12.2's remedy depends on owner and admin devices noticing appends under a tag they have superseded, but §11.6 has them watch an old channel for only 30 days.
-  - In variant b nobody notices. `A.phone` believes epoch 4 is current and refills it. It never sends a key request, because its log shows no newer epoch. It stays on epoch 4 for good.
-  - Everything `A.phone` writes after step 4 is readable by B, whom the rotation removed.
-  - The design also doesn't say who destroys what `A.phone` uploaded to the old channel.
-  - Possible fix: watch superseded tags (headers only; the change feed already lists them) until the horizon.
+- **Notes:** In variant b, `A.phone` publishing to `E4` before it learns of `E5` would expose its edits to B (§3.3); the "no `_roster`, no healing" rule prevents it.
 
-### HB-033 Profile and recovery pointer destroyed
+### HB-033 Home, inbox and invite channel destroyed
 - **Kind:** adversarial
-- **Design:** §12.1, §12.2, §12.4, §6.5, §11.3
+- **Design:** §12.2, §11.2, §11.4, §3.3
 - **Binding:** any
-- **Setup:** J owns House, A is an admin, and B has a pending link invite. All of J's devices have quit.
+- **Setup:** J owns House. B has a pending link request on J's invite. All of J's devices have quit.
 - **Steps:**
-  1. `hub: destroy channel <J profile>`; `hub: destroy channel <J recovery pointer>`.
-  2. `A.mac syncs`.
-  3. `B.phone joins via` the link; `A.mac approves B`.
-  4. `B.phone syncs`.
-  5. `J.mac launches`.
+  1. `hub: destroy` J's home channel, J's inbox and the invite channel.
+  2. `J.mac launches`; `B.phone` stays in the foreground, waiting.
 - **Expect:**
-  - After step 4, `B.phone` either shows House with its full contents, or shows House as pending (no error) until a device republishes J's profile.
-  - After step 5, J's profile and recovery pointer are back on the hub within one sync.
-  - After step 5, `B.phone` shows House within one sync of the profile's return.
-- **Invariants:** INV-SIGNED, INV-CONVERGE
-- **Notes:** GAP: §12.2 names the current epoch of a collection and the current home generation as places a device heals. It doesn't say whether profiles, invite channels or inbox messages are healed, or by whom. §12.1 has every device keep its collaborators' profiles, and §12.4 says to republish "everything it holds" after hub loss, but a device can't tell hub loss from a participant's deletion. If only a user's own devices republish their profile, that user's absence stops every newcomer from verifying their roster writes. Profiles are signed, so any holder could republish them, but the rule has to say so.
+  - `J.mac` re-publishes J's home within one sync.
+  - Desired: B's request reaches J, or B learns it has to ask again.
+- **Invariants:** INV-NO-LOSS, INV-UX
+- **Notes:** GAP (G-49): healing (§12.2) covers current collection channels and home only. A destroyed join request is posted again by neither side: the joiner waits until the invite expires and the owner never sees it. §3.3 lists deleting grants as vandalism that key requests repair, but nothing repairs a deleted join request; the same holds for a pairing request or reply.
 
 ### HB-034 Moving to a new hub
 - **Kind:** real-world
 - **Design:** §12.4, §12.2, §13.1, §11.2, §11.4, §1.2
 - **Binding:** any
-- **Setup:** Hub H1 serves J (three devices), A (two devices) and B (`B.phone` only), with House shared by J, A and B, and Groceries shared by A and J. While `B.phone` was offline, House rotated from epoch 1 to epoch 2 when C was removed. B's grant for epoch 2 is still unconsumed in B's inbox on H1. Hub H2 is a new Stalwart account.
+- **Setup:** Hub H1 serves J (three devices), A (two devices) and B (`B.phone` only), with House shared by J, A and B, and Groceries shared by A and J. While `B.phone` was offline, House moved from `E1` to `E2` when C was removed. B's grant for `E2` is still unconsumed in B's inbox on H1. Hub H2 is a new Stalwart account.
 - **Steps:**
-  1. `J.mac` switches to H2.
+  1. J restores onto H2 as an explicit act on `J.mac`.
   2. `J.phone`, `J.ipad`, `A.mac` and `A.phone` scan `J.mac`'s hub QR.
   3. `B.phone online` on H1, then it scans the H2 hub QR.
   4. All devices sync.
 - **Expect:**
-  - H2 holds every user's profile and recovery pointer, every home, and the current epoch of House and Groceries.
+  - H2 holds every home and each collection's current channel with its roster.
   - Nothing is appended to H2 under a superseded epoch tag.
-  - `B.phone` ends in House epoch 2, converged with J and A.
+  - `B.phone` finds no `_roster` in channel `E1` on H2, pauses healing there, asks J for a key, and ends in House `E2`, converged with J and A.
   - No device sets up a new identity or a new collection.
 - **Invariants:** INV-CONVERGE, INV-MONOTONE-EPOCH, INV-NO-LOSS, INV-CUT
 - **Notes:**
-  - GAP: there is no flow for replacing the hub on a device that already has one. "One hub per client" (§1.2) and §11.2's "different hub" error leave `B.phone` unable to accept anything that carries H2. Read literally, §13.1's connect sets up an identity and uploads local data as new collections (see FT-028). Nothing says what a device resets when its hub changes: cursors, UIDs, held grants.
-  - GAP: §12.4 says consumed grants don't need resending, but unconsumed grants are lost with H1. `B.phone` still thinks epoch 1 is current. It finds that channel empty on H2 and refills it, which is HB-032 triggered by an honest migration.
-  - GAP: whether superseded `_epoch` records and old channels still inside their 30 days are republished conflicts between §12.4 ("everything it holds") and §12.2 ("never refilled").
+  - GAP (G-17, G-13): there is no flow for replacing the hub on a device that already has one. "One hub per client" (§1.2) and §11.2's "different hub" error leave `B.phone` unable to accept anything that carries H2, and §13.1's connect sets up an identity and uploads local data as new collections. Nothing says what a device resets when its hub changes: cursors, UIDs, held grants.
   - The switch-hub step is outside the vocabulary.
 
 ### HB-035 A newer version in a channel
 - **Kind:** edge
-- **Design:** §15, §12.2, §10.7, §11.6, §11.7
+- **Design:** §15, §12.2, §10.7, §11.6, §11.9
 - **Binding:** any
-- **Setup:** House is at epoch 2, and Groceries exists. `J.mac` and `A.mac` both run v1.
+- **Setup:** House is at `E2`, and Groceries exists. `J.mac` and `A.mac` both run v1.
 - **Steps:**
   1. `hub: inject` a message under House's tag with `Tandem-Version: 2` and envelope version byte 2. This stands in for a v2 client.
   2. `J.mac sets Milk.title = "Oat milk"`.
   3. `hub: destroy record <Bread>` in House, and the same in Groceries.
   4. Both devices sync.
-  5. House rotates (`J.mac rotates House`); `wait 31 days`.
+  5. `J.mac` removes A from House and later deletes Groceries.
 - **Expect:**
   - Neither device destroys the version-2 message.
   - Both devices tell the user an update is available.
-  - Neither device destroys any House epoch-2 message, including Milk's dominated one, and neither republishes Bread in House.
+  - Neither device destroys any House `E2` message, including Milk's dominated one, and neither republishes Bread in House.
   - The new Milk message is published.
   - Groceries heals Bread and garbage-collects normally.
-  - After step 5, the harness records whether the epoch-2 channel is cleaned up.
+  - After step 5, the harness records whether channel `E2`'s data is cleaned up in S6.
 - **Invariants:** INV-GC-SAFE, INV-UX
-- **Notes:** GAP: §15 forbids healing and GC in a channel holding such a message. It doesn't say whether that also covers the 30-day cleanup of an old epoch (§11.6), the cleanup after a collection is deleted (§11.7), or destroying consumed grants and handled requests in an inbox or invite channel. If it does, one v2 message keeps an old channel on the hub for ever.
+- **Notes:** GAP (G-50): §15 forbids healing and GC in a channel holding such a message. It doesn't say whether that also covers S6's cleanup of an old epoch (§11.6), the cleanup after a collection is deleted (§11.9), or destroying handled requests in an invite channel. If it does, one v2 message keeps an old channel on the hub for ever.
 
 ### HB-036 A forged version freezes healing
 - **Kind:** adversarial
@@ -622,8 +613,8 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
   - In each variant of step 4, all devices give the same verdict on whether the message is version 1.
 - **Invariants:** INV-GC-SAFE, INV-NO-LOSS
 - **Notes:**
-  - GAP: a v1 client can't authenticate a version-2 message, so §15 gives any hub participant a permanent off switch for healing and GC. One forged message per channel tag (tags are visible on the hub), plus destroying the rest, leaves the data only on replicas, and new devices see an empty House. Possible fixes: a v2 epoch must be announced in the v1 log before v2 messages under a v1 tag count, or v2 uses tags v1 clients never follow.
-  - GAP: §15 names both the `Tandem-Version` header and the envelope byte, but neither binding fetches the header (§10.2 `changes`/`fetch`, §10.3 `fetch`). Which one decides when they disagree is unstated.
+  - GAP (G-60): a v1 client can't authenticate a version-2 message, so §15 gives any hub participant a permanent off switch for healing and GC. One forged message per channel tag (tags are visible on the hub), plus destroying the rest, leaves the data only on replicas, and new devices see an empty House. Possible fixes: a v2 epoch must be announced in the v1 log before v2 messages under a v1 tag count, or v2 uses tags v1 clients never follow.
+  - GAP (G-61): §15 names both the `Tandem-Version` header and the envelope byte, but neither binding fetches the header (§10.2 `changes`/`fetch`, §10.3 `fetch`). Which one decides when they disagree is unstated.
 
 ### HB-037 Malformed and junk messages
 - **Kind:** adversarial
@@ -650,8 +641,8 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
   - Milk heals within one sync.
 - **Invariants:** INV-CONVERGE, INV-AUTHZ, INV-SIGNED
 - **Notes:**
-  - GAP: §10.7 lets a device destroy only messages it has merged. Junk a device can prove is junk stays for ever. A version-1 envelope under a collection tag that fails AEAD is certainly junk, since the tag derives from the key. That is not so in an inbox, where a message may be sealed to a user key the device hasn't received yet. E can fill the quota this way (FT-030).
-  - GAP: §5.4 reserves the unused kinds but doesn't say how a version-1 envelope with one of them, (e), is treated: as junk (heal and GC go on) or as "a version it doesn't understand" (§15, both stop).
+  - GAP (G-19): §10.7 lets a device destroy only messages it has merged. Junk a device can prove is junk stays for ever. A version-1 envelope under a collection tag that fails AEAD is certainly junk, since the tag derives from the key. That is not so in an inbox, where a message may be sealed to a user key the device hasn't received yet. E can fill the quota this way (FT-030).
+  - GAP (G-62): §5.4 reserves the unused kinds but doesn't say how a version-1 envelope with one of them, (e), is treated: as junk (heal and GC go on) or as "a version it doesn't understand" (§15, both stop).
 
 ### HB-038 An oversized message
 - **Kind:** adversarial
@@ -668,15 +659,15 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
   - `J.phone` finishes the sync and stays responsive.
   - `J.phone` logs the skip at `.error`.
 - **Invariants:** INV-CONVERGE
-- **Notes:** GAP: §10.6 limits writers (a message MUST stay under 1 MiB) but sets no limit for readers. Read literally, `fetch` downloads and decodes any body in memory, so a hub participant can stall or crash every device following a channel. The limit can't simply be 1 MiB of stored message either: a server that re-encodes a legitimate body as UTF-16 roughly doubles it. The limit should apply to the decoded envelope, or allow for re-encoding, and be checked against JMAP `size` or IMAP `RFC822.SIZE` before fetching.
+- **Notes:** GAP (G-63): §10.6 limits writers (a message MUST stay under 1 MiB) but sets no limit for readers. Read literally, `fetch` downloads and decodes any body in memory, so a hub participant can stall or crash every device following a channel. The limit can't simply be 1 MiB of stored message either: a server that re-encodes a legitimate body as UTF-16 roughly doubles it. The limit should apply to the decoded envelope, or allow for re-encoding, and be checked against JMAP `size` or IMAP `RFC822.SIZE` before fetching.
 
 ### HB-039 What the hub holds
 - **Kind:** adversarial
 - **Design:** §14, §10.4, §5.6, §3.2
 - **Binding:** jmap+imap (J's devices JMAP, A's and B's IMAP)
-- **Setup:** J, A and B use all their devices. The harness knows every plaintext title, note, collection name, display name, device name, user ID, device ID, collection ID, record ID and invite ID used.
+- **Setup:** J, A and B use all their devices. The harness knows every plaintext title, note, collection name, display name, device name, user ID, device ID, collection ID, record ID, invite ID and epoch-start ID used.
 - **Steps:**
-  1. Run a scripted day: create House, add 50 items, share it with A and B, pair `J.ipad`, remove B, `J.mac revokes J.ipad`, delete items.
+  1. Run a scripted day: create House, add 50 items, share it with A and B, pair `J.ipad`, remove B, delete items.
   2. The harness dumps every raw message (IMAP `BODY.PEEK[]` and JMAP `Email/get` with all headers), every mailbox name and keyword, and the server's session logs (IMAP `ID`, HTTP `User-Agent`).
 - **Expect:**
   - None of the known values appear in any header, body, mailbox name or keyword, as plaintext, hex, `b64u`, `b32` or base64. Any 8-byte window of an ID counts.
@@ -687,7 +678,7 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
   - No client sends a device name or user name in IMAP `ID` or `User-Agent`.
   - The harness records the distribution of `Date` minus server receive time for each device.
 - **Invariants:** INV-HUB-BLIND
-- **Notes:** GAP: §10.4 says "the hub already knows the append time", but `Date` is written from the device's clock, not the hub's. `Date` minus the server's receive time (`INTERNALDATE`/`receivedAt`) is a steady offset for each device. It tells apart devices that share a credential and an address, and it links one device's messages across networks. That is more than §14 admits (it says the hub tells writers apart only by credential or IP). A device with a clock years off (FT-022) is obvious. Possible fix: write a fixed `Date`.
+- **Notes:** GAP (G-51): §10.4 says "the hub already knows the append time", but `Date` is written from the device's clock, not the hub's. `Date` minus the server's receive time (`INTERNALDATE`/`receivedAt`) is a steady offset for each device. It tells apart devices that share a credential and an address, and it links one device's messages across networks. That is more than §14 admits. A device with a clock years off (FT-022) is obvious. Possible fix: write a fixed `Date`.
 
 ### HB-040 A mail client tidies the Tandem folder
 - **Kind:** real-world
@@ -703,7 +694,7 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
   6. All devices sync.
 - **Expect:**
   - Step 2: no Tandem device fetches a body, publishes, heals or destroys anything.
-  - Step 4: every record in a current channel, plus home, profiles and the recovery pointer, is republished into Tandem within one sync. Nothing in `Archive` is touched.
+  - Step 4: every record in a current channel, every home and every roster a device holds is republished into Tandem within one sync. Nothing in `Archive` is touched.
   - Step 4: `A.phone` gets a new grant through a key request, 10 minutes or more after the move.
   - Step 6: duplicates collapse through GC to one message per record.
   - Old-epoch messages that came back in step 5 aren't treated as current.
@@ -724,8 +715,84 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
   - After step 3, all Tandem messages either device appends are in one mailbox, and both show Eggs and Jam.
   - Variant: both devices heal into a single new `Tandem`, and both show Eggs and Jam.
 - **Invariants:** INV-CONVERGE, INV-NO-LOSS
-- **Notes:** GAP: nothing says whether the Tandem mailbox is resolved once and cached (a JMAP id, an IMAP name) or resolved again on each sync. Nothing covers a rename or deletion either.
+- **Notes:** GAP (G-52): nothing says whether the Tandem mailbox is resolved once and cached (a JMAP id, an IMAP name) or resolved again on each sync. Nothing covers a rename or deletion either.
   - A JMAP client that caches the id keeps appending to `Old sync stuff`. A rename changes no Email state, and the EventSource only watches `types=Email`.
   - An IMAP client fails `SELECT Tandem`, creates a new one, and heals into it. The hub is split in two, and neither side notices.
   - After a deletion, `Email/set` with a destroyed mailbox id fails. The design doesn't say to run `ensureFolder` again.
   - Renaming and deleting folders are outside the vocabulary.
+
+### HB-042 Two messages that dominate each other with different contents
+- **Kind:** edge
+- **Design:** §10.7
+- **Binding:** jmap+imap (`J.mac` JMAP, `A.mac` IMAP)
+- **Setup:** Milk's title has writes `x` and `y`, where `y` supersedes `x`. The hub holds `m = {x, y}` and `n = {y}`. Both devices have merged both.
+- **Steps:**
+  1. `J.mac` and `A.mac` garbage-collect at the same moment.
+- **Expect:**
+  - `m` and `n` dominate each other. Both devices destroy only the one with the greater `H(envelope)`; the other remains.
+  - At every moment, a message holding `y` is on the hub (harness polls every 100 ms).
+  - Control run under the earlier rule (tie-break only for identical write sets): each device may destroy one, leaving none; the harness shows `y` lost.
+- **Invariants:** INV-GC-SAFE
+- **Notes:** The Lean `GC` theorem proves the general case: under the frozen rule, "may destroy `m` on account of `n`" is a strict order, so the top of every chain survives, even on stale views.
+
+### HB-043 A push that beats the answer to an append
+- **Kind:** fault
+- **Design:** §10.2, §10.4
+- **Binding:** jmap
+- **Setup:** `J.mac` follows House with an open EventSource. `net: latency 2000 ms` on `J.mac`'s responses only.
+- **Steps:**
+  1. `J.mac adds Milk to House`.
+- **Expect:**
+  - The `StateChange` arrives before `Email/set` returns; `J.mac` runs `changes`, finds a message whose `H(envelope)` is its own, and treats Milk as published.
+  - When the `Email/set` answer arrives, nothing is appended again or fetched twice.
+- **Invariants:** INV-UNIQUE, INV-QUIESCE
+
+### HB-044 `invalidArguments` from `Email/changes`
+- **Kind:** fault
+- **Design:** §10.2
+- **Binding:** jmap
+- **Setup:** `J.phone` last synced at Email state `s0`. The harness makes Stalwart answer `invalidArguments` to `Email/changes` from `s0` (as it does for a state it can no longer use).
+- **Steps:**
+  1. `J.phone syncs`.
+- **Expect:**
+  - `J.phone` treats the error like `cannotCalculateChanges` and does a full resync (HB-007).
+- **Invariants:** INV-CONVERGE
+
+### HB-045 Inventory fragments and the statements that prove a death are kept
+- **Kind:** edge
+- **Design:** §10.7, §12.2, §9.4
+- **Binding:** any
+- **Setup:** House moved to `E4` with a three-fragment inventory. Separately, Trip is dead and its two conflicting statements are in its current channel's `_roster`.
+- **Steps:**
+  1. `J.mac` writes 200 edits to House; all devices garbage-collect.
+  2. `hub: destroy` one House fragment and one of Trip's two statements.
+  3. All devices sync.
+- **Expect:**
+  - Step 1: no device destroys a fragment as dominated, however much later data there is.
+  - Step 3: devices that hold them restore the fragment and the statement.
+- **Invariants:** INV-GC-SAFE
+
+### HB-046 A discarded draft's channel is the one roster copy destroyed
+- **Kind:** edge
+- **Design:** §10.7, §11.7
+- **Binding:** any
+- **Setup:** House is at `E3`. `J.phone`'s unfinished change left channel `E4'` with inventory fragments, some records and the roster ending in a draft.
+- **Steps:**
+  1. J discards the change on `J.mac`.
+- **Expect:**
+  - `J.mac` destroys every message in channel `E4'`, the roster included.
+  - No other channel's `_roster` is touched; no device heals channel `E4'` afterwards.
+- **Invariants:** INV-GC-SAFE
+
+### HB-047 Channel tags are compared byte for byte
+- **Kind:** adversarial
+- **Design:** §10.4, §5.6
+- **Binding:** any
+- **Setup:** House's tag is a lower-case `b32` string `t`.
+- **Steps:**
+  1. E copies a real House message and changes its `Tandem-Channel` to `t` in upper case.
+  2. E adds a folded header (`Tandem-Channel:` with `t` on a continuation line, with surrounding spaces).
+- **Expect:**
+  - Step 1's message is under another tag: no device follows it or merges it.
+  - Step 2's message is unfolded and trimmed, matches `t`, and is merged (it is a real House envelope).
+- **Invariants:** INV-CONVERGE
