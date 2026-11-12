@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -384,34 +383,9 @@ func (w *World) checkOracle(coll string, ref *dev, got map[string]device.RecordV
 			g = device.RecordView{Fields: map[string]string{}, Sets: map[string][]string{}}
 		}
 		if !reflect.DeepEqual(g, v) {
-			if os.Getenv("TANDEM_DEBUG") != "" {
-				for _, f := range a.State[hx([]byte(rec))].Fields {
-					d := w.writes[string(cid)]
-					for _, wr := range d {
-						id, _ := wr.ID()
-						if hx(id) == f.Display {
-							w.T.Logf("display %q ref %x… → epoch %x…; channel %x…; eligible %v; ref's epoch in oracle %s",
-								wr.Value, wr.Ref[:4], []byte(a.Epochs[hx(wr.Ref)])[:0], a.Channel[:8], slices.Contains(a.Eligible, f.Display), a.Epochs[hx(wr.Ref)][:8])
-						}
-					}
-				}
-				if m, ok := req["inventory"].(map[string][]string); ok {
-					w.T.Logf("inventory for this record: %d entries %v; display listed: %v", len(m[hx([]byte(rec))]), shortIDs(m[hx([]byte(rec))]),
-						slices.Contains(m[hx([]byte(rec))], a.State[hx([]byte(rec))].Fields["title"].Display))
-				}
-				w.T.Logf("display id %s; channel %s", a.State[hx([]byte(rec))].Fields["title"].Display[:8], a.Channel[:8])
-			}
 			w.T.Fatalf("%s and the oracle disagree on record %x of %s:\n engine %v\n oracle %v", ref.name, rec, coll, g, v)
 		}
 	}
 }
 
 func hexDecode(s string) ([]byte, error) { return hex.DecodeString(s) }
-
-func shortIDs(ids []string) []string {
-	var out []string
-	for _, id := range ids {
-		out = append(out, id[:8])
-	}
-	return out
-}

@@ -6,8 +6,6 @@ import (
 	"github.com/jespern/tandem/sdk/go/device"
 )
 
-type crashed struct{ point string }
-
 // CrashPoints are the stops of a key change (§11.6) the engine offers.
 var CrashPoints = []string{"1:chosen", "2:journal", "2:note", "3:fragment", "3:data", "3:roster",
 	"4:announced", "4:home", "5:grant", "6:cleaned"}
@@ -36,12 +34,6 @@ func (w *World) RemovesCrashing(ownerDev, coll, user, point string) (crashedAt b
 		w.T.Fatalf("removing %s: %v", user, err)
 	}
 	return false
-}
-
-// Pending is another device's unfinished change, as devName sees it.
-func (w *World) Pending(devName, coll string) *device.Note {
-	w.Syncs(devName)
-	return w.Dev(devName).Pending(w.cid(coll))
 }
 
 // FinishesOrRedoes acts on a pending change from devName (§11.7): finish it

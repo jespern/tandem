@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func seeds(t *testing.T, def int, f func(t *testing.T, seed uint64)) {
+func seedRuns(t *testing.T, def int, f func(t *testing.T, seed uint64)) {
 	runs, first := def, 1
 	if n, err := strconv.Atoi(os.Getenv("TANDEM_FAMILY_RUNS")); err == nil {
 		runs = n
@@ -28,7 +28,7 @@ func seeds(t *testing.T, def int, f func(t *testing.T, seed uint64)) {
 // end the member is gone, nothing is dead, and every remaining device shows
 // what the reference model computes.
 func TestFamilyCrashedKeyChange(t *testing.T) {
-	seeds(t, 25, func(t *testing.T, seed uint64) {
+	seedRuns(t, 25, func(t *testing.T, seed uint64) {
 		r := rand.New(rand.NewPCG(seed, 0xc4a5))
 		w := NewWorld(t, oracle)
 		devs := []string{"J.d0", "J.d1", "A.d0", "B.d0", "B.d1", "C.d0"}
@@ -76,12 +76,12 @@ func TestFamilyCrashedKeyChange(t *testing.T) {
 		case 0: // the same device comes back
 			w.Relaunches("J.d0")
 		case 1: // the second device deals with it, then the first comes back
-			w.Pending("J.d1", coll)
+			w.Syncs("J.d1")
 			w.FinishesOrRedoes("J.d1", coll, victim)
 			w.Relaunches("J.d0")
 		default: // the first comes back, then the second looks
 			w.Relaunches("J.d0")
-			w.Pending("J.d1", coll)
+			w.Syncs("J.d1")
 			w.FinishesOrRedoes("J.d1", coll, victim)
 		}
 		// If the change was lost before anything left the device, the
