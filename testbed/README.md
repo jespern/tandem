@@ -9,7 +9,7 @@ Needs Docker with Compose v2 and Python 3.14 or later. Both images are pinned by
 ```sh
 ./tb up                      # first run bootstraps Stalwart unattended, then starts everything
 ./tb hub new                 # a fresh, empty hub account; prints its descriptor (JSON)
-./tb probe                   # binding conformance probes (~45 s)
+./tb probe                   # binding and real-time probes (~70 s)
 ./tb down                    # stop, keep data
 ./tb reset                   # delete containers, volumes and state
 ```
@@ -72,7 +72,7 @@ That answers open questions Q1–Q3 for Fastmail once someone supplies a token. 
 
 ### What the probes found on Stalwart 1.1.0
 
-All 36 probes pass. The findings, with the ones that bear on the design marked **design**:
+All 42 probes pass. The findings, with the ones that bear on the design marked **design**:
 
 | # | Finding | Bearing |
 |---|---|---|
@@ -87,7 +87,11 @@ All 36 probes pass. The findings, with the ones that bear on the design marked *
 | 9 | A message moved out of the folder shows in `Email/changes` as **updated**, not destroyed. | Confirms §10.2. |
 | 10 | `Email/query` can't filter by a custom header. | Clients can't select a channel's messages server-side; they read tags from headers, as §10.2 already does. |
 | 11 | A JMAP append whose response is cut still lands. | The "appended but never got the response" fault is reproducible. |
-| 12 | Limits: `maxObjectsInSet` 500, `maxCallsInRequest` 16, `maxSizeRequest` 10 MB. 200 appends in one call take about 30 ms. | |
+| 12 | Limits: `maxObjectsInSet` 500, `maxCallsInRequest` 16, `maxSizeRequest` 10 MB, `maxConcurrentRequests` 4. 200 appends in one call take about 30 ms. Open EventSource streams don't count against the concurrency limit: six streams on one account, and requests still go through. | |
+| 13 | Live updates: 5 JMAP watchers and 5 IMAP watchers each hear every create, flag change, move out, move back and destroy, across bindings in both directions, within 2–5 ms locally. | Confirms §10.2/§10.3 watch; `realtime.md` budgets have ample room on a LAN. |
+| 14 | A push notification can arrive before the writer's own `Email/set` response. | A device must recognise its own write arriving by push before it knows the write succeeded (`realtime.md` RT-007). |
+| 15 | A message created and destroyed between two `Email/changes` calls appears in neither `created` nor `destroyed`. | Allowed by RFC 8620; harmless, since nobody needs to learn about it. |
+| 16 | After a server restart, JMAP states from before still work and UIDVALIDITY is unchanged. | No full resync after `hub: restart` (RT-013). |
 
 ## Layout
 

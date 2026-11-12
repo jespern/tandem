@@ -14,6 +14,9 @@ The protocol is specified in `DESIGN.md` at the repository root. Every scenario 
 | `rotation.md` | `RO` | Epochs, rotation triggers, carried writes, late writes, competing and interrupted rotations |
 | `hub.md` | `HB` | JMAP and IMAP bindings, server quirks, message format, GC, healing, hostile hub participants |
 | `faults.md` | `FT` | Network faults, offline devices, stale devices, crashes mid-operation, clock trouble |
+| `collab.md` | `CO` | One list, 1–10 players collaborating: adds, edits, reorders, nesting, sleep, outages |
+| `permissions.md` | `PM` | Roles and the capability matrix; the world after every roster, device and key change |
+| `realtime.md` | `RT` | Live updates over JMAP push and IMAP IDLE; dropped connections and catch-up |
 | `journeys.md` | `JN` | Multi-step real-world stories that cross areas |
 | `scale.md` | `SC` | Volume, many devices, large logs, long histories |
 
@@ -27,6 +30,8 @@ Users and their devices are fixed across all scenarios, so steps stay short.
 | **A** | Aimee, Jesper's wife. | `A.phone`, `A.mac` |
 | **B** | Bo, a friend. | `B.phone` |
 | **C** | Carla, a friend. | `C.phone` |
+| **D** | Dana, a friend. | `D.phone` |
+| **P1**–**P10** | Generic players in parameterised families (`collab.md`, `permissions.md`). P1 is the owner unless a family says otherwise. | `P3.d1`, `P3.d2`, … as the family sets |
 | **M** | Mallory, a member who misbehaves within what her keys allow. Runs a modified client that can sign anything. | `M.phone` |
 | **E** | Eve. Holds the hub credential (an ex-member, or someone who saw an invite) but no collection keys. | raw hub access only |
 | **T** | A thief holding one of someone else's devices, e.g. `T(J.phone)`. | the stolen device |
@@ -107,6 +112,45 @@ A scenario that finds a gap or contradiction in the design says so in **Notes**,
 | `M.dev signs <write>` | Mallory's modified client signs an arbitrary write: malformed contexts, reused dots, backdated `prev`, forged roles. |
 | `T(X.dev) …` | The thief uses the stolen device, with any of the above. |
 | `wait <duration>` | Simulated time passes (the harness controls clocks; 30-day and 180-day periods are not waited out in real time). |
+| `X.dev sleeps` / `wakes` | A phone in a pocket: suspended, no network, no push; `wakes` brings it to the foreground, which runs the catch-up sync on launch. Differs from `offline`, where the app runs but can't reach the hub. |
+| `X.dev backgrounded` | iOS background: the app may get a background refresh but holds no push connection. |
+| `net: outage [X.dev, …]` / `net: restored` | The hub is unreachable for several devices at once (home Wi-Fi down), or for all of them when no list is given. |
+| `hub: restart` | The mail server restarts; open push and IDLE connections drop. |
+| `X.dev reorders <item> after <item>` / `to top` | Moves an item within its list (rewrites its `sortKey` only, Liszto §6.1). |
+| `X.dev indents <item> under <item>` / `outdents <item>` | Sets or clears `parentID`. |
+| `X.dev completes <item>` / `uncompletes <item>` | Sets or clears `completedAt`. |
+| `X.dev edits <item>.notes` | A notes edit (conflicting text is kept, Liszto §17). |
+| `check world` | Compares every user and device with the expected world (`permissions.md`, "World checks"): role, status, epoch, keys held, what it can decrypt, what each action does. |
+| `check state <coll> = <expected>` | Compares the list as every device renders it: items, order, nesting, completion, tags, titles, conflicts reported to the app. |
+| `measure latency <event> on <devices>` | Time from a write being published to it showing on each named device (`realtime.md`). |
+
+## Families
+
+Some behaviour can't be covered by hand-picked cases: the interesting bugs hide in interleavings nobody thought to write down. A **family** is a scenario with parameters, run many times by the harness with different seeds:
+
+````markdown
+### CO-F03 Family: outage while everyone keeps editing
+- **Kind:** fault
+- **Design:** §9.2, §9.3, §10.7
+- **Parameters:** players 2–10; devices per player 1–3; ops per player 20–200 from mix M-LIST; schedule S-OUTAGE; bindings all-jmap | all-imap | mixed; 200 seeds per combination
+- **Oracle:** the reference model over every write made
+- **Expect:**
+  - after `net: restored` and all devices syncing, `check state` matches the oracle on every device
+  - …
+````
+
+Field rules beyond the scenario format:
+
+- **Parameters** name ranges and the schedule (`S-…`) and op mix (`M-…`) defined in the file. The harness samples the cross-product and records the seed of every failure, so a failure replays exactly.
+- **Oracle** names what computes the expected outcome. Families never list expected states by hand.
+
+### The reference model
+
+The oracle for every family. It is a small, pure implementation of the merge rules (DESIGN §9.2–§9.3) plus the Liszto rendering rules (order by `sortKey`, ties by record ID; one level of nesting with orphans at top level; the completion repair rule), written independently of any SDK. Given the set of valid writes, it returns the state every device must show.
+
+It also checks **intent**: when a player made a change after their device had synced someone else's change to the same field, the later change must be what everyone sees, with no conflict reported. Concurrent changes may resolve either way the design allows, but identically everywhere.
+
+The model is itself checked by the Lean proofs (`proofs/`, theorems `Supersession`, `Register`, `ORSet`, `Tombstone`, `Display`). The harness checks the SDK against the model.
 
 ## Global invariants
 
@@ -126,3 +170,8 @@ Checked after every scenario unless the scenario says otherwise and why.
 | `INV-GC-SAFE` | Garbage collection never leaves the hub with less than the union of what honest devices published, minus what the design lets it drop. |
 | `INV-QUIESCE` | After all devices sync with no new edits, they stop publishing: no feedback loops between devices. |
 | `INV-UX` | Every error the user can hit has a message from §13.3 or a named new one; nothing fails silently. |
+| `INV-ORACLE` | Every device's rendered state equals the reference model's (Families). |
+| `INV-INTENT` | A change made after its author had seen the previous value of that field wins, with no conflict reported. |
+| `INV-UNIQUE` | Every record appears exactly once in every device's view: no duplicates from retries, healing or forwarding, nothing missing. |
+| `INV-BYSTANDER` | An operation changes the world only for those it targets: everyone else keeps their role, keys, epoch membership and every capability (`permissions.md`). |
+| `INV-LIVE` | A foreground device with a push connection shows another device's published change within the latency budget (`realtime.md`). |
