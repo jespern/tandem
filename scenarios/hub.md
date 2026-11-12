@@ -141,7 +141,7 @@ Binding `jmap+imap` marks a mixed scenario: some devices use JMAP and others IMA
 - **Kind:** fault
 - **Design:** §10.2
 - **Binding:** jmap
-- **Setup:** `J.phone` is in the foreground with an open EventSource. Stalwart reports its own ping interval `i` in every ping (testbed finding: it clamps the requested 60 s).
+- **Setup:** `J.phone` is in the foreground with an open EventSource. Stalwart reports its ping interval `i` in every ping, which may differ from the one requested (testbed finding 3: it raised a requested 5 s to 30 s).
 - **Steps:**
   1. `net: blackhole J.phone` (all bytes dropped, connection left open, no reset).
   2. `J.mac adds Milk to House`.
