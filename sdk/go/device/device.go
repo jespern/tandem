@@ -65,20 +65,21 @@ type msgInfo struct {
 }
 
 type col struct {
-	id       []byte
-	roster   *tandem.Roster
-	stmts    map[string]*tandem.Write // every owner-signed statement held
-	recs     map[string]map[string]*tandem.Record
-	invs     map[string]tandem.Inventory
-	frags    map[string]map[int][]byte // epoch → part → bytes
-	parts    map[string]int
-	held     []heldWrite
-	replaced map[string]bool      // epoch||write ID: seen superseded in that epoch (replacedIn)
-	all      map[string]heldWrite // every data write accepted, by write ID; superseded ones too
-	resigned map[string]bool      // own old writes already decided: signed again, carried, or left
-	own      map[string]heldWrite // writes this device signed, by write ID, with their epoch
-	dirty    map[string]bool      // epoch||record not yet published (offline edits)
-	unshared map[string]bool      // own writes a key change may have left behind (Unshared)
+	id        []byte
+	roster    *tandem.Roster
+	stmts     map[string]*tandem.Write // every owner-signed statement held
+	recs      map[string]map[string]*tandem.Record
+	invs      map[string]tandem.Inventory
+	frags     map[string]map[fragKey][]byte // epoch → every version of every part seen
+	parts     map[string]int
+	held      []heldWrite
+	replaced  map[string]bool      // epoch||write ID: seen superseded in that epoch (replacedIn)
+	all       map[string]heldWrite // every data write accepted, by write ID; superseded ones too
+	unsettled map[string]bool      // record||0||field: vectors didn't fit (§9.2)
+	resigned  map[string]bool      // own old writes already decided: signed again, carried, or left
+	own       map[string]heldWrite // writes this device signed, by write ID, with their epoch
+	dirty     map[string]bool      // epoch||record not yet published (offline edits)
+	unshared  map[string]bool      // own writes a key change may have left behind (Unshared)
 }
 
 type heldWrite struct {
@@ -117,6 +118,9 @@ func (d *Device) crash(point string) {
 		d.Crash(point)
 	}
 }
+
+// ID is the device ID.
+func (d *Device) ID() []byte { return d.id[:] }
 
 // UID is the device's user ID.
 func (d *Device) UID() []byte { return d.u.UID }
@@ -357,9 +361,6 @@ func (d *Device) sync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := d.flush(ctx); err != nil {
-		return err
-	}
 	for _, r := range added {
 		if _, ok := d.idx[r.ID]; !ok {
 			d.idx[r.ID] = &msgInfo{Tag: r.Tag}
@@ -379,7 +380,14 @@ func (d *Device) sync(ctx context.Context) error {
 		if len(ids) == 0 {
 			break
 		}
-		slices.SortFunc(ids, func(a, b string) int { // hub order, for numeric ids
+		home := tandem.HomeTag(d.u.Home)
+		slices.SortFunc(ids, func(a, b string) int { // home first, then hub order for numeric ids
+			if ha, hb := d.idx[a].Tag == home, d.idx[b].Tag == home; ha != hb {
+				if ha {
+					return -1
+				}
+				return 1
+			}
 			if len(a) != len(b) {
 				return len(a) - len(b)
 			}
@@ -410,6 +418,16 @@ func (d *Device) sync(ctx context.Context) error {
 		if err := d.resign(ctx, c); err != nil {
 			return err
 		}
+	}
+	// Queued edits go out last: after the change feed has been read, so a
+	// device returning to a changed collection never publishes into an
+	// epoch it has learned is over (INV-CUT), and a record whose earlier
+	// append landed though its answer was lost is found, not sent twice.
+	if err := d.save(); err != nil {
+		return err
+	}
+	if err := d.flush(ctx); err != nil {
+		return err
 	}
 	return d.save()
 }
@@ -460,8 +478,8 @@ func (d *Device) colFor(cid []byte) *col {
 	c, ok := d.cols[string(cid)]
 	if !ok {
 		c = &col{id: cid, stmts: map[string]*tandem.Write{}, recs: map[string]map[string]*tandem.Record{},
-			invs: map[string]tandem.Inventory{}, frags: map[string]map[int][]byte{}, parts: map[string]int{},
-			replaced: map[string]bool{}, resigned: map[string]bool{}, own: map[string]heldWrite{}, all: map[string]heldWrite{}, unshared: map[string]bool{}, dirty: map[string]bool{}}
+			invs: map[string]tandem.Inventory{}, frags: map[string]map[fragKey][]byte{},
+			replaced: map[string]bool{}, resigned: map[string]bool{}, own: map[string]heldWrite{}, all: map[string]heldWrite{}, unsettled: map[string]bool{}, unshared: map[string]bool{}, dirty: map[string]bool{}}
 		d.cols[string(cid)] = c
 	}
 	return c
@@ -480,10 +498,12 @@ func (d *Device) epochMessage(ch channel, info *msgInfo, pt []byte) error {
 		}
 		ep := string(ch.epoch)
 		if c.frags[ep] == nil {
-			c.frags[ep] = map[int][]byte{}
+			c.frags[ep] = map[fragKey][]byte{}
 		}
-		c.frags[ep][frag.Part] = frag.Bytes
-		c.parts[ep] = frag.Parts
+		// Every version is kept: a junk fragment must not displace the real
+		// one (RO-039, §10.5 "held separately until a complete hash-matching
+		// assembly exists").
+		c.frags[ep][fragKey{frag.Parts, frag.Part, string(tandem.H(frag.Bytes))}] = frag.Bytes
 		d.assemble(c, ch.epoch)
 		return nil
 	}
@@ -541,21 +561,53 @@ func (d *Device) assemble(c *col, epoch []byte) {
 	if !ok || s.Body == nil || s.Body.Snapshot == nil {
 		return
 	}
-	var b []byte
-	for i := 0; i < c.parts[ep]; i++ {
-		p, ok := c.frags[ep][i]
-		if !ok {
+	// Try the assemblies the held versions allow, for each claimed part
+	// count, until one matches the signed hash. Bounded: junk can't make a
+	// device try more than maxAssemblies combinations.
+	byParts := map[int]map[int][][]byte{}
+	for k, b := range c.frags[ep] {
+		if byParts[k.parts] == nil {
+			byParts[k.parts] = map[int][][]byte{}
+		}
+		byParts[k.parts][k.part] = append(byParts[k.parts][k.part], b)
+	}
+	for parts, versions := range byParts {
+		tries := 0
+		var try func(i int, acc []byte) bool
+		try = func(i int, acc []byte) bool {
+			if tries++; tries > maxAssemblies {
+				return false
+			}
+			if i == parts {
+				if !bytes.Equal(tandem.H(acc), s.Body.Snapshot) {
+					return false
+				}
+				inv, err := tandem.ParseInventory(acc)
+				if err == nil {
+					c.invs[ep] = inv
+				}
+				return err == nil
+			}
+			for _, v := range versions[i] {
+				if try(i+1, append(bytes.Clone(acc), v...)) {
+					return true
+				}
+			}
+			return false
+		}
+		if try(0, nil) {
 			return
 		}
-		b = append(b, p...)
-	}
-	if !bytes.Equal(tandem.H(b), s.Body.Snapshot) {
-		return // inconsistent versions are held until a matching assembly exists
-	}
-	if inv, err := tandem.ParseInventory(b); err == nil {
-		c.invs[ep] = inv
 	}
 }
+
+// fragKey is one version of one inventory fragment.
+type fragKey struct {
+	parts, part int
+	hash        string
+}
+
+const maxAssemblies = 256
 
 // settle judges held writes now that more may be known, and keeps the
 // device's own late writes alive by signing them again (§11.6).
@@ -565,6 +617,9 @@ func (d *Device) settle(ctx context.Context, c *col) {
 	}
 	for ep := range c.frags {
 		d.assemble(c, []byte(ep))
+	}
+	if c.roster.Dead() {
+		return // processing stops in a dead collection (§9.4); held writes stay held
 	}
 	var still []heldWrite
 	for _, h := range c.held {
@@ -692,7 +747,21 @@ func (d *Device) inbox(ctx context.Context, pt []byte) error {
 	if c.roster == nil || !bytes.Equal(c.roster.Owner, owner) {
 		return nil
 	}
-	c.roster.Announce(epoch) // a verified grant counts as the announcement
+	// A verified grant counts as the announcement of its epoch, and of every
+	// key change before it on its statement's chain: one grant catches a
+	// device up however many epochs it missed (§11.4).
+	for id := at; ; {
+		w, ok := c.stmts[string(id)]
+		if !ok {
+			break
+		}
+		c.roster.Announce(id)
+		if bytes.Equal(w.Ref, make([]byte, 32)) {
+			break
+		}
+		id = w.Ref
+	}
+	c.roster.Announce(epoch)
 	s, ok := c.roster.Get(at)
 	if !ok || s.Body == nil || !c.roster.OnChain(at) || !bytes.Equal(c.roster.EpochOf(at), epoch) ||
 		!bytes.Equal(s.Body.Commit, tandem.Commit(k)) || s.Body.Role(d.u.UID) == "" {

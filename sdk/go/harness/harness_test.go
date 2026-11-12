@@ -98,3 +98,18 @@ func family(t *testing.T, seed uint64) {
 	w.Settle()
 	w.Check(coll)
 }
+
+// knownBug reports an engine bug a scenario observed: a failure, or a skip
+// with TANDEM_KNOWN_BUGS=skip.
+func knownBug(t *testing.T, msg string) {
+	t.Helper()
+	if os.Getenv("TANDEM_KNOWN_BUGS") == "skip" {
+		t.Skip(msg)
+	}
+	t.Fatal(msg)
+}
+
+func knownBugf(t *testing.T, format string, args ...any) {
+	t.Helper()
+	knownBug(t, fmt.Sprintf(format, args...))
+}

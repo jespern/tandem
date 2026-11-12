@@ -66,6 +66,8 @@ Jesper decided where the reviews differ. The code already follows every decision
 
     Proposed for §9.3: "A device keeps superseded writes of an epoch until the next epoch's inventory is fixed, and may then drop those it doesn't list." §11.6's "keeps every old write the new inventory lists" then holds. Details in `ASSUMPTIONS.md` ("Found by the harness").
 
+16. **Signing again, refined (§11.6).** From the scenario harness (RC-027): any device of the user signs a late write again, and a device's own later write always counts as superseding its earlier one, even when it copied a forged claim. Without the second rule, Fable's forged-claim check revives writes the user had already replaced. Also unsaid in §9.2: which vector entries "what fits" keeps. The reference SDK keeps the most recent. Both are in `ASSUMPTIONS.md` ("Fixed from the scenario translation").
+
 ## Still open, for Jesper
 
 - **Pairing `type` names:** Fable proposes `request`/`challenge`/`reply`, Sol `pairreq`/`pairchallenge`/`pairreply`.

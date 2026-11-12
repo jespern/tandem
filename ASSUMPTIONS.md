@@ -131,6 +131,18 @@ The crash family (`sdk/go/harness/families_test.go`, `TestFamilyCrashedKeyChange
 1. **Listed writes must be carried by every device that holds them (§11.6).** A device moving to a new epoch only took listed writes from the new channel; one that missed the rotating device's upload was lost although other devices held it. The engine now moves every listed write it holds into the current epoch and republishes it, as §11.6 already says ("keeps every old write the new inventory lists … re-publishes one that the new channel lacks").
 2. **Pruning superseded writes isn't safe across a key change (§9.3, §11.6). Needs a sentence in the draft.** A listed write can be superseded in the old epoch by a late write the new epoch doesn't carry (here: a late write from the member being removed, who can't sign it again). In the new epoch the listed write is current again, but §9.3 let every device discard it as superseded. The engine now keeps every accepted write and judges "replaced" per epoch. Proposed text for §9.3: "A write superseded only by writes that a later epoch's inventory doesn't list becomes current again in that epoch. A device keeps superseded writes of an epoch until the next epoch's inventory is fixed; it may then drop those the inventory doesn't list."
 
+### Fixed from the scenario translation (2026-11-12)
+
+The translated scenarios (`sdk/go/harness/scenarios_*_test.go`, 178 tests) recorded 16 engine bugs; all are fixed, and each scenario is now its regression test. A known bug fails its test (`TANDEM_KNOWN_BUGS=skip` skips instead). Choices the draft doesn't make, taken by the reference SDK:
+
+- **Queued edits go out after the change feed is read.** A device returning to a changed collection then never publishes into an epoch it has learned is over (a removed member could read it). A queued edit whose epoch is over becomes a late write and is signed again, or is reported as unsent work to a removed member.
+- **Edits work while waiting for a new epoch's key;** they're queued until the grant arrives.
+- **A grant vouches for every key change before it** on its statement's chain, so a member away for several epochs catches up with one grant (§11.4).
+- **Any device of the user signs a late write again,** not only the device that made it (§11.6 says "its own user"). Fable's forged-claim test applies only to writes of the signing device, and a device's own later write always counts as genuinely superseding its earlier one, even if it copied a forged claim (RC-027). **Needs a sentence in the draft.**
+- **"Write with what fits" (§9.2)** keeps the 1,024 most recent dots, and the app is told the field is unsettled (`Unsettled`). The draft doesn't say which entries to keep.
+- **Every version of an inventory fragment is kept** until an assembly matches the signed hash; junk can't displace the real one (bounded at 256 tries).
+- Also: a dead collection merges nothing new; only the owner writes `_meta`; a promotion is a same-epoch statement; role changes for non-members are refused; `Resume` tells the user when a change was dropped.
+
 ## 3. What this means for our work
 
 ### Scenarios (refresh pending)

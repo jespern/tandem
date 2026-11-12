@@ -156,7 +156,7 @@ func TestRC004(t *testing.T) {
 
 	// A.phone offers no rename action: an honest client refuses to sign one.
 	if err := w.SetsRecord("A.phone", groceries, meta, "name", "Aimee's"); err == nil {
-		t.Skip("engine bug: device.Set signs and shows a writer's _meta write that every other device rejects (§8.3)")
+		knownBug(t, "engine bug: device.Set signs and shows a writer's _meta write that every other device rejects (§8.3)")
 	}
 }
 
@@ -180,7 +180,7 @@ func TestRC005(t *testing.T) {
 	w.WantKept(groceries, "eggs", "notes", "Large, free range", "Large, organic")
 	merged := "Large, free range\n———\nLarge, organic"
 	w.must(w.Sets("J.phone", groceries, "eggs", "notes", merged)) // Liszto's merge (§17)
-	w.must(w.Launches("A.phone"))
+	w.mustLaunch(w.Launches("A.phone"))
 	w.Syncs("A.phone")
 	w.Settle()
 	w.Check(groceries)
@@ -379,7 +379,7 @@ func TestRC014(t *testing.T) {
 		}
 	}
 	if leaked {
-		t.Skip("engine bug: a returning device publishes its queued edits to the old epoch's channel before reading the announcement (§11.6), where removed B can read them")
+		knownBug(t, "engine bug: a returning device publishes its queued edits to the old epoch's channel before reading the announcement (§11.6), where removed B can read them")
 	}
 }
 
@@ -395,7 +395,7 @@ func TestRC015(t *testing.T) {
 	w.Want("J.mac stopped after fixing inv(E5)", died, true)
 	w.must(w.Sets("A.mac", groceries, "milk", "title", "Milk 1L")) // appended to E4
 	x := w.WriteOf(groceries, "milk", "title", "Milk 1L")
-	w.must(w.Launches("J.mac")) // announces E5
+	w.mustLaunch(w.Launches("J.mac")) // announces E5
 	w.Forget(groceries, "B")
 	w.Syncs("A.phone")
 	w.must(w.Sets("A.phone", groceries, "milk", "title", "Whole milk"))
@@ -526,7 +526,7 @@ func TestRC019(t *testing.T) {
 		w.must(w.Adds("B.phone", groceries, "wine"))
 		w.Syncs("A.phone")
 		w.WantShows(groceries, "wine", "title", "wine", "A.phone")
-		w.must(w.Launches("J.mac"))
+		w.mustLaunch(w.Launches("J.mac"))
 		w.Forget(groceries, "B")
 		w.Settle()
 		w.Check(groceries)
@@ -720,7 +720,7 @@ func TestRC026(t *testing.T) {
 			w.Want("J.mac stopped after fixing inv(E5)", died, true)
 			w.must(w.Sets("A.mac", groceries, "milk", "title", "Milk 1L")) // into the old channel
 			x := w.WriteOf(groceries, "milk", "title", "Milk 1L")
-			w.must(w.Launches("J.mac"))
+			w.mustLaunch(w.Launches("J.mac"))
 			w.Forget(groceries, "M")
 			w.Syncs("A.phone")
 			w.must(w.Sets("A.phone", groceries, "milk", "title", "Whole milk"))
@@ -762,7 +762,7 @@ func TestRC027(t *testing.T) {
 	w.Settle()
 	w.Check(groceries)
 	if slices.Contains(w.Kept(groceries, "milk", "title"), "milk") {
-		t.Skip("engine bug: after M's removal A.phone signs its replaced first title again: resign treats a superseding write as forged when its vectors merely contain M's inflated entry for A.phone, not when it relies on it (device/resign.go forged)")
+		knownBug(t, "engine bug: after M's removal A.phone signs its replaced first title again: resign treats a superseding write as forged when its vectors merely contain M's inflated entry for A.phone, not when it relies on it (device/resign.go forged)")
 	}
 	w.WantKept(groceries, "milk", "title", "Mallory was here", "Milk", "Milk 2L")
 	w.must(w.Sets("J.mac", groceries, "milk", "title", "Milk"))
@@ -960,7 +960,7 @@ func TestRC042(t *testing.T) {
 	w.WantKept(groceries, "milk", "notes", "M's")
 	err := w.Sets("J.mac", groceries, "milk", "notes", "J's")
 	if err != nil {
-		t.Skip("engine bug: a write whose vectors would exceed 1,024 entries is refused (" + err.Error() + "); §9.2 says write with what fits and tell the app")
+		knownBug(t, "engine bug: a write whose vectors would exceed 1,024 entries is refused ("+err.Error()+"); §9.2 says write with what fits and tell the app")
 	}
 	w.Settle()
 	w.Check(groceries)

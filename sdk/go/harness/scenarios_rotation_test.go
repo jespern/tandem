@@ -98,7 +98,7 @@ func TestRO001(t *testing.T) {
 	w.Want("E4's roster in channel E4", w.RosterMessages("J", house, e4) > 0, true)
 	w.Want("rug carried into E4", len(w.Payloads("J", house, e4, "rug")) > 0, true)
 
-	w.must(w.Launches("J.phone"))
+	w.mustLaunch(w.Launches("J.phone"))
 	w.Forget(house, "B")
 	w.Syncs("J.phone", "A.phone", "J.mac", "J.ipad")
 	s := w.Statement("J.mac", house, e4)
@@ -130,10 +130,10 @@ func TestRO001(t *testing.T) {
 	// B.phone's read-only replica isn't exposed by the engine (State shows
 	// the current epoch, which it can't read).
 	if !hasWrite(w.Unshared("B.phone", house), b1) {
-		t.Skip(removedUnsharedBug)
+		knownBug(t, removedUnsharedBug)
 	}
 	if leakedTo(w, "B", house, e3, "rug", b1) {
-		t.Skip(flushLeak)
+		knownBug(t, flushLeak)
 	}
 }
 
@@ -173,7 +173,7 @@ func TestRO004(t *testing.T) {
 	w.WantKept(house, "jam", "notes", "A's jam") // in the deleted record, never shown
 	w.WantShows(house, "milk", "title", "A's milk", "J.mac", "A.phone")
 	if leakedTo(w, "J", house, e3, "milk", m) {
-		t.Skip(flushLeak)
+		knownBug(t, flushLeak)
 	}
 }
 
@@ -227,7 +227,7 @@ func TestRO007(t *testing.T) {
 	}
 	// "b1 may now be signed again": the engine keeps it for the app.
 	if !unshared {
-		t.Skip(removedUnsharedBug)
+		knownBug(t, removedUnsharedBug)
 	}
 }
 
@@ -257,7 +257,7 @@ func TestRO011(t *testing.T) {
 	w.Settle()
 	checkAll(w)
 	if !bytes.Equal(w.Epoch("J.mac", house), e4) {
-		t.Skip(promotionBug)
+		knownBug(t, promotionBug)
 	}
 	w.Want("C's promotion follows E4", fmt.Sprintf("%x", w.Statement("J.mac", house, w.Head("J.mac", house)).Parent), fmt.Sprintf("%x", e4))
 }
@@ -327,7 +327,7 @@ func TestRO019(t *testing.T) {
 	w.Want("a1' names E5's first statement listing A", fmt.Sprintf("%x", again.Ref), fmt.Sprintf("%x", e5))
 	w.WantShows(house, "milk", "title", "a1", "J.mac", "A.mac")
 	if leakedTo(w, "J", house, e4, "milk", a1) || leakedTo(w, "J", house, e3, "milk", a1) {
-		t.Skip(flushLeak)
+		knownBug(t, flushLeak)
 	}
 }
 
@@ -355,7 +355,7 @@ func TestRO020(t *testing.T) {
 				}
 				switch variant {
 				case "resume":
-					w.must(w.Launches("J.mac"))
+					w.mustLaunch(w.Launches("J.mac"))
 					if s.point == "1:chosen" {
 						w.Want("nothing to resume", w.Roles("J.mac", house)["B"], "writer")
 						w.must(w.Removes("J.mac", house, "B")) // J asks again
@@ -373,7 +373,7 @@ func TestRO020(t *testing.T) {
 					} else if w.Roles("J.phone", house)["B"] != "" {
 						w.must(w.Removes("J.phone", house, "B"))
 					}
-					w.must(w.Launches("J.mac")) // comes back later
+					w.mustLaunch(w.Launches("J.mac")) // comes back later
 				}
 				w.Forget(house, "B")
 				w.Settle()
@@ -411,7 +411,7 @@ func TestRO022(t *testing.T) {
 	w.Syncs("J.ipad")
 	w.Want("J.ipad stays in E3", w.EpochLabel("J.ipad", house), "E0")
 	w.must(w.Sets("J.ipad", house, "milk", "notes", "from the iPad"))
-	w.must(w.Launches("J.mac"))
+	w.mustLaunch(w.Launches("J.mac"))
 	w.Settle()
 	checkAll(w)
 	w.Want("J.mac didn't announce", w.EpochLabel("J.mac", house), "E0")
@@ -576,10 +576,10 @@ func TestRO035(t *testing.T) {
 	w.Syncs("A.phone")
 	w.Want("A.phone knows of E4", w.EpochLabel("A.phone", house), "E1")
 	if err := w.Sets("A.phone", house, "milk", "notes", "while waiting"); err != nil {
-		t.Skip("engine bug: a member waiting for the new epoch's key can't edit (" + err.Error() + "); edits should apply locally and queue (§11.6, RO-035)")
+		knownBug(t, "engine bug: a member waiting for the new epoch's key can't edit ("+err.Error()+"); edits should apply locally and queue (§11.6, RO-035)")
 	}
-	w.must(w.Launches("J.phone"))
-	w.must(w.Launches("J.mac"))
+	w.mustLaunch(w.Launches("J.phone"))
+	w.mustLaunch(w.Launches("J.mac"))
 	w.Settle()
 	checkAll(w)
 	w.WantShows(house, "milk", "notes", "while waiting", "J.phone", "C.phone")
@@ -630,7 +630,7 @@ func TestRO039(t *testing.T) {
 	w.Settle()
 	if !reflect.DeepEqual(w.Dev("D.phone").State(w.cid(house)), w.Dev("J.mac").State(w.cid(house))) {
 		// Order-dependent: inbox() reads the granted channel in map order.
-		t.Skip("engine bug: a forged inventory fragment can replace the real one: the device keeps one byte string per part (last wins) instead of each version separately, so when the fragments arrive before the statement that commits them, the inventory never assembles and the joiner misses every carried record")
+		knownBug(t, "engine bug: a forged inventory fragment can replace the real one: the device keeps one byte string per part (last wins) instead of each version separately, so when the fragments arrive before the statement that commits them, the inventory never assembles and the joiner misses every carried record")
 	}
 	checkAll(w)
 	w.WantKept(house, "milk", "notes", "A's note")
@@ -648,7 +648,7 @@ func TestRO040(t *testing.T) {
 			if variant == "A.phone gone" {
 				w.Down("A.phone")
 			}
-			w.must(w.Launches("J.mac"))
+			w.mustLaunch(w.Launches("J.mac"))
 			w.Forget(house, "C")
 			w.Settle()
 			ids := map[string]bool{}
@@ -660,7 +660,7 @@ func TestRO040(t *testing.T) {
 			}
 			if variant == "A.phone gone" && len(ids) == 0 {
 				_, shown := w.Shows("J.mac", house, "milk", "title")
-				t.Skipf("engine bug: only the device that made a late write signs it again (§11.6: every device of the user), so x is lost with A.phone; and the listed write x replaced is lost too: J.mac didn't upload it to E4 (it no longer keeps it) and S6 destroyed its E3 message as replaced, though it was replaced only in E3. milk shows a title on J.mac: %v; the oracle keeps the listed one", shown)
+				knownBugf(t, "engine bug: only the device that made a late write signs it again (§11.6: every device of the user), so x is lost with A.phone; and the listed write x replaced is lost too: J.mac didn't upload it to E4 (it no longer keeps it) and S6 destroyed its E3 message as replaced, though it was replaced only in E3. milk shows a title on J.mac: %v; the oracle keeps the listed one", shown)
 			}
 			checkAll(w)
 			w.Want("one write ID for x signed again", len(ids), 1)
@@ -697,18 +697,22 @@ func TestRO042(t *testing.T) {
 	e4 := w.Epoch("J.mac", house)
 	w.must(w.MakesRole("J.mac", house, "B", "writer"))
 	if !bytes.Equal(w.Epoch("J.mac", house), e4) {
-		t.Skip(promotionBug)
+		knownBug(t, promotionBug)
 	}
 	s5 := w.Head("J.mac", house)
 	w.Online("B.phone")
 	w.Settle()
 	checkAll(w)
+	// b1 exists twice: as made (under E3's head) and signed again. The
+	// copy names s5, the first statement of the epoch that lets B write.
 	b1 := w.WriteOf(house, "rug", "notes", "b1")
+	resigned := false
 	for _, x := range w.Writes(house, "rug", "notes") {
-		if x.Dot == b1.Dot && !bytes.Equal(x.Ref, b1.Ref) {
-			w.Want("b1 names s5", fmt.Sprintf("%x", x.Ref), fmt.Sprintf("%x", s5))
+		if x.Dot == b1.Dot && bytes.Equal(x.Ref, s5) {
+			resigned = true
 		}
 	}
+	w.Want("b1 signed again naming s5", resigned, true)
 	w.WantShows(house, "rug", "notes", "b1", "J.mac", "A.phone")
 }
 
@@ -729,7 +733,7 @@ func TestRO044(t *testing.T) {
 	e4 := w.Epoch("J.mac", house)
 	w.must(w.Removes("J.mac", house, "C"))
 	w.Want("E5 follows E4", fmt.Sprintf("%x", w.Statement("J.mac", house, w.Epoch("J.mac", house)).Parent), fmt.Sprintf("%x", e4))
-	w.must(w.Launches("J.phone"))
+	w.mustLaunch(w.Launches("J.phone"))
 	w.Settle()
 	checkAll(w)
 	w.Want("roster", w.Roles("B.phone", house), map[string]string{"J": "owner", "A": "reader", "B": "writer"})
@@ -769,7 +773,7 @@ func TestRO046(t *testing.T) {
 	stopsAt(w, "J.phone", "3:data", func() error { return w.Removes("J.phone", house, "B") })
 	w.Syncs("J.mac")
 	w.must(w.Discards("J.mac", house))
-	w.must(w.Launches("J.phone"))
+	w.mustLaunch(w.Launches("J.phone"))
 	w.Settle()
 	checkAll(w)
 	w.Want("J.phone didn't announce", w.EpochLabel("J.phone", house), "E0")
@@ -807,7 +811,7 @@ func TestRO050(t *testing.T) {
 	w.Want("B keeps its replica", w.Present("B.phone", house, "rug"), true)
 	_, aSeen := w.Shows("B.phone", house, "milk", "notes")
 	if v, _ := w.Shows("B.phone", house, "milk", "notes"); aSeen && v == "A's" {
-		t.Skip("engine bug: a device that finds a collection dead still merges new data writes into it (B.phone merged A's edit published after the death; §9.4: nothing more is merged)")
+		knownBug(t, "engine bug: a device that finds a collection dead still merges new data writes into it (B.phone merged A's edit published after the death; §9.4: nothing more is merged)")
 	}
 }
 
@@ -821,7 +825,7 @@ func TestRO051(t *testing.T) {
 	w.must(w.Discards("J.phone", house))
 	w.must(w.Removes("J.phone", house, "B"))
 	w.Forget(house, "B")
-	w.must(w.Launches("J.mac"))
+	w.mustLaunch(w.Launches("J.mac"))
 	w.Settle()
 	e4 := w.Epoch("M.phone", house)
 	w.Want("the counters match", w.Statement("J.phone", house, e4).Body.KeyN, int64(1))
@@ -839,13 +843,13 @@ func TestRO052(t *testing.T) {
 	w.must(w.Sets("A.mac", house, "milk", "notes", "late"))
 	late := w.WriteOf(house, "milk", "notes", "late")
 	w.Down("A.mac")
-	w.must(w.Launches("J.phone"))
+	w.mustLaunch(w.Launches("J.phone"))
 	w.Forget(house, "B")
 	w.Settle()
 	w.Want("late's message may go", leakedTo(w, "J", house, e3, "milk", late), false)
 	w.Want("E3's roster stays", w.RosterMessages("J", house, e3) > 0, true)
 	w.Want("home keeps K(E3)", w.Keys("J", house)[string(e3)] != nil, true)
-	w.must(w.Launches("A.mac"))
+	w.mustLaunch(w.Launches("A.mac"))
 	w.Settle()
 	checkAll(w)
 	w.WantShows(house, "milk", "notes", "late", "J.phone", "A.phone")
@@ -863,6 +867,6 @@ func TestRO053(t *testing.T) {
 	w.Want("alive", w.Dead("A.phone", house), false)
 	w.Want("roster", w.Roles("A.phone", house), map[string]string{"J": "owner", "A": "writer", "B": "writer", "C": "reader", "D": "writer"})
 	if err == nil {
-		t.Skip("engine bug: resuming drops an unexported change silently (Resume returns nil), so J isn't told his removal of B didn't happen")
+		knownBug(t, "engine bug: resuming drops an unexported change silently (Resume returns nil), so J isn't told his removal of B didn't happen")
 	}
 }

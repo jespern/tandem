@@ -172,7 +172,7 @@ func TestPM006(t *testing.T) {
 	w.WantShows(house, "C's item", "title", "C's item", houseDevs...)
 	w.Want("C's write names the promotion", fmt.Sprintf("%x", w.WriteOf(house, "C's item", "title", "C's item").Ref), fmt.Sprintf("%x", w.Head("J.phone", house)))
 	if rotated {
-		t.Skip(promotionBug)
+		knownBug(t, promotionBug)
 	}
 }
 
@@ -246,7 +246,7 @@ func TestPM011(t *testing.T) {
 		w.Shares("J.phone", house, "D", "writer")
 		w.Settle()
 		if w.EpochLabel("D.phone", house) != w.EpochLabel("J.phone", house) {
-			t.Skip(lateReadmitBug)
+			knownBug(t, lateReadmitBug)
 		}
 		w.must(w.Adds("D.phone", house, "D is back"))
 		w.Settle()
@@ -293,7 +293,7 @@ func TestPM014(t *testing.T) {
 	w.WantDelta(before, w.View(), Merge(epochs(house, "E1", live...), Delta(house, "D.phone/role", "-", "D/key", "false")))
 	checkAll(w)
 	if grew {
-		t.Skip("engine bug: a restored or newly paired device re-applies old grants from the inbox before reading the later home messages that record them, and publishes redundant home writes (delta after restore should be none on the hub)")
+		knownBug(t, "engine bug: a restored or newly paired device re-applies old grants from the inbox before reading the later home messages that record them, and publishes redundant home writes (delta after restore should be none on the hub)")
 	}
 }
 
@@ -357,7 +357,7 @@ func TestPM021(t *testing.T) {
 		w.Forget(house, "B")
 		w.Settle()
 		w.Want("B removed", w.Roles("J.mac", house)["B"], "")
-		w.must(w.Launches("J.phone")) // finds the announcement and carries on
+		w.mustLaunch(w.Launches("J.phone")) // finds the announcement and carries on
 		w.Settle()
 		checkAll(w)
 		w.Want("J.phone", w.EpochLabel("J.phone", house), "E1")
@@ -365,7 +365,7 @@ func TestPM021(t *testing.T) {
 		err = w.MakesRole("J.mac", house, "B", "reader")
 		w.Settle()
 		if err == nil && w.EpochLabel("J.mac", house) != "E1" {
-			t.Skip("engine bug: changing the role of someone who isn't a member is not refused; it starts a key change that changes no one")
+			knownBug(t, "engine bug: changing the role of someone who isn't a member is not refused; it starts a key change that changes no one")
 		}
 		checkAll(w)
 	})
@@ -380,7 +380,7 @@ func TestPM023(t *testing.T) {
 	w.must(w.MakesRole("J.phone", house, "C", "writer"))
 	promotion := w.Head("J.phone", house)
 	if w.EpochLabel("J.phone", house) != "E0" {
-		t.Skip(promotionBug)
+		knownBug(t, promotionBug)
 	}
 	w.Syncs("J.mac")
 	w.must(w.Removes("J.mac", house, "D"))
@@ -430,7 +430,7 @@ func TestPM024(t *testing.T) {
 	w.Check("Trip")
 	for _, d := range houseDevs {
 		if v, _ := w.Shows(d, house, "lamp", "title"); v != "lamp" {
-			t.Skipf("engine bug: a device that finds a collection dead still merges new data writes into it (%s shows %q; §9.4: it stops merging)", d, v)
+			knownBugf(t, "engine bug: a device that finds a collection dead still merges new data writes into it (%s shows %q; §9.4: it stops merging)", d, v)
 		}
 	}
 	// Copying is §11.8's.
@@ -483,12 +483,12 @@ func TestPM027(t *testing.T) {
 	w.Want("A holds K(E1)", w.Keys("A", house)[string(w.Epoch("A.phone", house))] != nil, false)
 	inE0 := w.Messages("A", house, e0)
 	if err := w.Sets("A.phone", house, "lamp", "notes", "queued"); err != nil {
-		t.Skip("engine bug: a member waiting for the new epoch's key can't edit (" + err.Error() + "); edits should apply locally and queue (§11.6, RO-035)")
+		knownBug(t, "engine bug: a member waiting for the new epoch's key can't edit ("+err.Error()+"); edits should apply locally and queue (§11.6, RO-035)")
 	}
 	w.Syncs("A.phone")
 	w.Want("nothing published to E0", w.Messages("A", house, e0), inE0)
-	w.must(w.Launches("J.phone"))
-	w.must(w.Launches("J.mac"))
+	w.mustLaunch(w.Launches("J.phone"))
+	w.mustLaunch(w.Launches("J.mac"))
 	w.Settle()
 	checkAll(w)
 	w.WantShows(house, "lamp", "notes", "queued", "J.phone", "B.phone", "C.phone")
@@ -614,7 +614,7 @@ func pmChurn(t *testing.T, r *rand.Rand) {
 	w.Settle()
 	for u := range late {
 		if member[u] != "" && w.EpochLabel(devsOf[u][0], coll) != w.EpochLabel("P1.d1", coll) {
-			t.Skip(lateReadmitBug)
+			knownBug(t, lateReadmitBug)
 		}
 	}
 	w.Check(coll)
@@ -707,7 +707,7 @@ func pmUnderLoad(t *testing.T, r *rand.Rand) {
 			if died {
 				switch r.IntN(3) {
 				case 0:
-					w.must(w.Launches("P1.d1"))
+					w.mustLaunch(w.Launches("P1.d1"))
 				case 1:
 					w.Syncs("P1.d2")
 					if w.Pending("P1.d2", coll) != nil {
@@ -717,13 +717,13 @@ func pmUnderLoad(t *testing.T, r *rand.Rand) {
 							w.must(err)
 						}
 					}
-					w.must(w.Launches("P1.d1"))
+					w.mustLaunch(w.Launches("P1.d1"))
 				default:
 					w.Syncs("P1.d2")
 					if w.Pending("P1.d2", coll) != nil {
 						w.must(w.Discards("P1.d2", coll))
 					}
-					w.must(w.Launches("P1.d1"))
+					w.mustLaunch(w.Launches("P1.d1"))
 				}
 			}
 		} else if err := op(); err != nil {

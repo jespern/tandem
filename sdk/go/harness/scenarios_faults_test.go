@@ -117,7 +117,7 @@ func TestFT003(t *testing.T) {
 			w.WantShows(house, "Oat milk", "title", "Oat milk", "A.phone", "J.phone")
 			msgs := len(w.Payloads("J", house, w.Epoch("J.mac", house), "Oat milk"))
 			if variant == "stored" && msgs > 1 {
-				t.Skipf("engine bug: after an append whose answer was lost, the device appends the same record again (%d messages) instead of finding its envelope on the hub by H(envelope) first: flush runs before the change feed is read (§10.2, §10.7)", msgs)
+				knownBugf(t, "engine bug: after an append whose answer was lost, the device appends the same record again (%d messages) instead of finding its envelope on the hub by H(envelope) first: flush runs before the change feed is read (§10.2, §10.7)", msgs)
 			}
 			w.Want("messages for Oat milk", msgs, 1)
 		})
@@ -167,7 +167,7 @@ func TestFT006(t *testing.T) {
 	w.Syncs("J.phone")
 	w.Settle()
 	if !reflect.DeepEqual(w.Dev("J.phone").State(w.cid(house)), w.Dev("J.mac").State(w.cid(house))) {
-		t.Skip("engine bug: a sync whose flush fails after reading the change feed drops the new message refs for good: Changes has moved the cursor, the refs were never recorded, so J.phone never sees J.mac's 50 edits (§10.2: the cursor never moves past changes whose ids aren't recorded)")
+		knownBug(t, "engine bug: a sync whose flush fails after reading the change feed drops the new message refs for good: Changes has moved the cursor, the refs were never recorded, so J.phone never sees J.mac's 50 edits (§10.2: the cursor never moves past changes whose ids aren't recorded)")
 	}
 	w.Check(house)
 }
@@ -221,7 +221,7 @@ func TestFT010(t *testing.T) {
 		w.Adds("C.phone", house, "from C") // C is a reader: refused anyway
 		w.Syncs("A.mac", "C.phone")
 		w.Want("nothing published to the old epoch", w.Messages("A", house, e0), inE0)
-		w.must(w.Launches("J.mac"))
+		w.mustLaunch(w.Launches("J.mac"))
 		w.Settle()
 		w.Check(house)
 		cur := w.Epoch("J.mac", house)
@@ -230,7 +230,7 @@ func TestFT010(t *testing.T) {
 		}
 		w.WantCut("B", house, cur)
 		if errA != nil {
-			t.Skip("engine bug: a member waiting for the new epoch's key can't edit (" + errA.Error() + "); edits should apply locally and queue (§11.6, RO-035)")
+			knownBug(t, "engine bug: a member waiting for the new epoch's key can't edit ("+errA.Error()+"); edits should apply locally and queue (§11.6, RO-035)")
 		}
 		w.WantShows(house, "from A", "title", "from A", "J.mac", "C.phone")
 	})
@@ -253,7 +253,7 @@ func TestFT011(t *testing.T) {
 			}
 			switch variant {
 			case "a":
-				w.must(w.Launches("J.mac"))
+				w.mustLaunch(w.Launches("J.mac"))
 			case "b":
 				w.Syncs("J.phone")
 				n := w.Pending("J.phone", house)
@@ -263,7 +263,7 @@ func TestFT011(t *testing.T) {
 				w.Want("partial channel destroyed", w.Messages("J", house, draft), 0)
 				w.must(w.Removes("J.phone", house, "B"))
 				w.Want("a new key", bytes.Equal(w.Epoch("J.phone", house), draft), false)
-				w.must(w.Launches("J.mac"))
+				w.mustLaunch(w.Launches("J.mac"))
 			}
 			w.Forget(house, "B")
 			w.Settle()
@@ -338,7 +338,7 @@ func TestFT019(t *testing.T) {
 	w.WantGone(house, "Jam", "J.mac", "A.phone", "A.mac")
 	w.WantKept(house, "Jam", "notes", "A.phone's jam")
 	if leakedTo(w, "J", house, e2, "Milk", milk) {
-		t.Skip(flushLeak)
+		knownBug(t, flushLeak)
 	}
 }
 
@@ -361,7 +361,7 @@ func TestFT020(t *testing.T) {
 	w.WantShows(house, "Milk", "notes", "a year ago", "J.mac", "A.mac", "C.phone")
 	w.WantGone(house, "Bread", "J.mac", "A.phone", "C.phone")
 	if leakedTo(w, "J", house, e0, "Milk", milk) {
-		t.Skip(flushLeak)
+		knownBug(t, flushLeak)
 	}
 }
 
@@ -395,7 +395,7 @@ func TestFT026(t *testing.T) {
 	w.Want("quiet", w.Hub.Len(), n)
 	for _, d := range []string{"J.phone", "A.phone"} {
 		if !reflect.DeepEqual(w.Dev(d).State(w.cid(house)), w.Dev("J.mac").State(w.cid(house))) {
-			t.Skip("engine bug: a sync whose flush fails after reading the change feed drops the new message refs for good (FT-006)")
+			knownBug(t, "engine bug: a sync whose flush fails after reading the change feed drops the new message refs for good (FT-006)")
 		}
 	}
 	w.Check(house)
@@ -416,13 +416,13 @@ func TestFT031(t *testing.T) {
 		w.must(w.Adds("J.phone", house, fmt.Sprint("offline", i)))
 	}
 	w.must(w.Sets("J.phone", house, "Milk", "notes", "one"))
-	w.must(w.Launches("J.phone")) // quits and launches, still offline
+	w.mustLaunch(w.Launches("J.phone")) // quits and launches, still offline
 	w.Offline("J.phone")
 	w.WantShows(house, "Milk", "notes", "one", "J.phone")
 	w.must(w.Sets("J.phone", house, "Milk", "notes", "two"))
 	w.must(w.Sets("J.phone", house, "Jam", "notes", "three"))
 	w.Down("J.phone") // crashes after a local edit
-	w.must(w.Launches("J.phone"))
+	w.mustLaunch(w.Launches("J.phone"))
 	w.Offline("J.phone")
 	for i := 0; i < 3; i++ {
 		w.Want("still shown", w.Present("J.phone", house, fmt.Sprint("offline", i)), true)
@@ -457,7 +457,7 @@ func TestFT034(t *testing.T) {
 	cur := w.Epoch("J.mac", house)
 	w.Want("key in home", w.Keys("J", house)[string(cur)] != nil, true)
 	w.Want("A's grant", w.Granted("A", house)[string(cur)], true)
-	w.must(w.Launches("J.phone"))
+	w.mustLaunch(w.Launches("J.phone"))
 	w.Settle()
 	w.Check(house)
 	w.Want("J.phone", w.EpochLabel("J.phone", house), "E1")
@@ -468,7 +468,7 @@ func TestFT035(t *testing.T) {
 	w := ftHouse(t)
 	stopsAt(w, "J.phone", "2:note", func() error { return w.Removes("J.phone", house, "B") })
 	w.must(os.Remove(filepath.Join(w.devs["J.phone"].dir, "journal.json"))) // storage rolled back
-	w.must(w.Launches("J.phone"))
+	w.mustLaunch(w.Launches("J.phone"))
 	if w.Pending("J.phone", house) == nil {
 		t.Fatal("J.phone doesn't offer to do it or discard it")
 	}

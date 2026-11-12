@@ -239,7 +239,9 @@ func (w *World) Relaunches(devName string) {
 	w.must(err)
 	x.d = d
 	w.hook(x)
-	w.must(d.Resume(ctx))
+	if err := d.Resume(ctx); err != nil && !errors.Is(err, device.ErrSuperseded) {
+		w.T.Fatal(err)
+	}
 }
 
 // Syncs runs a sync; offline devices do nothing.
@@ -304,7 +306,7 @@ func (w *World) Check(coll string) {
 			continue
 		}
 		if !reflect.DeepEqual(st, refState) {
-			w.T.Fatalf("%s and %s disagree on %s:\n%s\n%v\n%s\n%v", ref.name, n, coll, ref.name, refState, n, st)
+			w.T.Fatalf("%s and %s disagree on %s:%s%s", ref.name, n, coll, stateDiff(ref.name, refState, n, st), w.explain(cid, refState, st, ref, x))
 		}
 	}
 	if ref == nil || w.Oracle == nil {
@@ -389,3 +391,42 @@ func (w *World) checkOracle(coll string, ref *dev, got map[string]device.RecordV
 }
 
 func hexDecode(s string) ([]byte, error) { return hex.DecodeString(s) }
+
+// stateDiff lists only the records two devices show differently.
+func stateDiff(an string, a map[string]device.RecordView, bn string, b map[string]device.RecordView) string {
+	keys := map[string]bool{}
+	for k := range a {
+		keys[k] = true
+	}
+	for k := range b {
+		keys[k] = true
+	}
+	var out strings.Builder
+	for _, k := range sortedKeys(keys) {
+		if !reflect.DeepEqual(a[k], b[k]) {
+			fmt.Fprintf(&out, "\n record %x\n  %s: %+v\n  %s: %+v", k, an, a[k], bn, b[k])
+		}
+	}
+	return out.String()
+}
+
+// explain says, for each record two devices disagree on, which writes were
+// made and what each device holds of them.
+func (w *World) explain(cid []byte, a, b map[string]device.RecordView, da, db *dev) string {
+	var out strings.Builder
+	for _, k := range sortedKeys(a) {
+		if reflect.DeepEqual(a[k], b[k]) {
+			continue
+		}
+		fmt.Fprintf(&out, "\n writes made to %x:", []byte(k)[:4])
+		for id, wr := range w.writes[string(cid)] {
+			if string(wr.Record) == k {
+				fmt.Fprintf(&out, "\n  %x %s=%q by device %x, ref %x", []byte(id)[:4], wr.Field, wr.Value, wr.Dot.Device[:2], wr.Ref[:4])
+			}
+		}
+		for _, x := range []*dev{da, db} {
+			fmt.Fprintf(&out, "\n %s (%x): %s", x.name, x.d.ID()[:2], x.d.Explain(cid, []byte(k)))
+		}
+	}
+	return out.String()
+}

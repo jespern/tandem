@@ -1091,3 +1091,12 @@ func Merge(ds ...map[string]string) map[string]string {
 	}
 	return out
 }
+
+// mustLaunch launches a device that may find its pending change discarded
+// or overtaken meanwhile: "nothing changed" is the expected answer then.
+func (w *World) mustLaunch(err error) {
+	w.T.Helper()
+	if err != nil && !errors.Is(err, device.ErrSuperseded) {
+		w.T.Fatal(err)
+	}
+}

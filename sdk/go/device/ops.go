@@ -2,9 +2,11 @@ package device
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"errors"
+	"slices"
 
 	tandem "github.com/jespern/tandem/sdk/go"
 )
@@ -147,10 +149,10 @@ func (d *Device) setOp(ctx context.Context, cid, rec []byte, field string, b []b
 	if r := h.Body.Role(d.u.UID); r != "owner" && r != "writer" {
 		return ErrReadOnly
 	}
-	k := d.key(cid, ep)
-	if k == nil {
-		return errors.New("device: no key for the current epoch")
+	if string(rec) == string(tandem.NamedID("_meta")) && h.Body.Role(d.u.UID) != "owner" {
+		return ErrReadOnly // only the owner writes _meta (§8.3)
 	}
+	k := d.key(cid, ep) // nil while waiting for this epoch's grant: the edit is queued
 	if c.recs[string(ep)] == nil {
 		c.recs[string(ep)] = map[string]*tandem.Record{}
 	}
@@ -161,7 +163,10 @@ func (d *Device) setOp(ctx context.Context, cid, rec []byte, field string, b []b
 	}
 	ctxv, base, ok := r.Vectors(op, field, element, string(ep), h.Body.KeyN)
 	if !ok {
-		return errors.New("device: the field needs more than 1,024 vector entries (§9.2)")
+		// Write with what fits (§9.2): the write then doesn't replace
+		// everything, and the app is told the field can't be settled.
+		ctxv, base = fit(ctxv), fit(base)
+		c.unsettled[string(rec)+"\x00"+field] = true
 	}
 	w := &tandem.Write{Scope: cid, Record: rec, Field: field, Op: op, Dot: d.tick(), Ref: h.ID, Context: ctxv, Base: base}
 	w.Value, w.Element = value, element
@@ -177,8 +182,13 @@ func (d *Device) setOp(ctx context.Context, cid, rec []byte, field string, b []b
 	if d.OnWrite != nil {
 		d.OnWrite(cid, w)
 	}
-	// Offline edits work (§1.1): what can't be published now is queued and
-	// published by the next sync.
+	// Offline edits work (§1.1), and so do edits made while waiting for a
+	// new epoch's key: what can't be published now is queued and published
+	// by a later sync.
+	if k == nil {
+		c.dirty[dirtyKey(ep, rec)] = true
+		return d.save()
+	}
 	if err := d.publishRecord(ctx, c, ep, k, rec); err != nil {
 		c.dirty[dirtyKey(ep, rec)] = true
 		return d.save()
@@ -186,16 +196,76 @@ func (d *Device) setOp(ctx context.Context, cid, rec []byte, field string, b []b
 	return nil
 }
 
+// fit keeps at most MaxVector entries of a vector: the most recent dots,
+// which are the ones honest devices made. The draft doesn't say which;
+// this is the reference SDK's choice (ASSUMPTIONS.md).
+func fit(v tandem.VV) tandem.VV {
+	if len(v) <= tandem.MaxVector {
+		return v
+	}
+	s := slices.Clone(v)
+	slices.SortFunc(s, func(a, b tandem.Dot) int {
+		if a.Millis != b.Millis {
+			return cmp.Compare(b.Millis, a.Millis)
+		}
+		if a.Counter != b.Counter {
+			return cmp.Compare(b.Counter, a.Counter)
+		}
+		return bytes.Compare(a.Device[:], b.Device[:])
+	})
+	return tandem.Join(s[:tandem.MaxVector])
+}
+
+// Unsettled lists the record/field pairs this device couldn't settle
+// because the vectors needed more than 1,024 entries (§9.2).
+func (d *Device) Unsettled(cid []byte) []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	c, ok := d.cols[string(cid)]
+	if !ok {
+		return nil
+	}
+	var out []string
+	for k := range c.unsettled {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
+
 func dirtyKey(epoch, rec []byte) string { return string(epoch) + string(rec) }
 
 // flush publishes the records queued while the hub was unreachable.
 func (d *Device) flush(ctx context.Context) error {
 	for _, c := range d.cols {
+		if c.roster == nil {
+			continue
+		}
+		h := c.roster.Head()
+		cur := c.roster.EpochOf(h.ID)
+		role := ""
+		if h.Body != nil {
+			role = h.Body.Role(d.u.UID)
+		}
 		for key := range c.dirty {
 			ep, rec := []byte(key[:len(key)-16]), []byte(key[len(key)-16:])
+			if string(ep) != string(cur) {
+				// Never published, and its epoch is over: not into the old
+				// channel (a removed member could read it). A writer signs it
+				// again (resign); for a removed one it's unsent work (§11.6).
+				delete(c.dirty, key)
+				if role != "owner" && role != "writer" {
+					for id, o := range c.own {
+						if string(o.Epoch) == string(ep) && string(o.W.Record) == string(rec) {
+							c.unshared[id] = true
+						}
+					}
+				}
+				continue
+			}
 			k := d.key(c.id, ep)
 			if k == nil {
-				continue
+				continue // waiting for this epoch's key: it goes out when the grant arrives
 			}
 			if err := d.publishRecord(ctx, c, ep, k, rec); err != nil {
 				return err
@@ -224,6 +294,38 @@ func (d *Device) publishRecord(ctx context.Context, c *col, epoch, k, rec []byte
 		return err
 	}
 	return d.append(ctx, k, tag, p)
+}
+
+// sameEpoch signs and publishes a same-epoch statement with edited members,
+// with the head check between signing and publishing.
+func (d *Device) sameEpoch(ctx context.Context, cid []byte, edit func([]tandem.Member) []tandem.Member) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.sync(ctx); err != nil {
+		return err
+	}
+	c, h, ep, err := d.ownerCheck(cid)
+	if err != nil {
+		return err
+	}
+	st := statementFrom(h.Body, edit(membersOf(h.Body)))
+	st.N++
+	w, err := tandem.NextStatement(d.u, cid, h.ID, st, d.tick())
+	if err != nil {
+		return err
+	}
+	id, _ := w.ID()
+	if err := d.sync(ctx); err != nil {
+		return err
+	}
+	if !bytes.Equal(c.roster.Head().ID, h.ID) || d.membership(cid).flight != nil {
+		return ErrSuperseded
+	}
+	d.addStatement(c, w, ep)
+	if err := d.save(); err != nil {
+		return err
+	}
+	return d.publishRoster(ctx, c, ep, d.key(cid, ep), id)
 }
 
 // AddMember admits a user with a same-epoch statement and sends them the

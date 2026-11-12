@@ -269,7 +269,7 @@ func TestCO011(t *testing.T) {
 	w := kitchen(t)
 	w.Offline("A.phone") // sleeps before its edit is published
 	w.must(w.AddsAt("A.phone", groceries, "cheese", "l9"))
-	w.must(w.Launches("A.phone")) // iOS killed it while it slept
+	w.mustLaunch(w.Launches("A.phone")) // iOS killed it while it slept
 	for i := 0; i < 20; i++ {
 		d := []string{"J.phone", "J.mac"}[i%2]
 		w.must(w.Sets(d, groceries, []string{"milk", "eggs", "coffee", "apples"}[i%4], "notes", fmt.Sprint("change ", i)))
@@ -913,7 +913,7 @@ func (f fam) run(t *testing.T, r *rand.Rand) {
 			case x < 13 && f.sched == "chaos":
 				w.LosesReplies(d, false)
 				w.Online(d)
-				w.must(w.Launches(d))
+				w.mustLaunch(w.Launches(d))
 			default:
 				w.Syncs(d)
 			}
@@ -927,7 +927,7 @@ func (f fam) run(t *testing.T, r *rand.Rand) {
 			point := points[r.IntN(len(points))]
 			died, err := w.Crashes(owner, point, func() error { return w.Removes(owner, coll, victim) })
 			if died {
-				w.must(w.Launches(owner))
+				w.mustLaunch(w.Launches(owner))
 			} else if err != nil {
 				t.Fatalf("removing %s: %v", victim, err)
 			}
@@ -993,9 +993,6 @@ func TestCOF05(t *testing.T) {
 }
 
 func TestCOF06(t *testing.T) {
-	if loseReplies {
-		t.Skip(lostReplyBug)
-	}
 	seeds(t, 0xc0f6, fam{players: [2]int{2, 10}, devs: 2, ops: [2]int{20, 120}, mix: "list", sched: "flap"}.run)
 }
 
@@ -1014,9 +1011,6 @@ func TestCOF08(t *testing.T) {
 }
 
 func TestCOF09(t *testing.T) {
-	if loseReplies {
-		t.Skip(lostReplyBug)
-	}
 	seeds(t, 0xc0f9, func(t *testing.T, r *rand.Rand) {
 		mix := []string{"list", "reorder", "tree", "hot"}[r.IntN(4)]
 		fam{players: [2]int{1, 10}, devs: 3, ops: [2]int{20, 120}, mix: mix, sched: "chaos", removal: true}.run(t, r)

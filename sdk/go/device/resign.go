@@ -84,7 +84,19 @@ func (d *Device) resign(ctx context.Context, c *col) error {
 		return nil // the new epoch's inventory isn't here yet
 	}
 	var touched [][]byte
+	// This device's writes, and the user's writes from its other devices:
+	// any device of the user signs a late write again, to the same bytes
+	// (§11.6), so one gone device doesn't lose them.
+	cands := map[string]heldWrite{}
+	for id, h := range c.all {
+		if bytes.Equal(h.W.Author, d.u.UID) {
+			cands[id] = h
+		}
+	}
 	for id, h := range c.own {
+		cands[id] = h
+	}
+	for id, h := range cands {
 		src := c.roster.EpochOf(h.W.Ref)
 		if c.resigned[id] || src == nil || bytes.Equal(src, cur) {
 			continue
@@ -101,14 +113,28 @@ func (d *Device) resign(ctx context.Context, c *col) error {
 		if err != nil {
 			continue
 		}
+		// Every write this device has seen of the record counts, kept or
+		// since superseded: an honest later write that a forged one buried
+		// still shows the old write was replaced (RC-027). Fable's check
+		// applies to claims about this device; another device's write gets
+		// no such test.
 		genuine := false
-		for _, recs := range []map[string]*tandem.Record{c.recs[string(cur)], c.recs[string(src)]} {
-			if r, ok := recs[string(h.W.Record)]; ok {
-				for _, w := range r.Kept {
-					if tandem.Supersedes(w, x) && !d.forged(w.W) {
-						genuine = true
-					}
-				}
+		for _, o := range c.all {
+			if !bytes.Equal(o.W.Record, h.W.Record) {
+				continue
+			}
+			oe, err := tandem.NewEntry(o.W, c.roster.EpochOf(o.W.Ref), d.epochN(c, c.roster.EpochOf(o.W.Ref)))
+			if err != nil || !tandem.Supersedes(oe, x) {
+				continue
+			}
+			// Credible: a write whose claims about this device are within what
+			// it issued; or this device's own later write, which certainly
+			// saw it, even if it copied a forged claim from someone else's
+			// context (RC-027).
+			ownLater := o.W.Dot.Device == d.id && (o.W.Dot.Millis > h.W.Dot.Millis ||
+				o.W.Dot.Millis == h.W.Dot.Millis && o.W.Dot.Counter > h.W.Dot.Counter)
+			if h.W.Dot.Device != d.id || ownLater || !d.forged(o.W) {
+				genuine = true
 			}
 		}
 		c.resigned[id] = true
@@ -147,10 +173,14 @@ func (d *Device) resign(ctx context.Context, c *col) error {
 			return err
 		}
 	}
+	// Queued, not published here: the flush at the end of the sync sends
+	// it, and retries until it lands. A publish that failed here would
+	// otherwise be lost, since the write is already marked as decided.
 	for _, rec := range touched {
-		if err := d.publishRecord(ctx, c, cur, k, rec); err != nil {
-			return err
-		}
+		c.dirty[dirtyKey(cur, rec)] = true
+	}
+	if len(touched) > 0 {
+		return d.save()
 	}
 	return nil
 }
@@ -192,10 +222,11 @@ func (d *Device) carry(ctx context.Context, c *col) error {
 			touched = append(touched, []byte(rec))
 		}
 	}
+	// Queued, not published here: the flush at the end of the sync sends
+	// it, and retries until it lands. A publish that failed here would
+	// otherwise be lost, since the write is already marked as decided.
 	for _, rec := range touched {
-		if err := d.publishRecord(ctx, c, cur, k, rec); err != nil {
-			c.dirty[dirtyKey(cur, rec)] = true
-		}
+		c.dirty[dirtyKey(cur, rec)] = true
 	}
 	if len(touched) > 0 {
 		return d.save()

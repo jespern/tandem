@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -64,6 +65,36 @@ func (d *Device) Remove(ctx context.Context, cid, uid []byte) error {
 
 // SetRole changes a member's role; lowering one starts a new epoch.
 func (d *Device) SetRole(ctx context.Context, cid, uid []byte, role string) error {
+	d.mu.Lock()
+	_, h, _, err := d.current(cid)
+	old := ""
+	if err == nil && h.Body != nil {
+		old = h.Body.Role(uid)
+	}
+	d.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	ranks := map[string]int{"reader": 1, "writer": 2}
+	switch {
+	case old == "" || old == "owner":
+		return ErrNotMember
+	case ranks[role] == 0:
+		return fmt.Errorf("device: no role %q", role)
+	case role == old:
+		return nil
+	case ranks[role] > ranks[old]:
+		// A promotion only increases access: a same-epoch statement, no new
+		// key (§7.2, §8.2).
+		return d.sameEpoch(ctx, cid, func(ms []tandem.Member) []tandem.Member {
+			for i := range ms {
+				if ms[i].UID == tandem.B64u(uid) {
+					ms[i].Role = role
+				}
+			}
+			return ms
+		})
+	}
 	return d.change(ctx, cid, func(ms []tandem.Member) []tandem.Member {
 		for i := range ms {
 			if ms[i].UID == tandem.B64u(uid) {
@@ -414,7 +445,10 @@ func (d *Device) Resume(ctx context.Context) error {
 			if err := d.saveJournal(); err != nil {
 				return err
 			}
-			return d.save()
+			if err := d.save(); err != nil {
+				return err
+			}
+			return ErrSuperseded // the user is told the change didn't happen
 		}
 	default:
 		// No note of its own, another device's note, or a new head: the
@@ -426,7 +460,10 @@ func (d *Device) Resume(ctx context.Context) error {
 		if err := d.saveJournal(); err != nil {
 			return err
 		}
-		return d.save()
+		if err := d.save(); err != nil {
+			return err
+		}
+		return ErrSuperseded // the user is told the change didn't happen
 	}
 	return d.run(ctx)
 }
@@ -444,6 +481,9 @@ func (d *Device) destroyChannel(ctx context.Context, tag string) error {
 	}
 	return d.hub.Destroy(ctx, ids)
 }
+
+// ErrNotMember means a role change names someone the roster doesn't list.
+var ErrNotMember = errors.New("device: not a member of this collection")
 
 // ErrSuperseded means another device discarded this device's change, or
 // made one of its own, before it was announced; nothing was changed.

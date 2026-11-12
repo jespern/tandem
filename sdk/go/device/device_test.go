@@ -271,7 +271,7 @@ func TestCrashThenResume(t *testing.T) {
 			w := newWorld(t)
 			w.crashAt(p)
 			w.reopen()
-			mustOK(t, w.j1.Resume(ctx))
+			resumed(t, w.j1)
 			if p == "1:chosen" { // nothing was kept: the user asks again
 				mustOK(t, w.j1.Remove(ctx, w.cid, w.aimee.UID()))
 			}
@@ -309,7 +309,7 @@ func TestCrashThenSecondDevice(t *testing.T) {
 			}
 			// The first device comes back and finds out what happened.
 			w.reopen()
-			mustOK(t, w.j1.Resume(ctx))
+			resumed(t, w.j1)
 			if _, listed := w.j1.Members(w.cid)["Aimee"]; listed {
 				mustOK(t, w.j1.Remove(ctx, w.cid, w.aimee.UID()))
 			}
@@ -338,7 +338,7 @@ func TestStaleNoteIsLeftAlone(t *testing.T) {
 	}
 	mustOK(t, w.j2.Finish(ctx, w.cid, shown))
 	w.reopen()
-	mustOK(t, w.j1.Resume(ctx))
+	resumed(t, w.j1)
 	w.checkRemoved()
 }
 
@@ -372,7 +372,7 @@ func TestLostAnswerToTheNote(t *testing.T) {
 		t.Fatal("not at the intended point")
 	}
 	w.reopen()
-	mustOK(t, w.j1.Resume(ctx))
+	resumed(t, w.j1)
 	w.checkRemoved()
 }
 
@@ -470,5 +470,14 @@ func TestUnprovableClaimIsReported(t *testing.T) {
 	got := w.bo.Unshared(w.cid)
 	if len(got) != 1 || string(got[0].Value) != "late bread" {
 		t.Fatalf("unshared: %d writes, want Bo's late write", len(got))
+	}
+}
+
+// resumed restarts a journalled change; "nothing changed" is an answer, not
+// a failure: another device discarded or overtook it, and the user is told.
+func resumed(t *testing.T, d *Device) {
+	t.Helper()
+	if err := d.Resume(ctx); err != nil && !errors.Is(err, ErrSuperseded) {
+		t.Fatal(err)
 	}
 }
