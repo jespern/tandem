@@ -30,6 +30,9 @@ type savedCol struct {
 	Held      []savedWrite      `json:"held"`
 	Invs      map[string]string `json:"invs"`
 	Replaced  []string          `json:"replaced"`
+	Own       []savedWrite      `json:"own"`
+	Resigned  []string          `json:"resigned"`
+	Unshared  []string          `json:"unshared"`
 }
 
 type saved struct {
@@ -92,6 +95,15 @@ func (d *Device) save() error {
 		}
 		for id := range c.replaced {
 			sc.Replaced = append(sc.Replaced, tandem.B64u([]byte(id)))
+		}
+		for _, h := range c.own {
+			sc.Own = append(sc.Own, encodeWrite(h.W, h.Epoch))
+		}
+		for id := range c.resigned {
+			sc.Resigned = append(sc.Resigned, tandem.B64u([]byte(id)))
+		}
+		for id := range c.unshared {
+			sc.Unshared = append(sc.Unshared, tandem.B64u([]byte(id)))
 		}
 		s.Cols = append(s.Cols, sc)
 	}
@@ -202,6 +214,22 @@ func Open(ctx context.Context, dir string, hub store.Store) (*Device, error) {
 		for _, sw := range sc.Data {
 			if w, ep, err := decodeWrite(sw); err == nil && c.roster != nil {
 				d.mergeData(c, ep, w)
+			}
+		}
+		for _, sw := range sc.Own {
+			if w, ep, err := decodeWrite(sw); err == nil {
+				id, _ := w.ID()
+				c.own[string(id)] = heldWrite{w, ep}
+			}
+		}
+		for _, x := range sc.Resigned {
+			if b, err := tandem.ParseB64u(x); err == nil {
+				c.resigned[string(b)] = true
+			}
+		}
+		for _, x := range sc.Unshared {
+			if b, err := tandem.ParseB64u(x); err == nil {
+				c.unshared[string(b)] = true
 			}
 		}
 		for _, sw := range sc.Held {

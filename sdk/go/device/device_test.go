@@ -386,3 +386,89 @@ func TestNullFlightIsNoChange(t *testing.T) {
 	mustOK(t, w.j1.Remove(ctx, w.cid, w.aimee.UID()))
 	w.checkRemoved()
 }
+
+// craft signs a write with chosen vectors as d's user, under the head
+// statement, merges and publishes it: a modified client.
+func craft(t *testing.T, d *Device, cid, rec []byte, field, value string, cv, base tandem.VV) *tandem.Write {
+	t.Helper()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	c, h, ep, err := d.current(cid)
+	mustOK(t, err)
+	w := &tandem.Write{Scope: cid, Record: rec, Field: field, Op: tandem.OpAssign, Value: []byte(value),
+		Dot: d.tick(), Ref: h.ID, Context: cv, Base: base}
+	mustOK(t, w.Sign(d.u))
+	d.mergeData(c, ep, w)
+	mustOK(t, d.publishRecord(ctx, c, ep, d.key(cid, ep), rec))
+	return w
+}
+
+// A write made in the old epoch by a device that hadn't seen the key change
+// is signed again into the new one (§11.6).
+func TestLateWriteSignedAgain(t *testing.T) {
+	w := newWorld(t)
+	mustOK(t, w.j1.Remove(ctx, w.cid, w.aimee.UID()))
+	// Bo hasn't synced: his write goes to the old epoch.
+	mustOK(t, w.bo.Set(ctx, w.cid, w.rec, "title", "late bread"))
+	w.syncAll() // Bo learns of the change and signs his write again
+	w.syncAll()
+	for _, d := range []*Device{w.j1, w.j2, w.bo} {
+		if v, _ := d.Value(w.cid, w.rec, "title"); v != "late bread" {
+			t.Fatalf("%s: title %q, want the late write", d, v)
+		}
+	}
+	if v, _ := w.aimee.Value(w.cid, w.rec, "title"); v == "late bread" {
+		t.Fatal("the removed member reads the signed-again write")
+	}
+}
+
+// G-26: a member's forged context claims Bo's future and buries his write.
+// After her removal Bo's device sees the claim is beyond anything it issued,
+// and signs its write again, which shows once more (Fable's check).
+func TestForgedClaimDoesNotOutliveRemoval(t *testing.T) {
+	w := newWorld(t)
+	mustOK(t, w.bo.Set(ctx, w.cid, w.rec, "title", "bread"))
+	w.syncAll()
+	// Her context covers everything she has seen, plus a claim on Bo's future.
+	c := w.aimee.cols[string(w.cid)]
+	ep := w.aimee.Epoch(w.cid)
+	seen, _, _ := c.recs[string(ep)][string(w.rec)].Vectors(tandem.OpAssign, "title", nil, string(ep), 0)
+	future := tandem.Join(seen, tandem.VV{{Device: w.bo.id, Millis: 1 << 47}})
+	craft(t, w.aimee, w.cid, w.rec, "title", "junk", future, tandem.VV{})
+	w.syncAll()
+	if v, _ := w.j1.Value(w.cid, w.rec, "title"); v != "junk" {
+		t.Fatalf("setup: title %q; the forged write should win inside the epoch (§1.2)", v)
+	}
+	mustOK(t, w.j1.Remove(ctx, w.cid, w.aimee.UID()))
+	w.syncAll()
+	w.syncAll()
+	for _, d := range []*Device{w.j1, w.bo} {
+		if v, _ := d.Value(w.cid, w.rec, "title"); v != "bread" {
+			t.Fatalf("%s: title %q after removal, want Bo's write back", d, v)
+		}
+	}
+}
+
+// Sol's safety net: a new-epoch write claims, plausibly, to have seen Bo's
+// late write, which never reached it. Bo's device can't tell; it keeps the
+// write and reports it as possibly unshared.
+func TestUnprovableClaimIsReported(t *testing.T) {
+	w := newWorld(t)
+	mustOK(t, w.j1.Remove(ctx, w.cid, w.aimee.UID()))
+	mustOK(t, w.bo.Set(ctx, w.cid, w.rec, "title", "late bread")) // old epoch, unseen
+	var late *tandem.Write
+	for _, h := range w.bo.cols[string(w.cid)].own {
+		if string(h.W.Value) == "late bread" {
+			late = h.W
+		}
+	}
+	// Jesper's modified client claims Bo's dot in the new epoch's base.
+	mustOK(t, w.j1.Sync(ctx))
+	claim := tandem.Join(late.Base, late.Context, tandem.VV{late.Dot})
+	craft(t, w.j1, w.cid, w.rec, "title", "owner's", tandem.VV{}, claim)
+	w.syncAll()
+	got := w.bo.Unshared(w.cid)
+	if len(got) != 1 || string(got[0].Value) != "late bread" {
+		t.Fatalf("unshared: %d writes, want Bo's late write", len(got))
+	}
+}

@@ -157,6 +157,8 @@ func (d *Device) set(ctx context.Context, cid, rec []byte, field string, value [
 	if err := w.Sign(d.u); err != nil {
 		return err
 	}
+	id, _ := w.ID()
+	c.own[string(id)] = heldWrite{w, ep}
 	d.mergeData(c, ep, w)
 	if err := d.save(); err != nil {
 		return err

@@ -68,8 +68,10 @@ type col struct {
 	frags    map[string]map[int][]byte // epoch → part → bytes
 	parts    map[string]int
 	held     []heldWrite
-	replaced map[string]bool // write IDs this device has seen superseded
-	resigned map[string]bool // old write IDs this device has signed again
+	replaced map[string]bool      // write IDs this device has seen superseded
+	resigned map[string]bool      // own old writes already decided: signed again, carried, or left
+	own      map[string]heldWrite // writes this device signed, by write ID, with their epoch
+	unshared map[string]bool      // own writes a key change may have left behind (Unshared)
 }
 
 type heldWrite struct {
@@ -392,6 +394,9 @@ func (d *Device) sync(ctx context.Context) error {
 	}
 	for _, c := range d.cols {
 		d.settle(ctx, c)
+		if err := d.resign(ctx, c); err != nil {
+			return err
+		}
 	}
 	return d.save()
 }
@@ -443,7 +448,7 @@ func (d *Device) colFor(cid []byte) *col {
 	if !ok {
 		c = &col{id: cid, stmts: map[string]*tandem.Write{}, recs: map[string]map[string]*tandem.Record{},
 			invs: map[string]tandem.Inventory{}, frags: map[string]map[int][]byte{}, parts: map[string]int{},
-			replaced: map[string]bool{}, resigned: map[string]bool{}}
+			replaced: map[string]bool{}, resigned: map[string]bool{}, own: map[string]heldWrite{}, unshared: map[string]bool{}}
 		d.cols[string(cid)] = c
 	}
 	return c

@@ -117,10 +117,12 @@ Fable and Sol agree on findings 1, 3, 5 and most of 6, and on the gaps being rea
 |---|---|---|---|
 | Deletes | supersede every write of the record they include, so a deleted record shrinks to one write (§12.3) | a register of their own; other fields' writes stay | Fable's (Go, Swift, Lean proved) |
 | Vectors in JSON | must arrive sorted | any order, sorted for signing | Fable's |
-| G-26 poisoned base | at signing again, a vector entry for one's own device ID above anything it issued is forged; sign again anyway | keep such writes as possibly unshared work and show them to the app | neither yet |
-| G-40 split records | domination by a set of messages, with a hash tie-break | rejects that: `{a,b}`, `{b,c}`, `{a,c}` each dominated by the other two; publish only when the union doesn't dominate, keep pairwise GC | neither yet |
-| G-09 refused requests | new `declined` state | no new state; stop waiting, keep `requested` | neither yet |
-| Home field encodings | not raised | specify every protocol home field; `flight` schema and `null` for none, agreed with `conformance/` | Go accepts both empty and `null` |
+| G-26 poisoned base | at signing again, a vector entry for one's own device ID above anything it issued is forged; sign again anyway | keep such writes as possibly unshared work and show them to the app | **both** (`device/resign.go`, `Unshared`) |
+| G-40 split records | domination by a set of messages, with a hash tie-break | rejects that: `{a,b}`, `{b,c}`, `{a,c}` each dominated by the other two; publish only when the union doesn't dominate, keep pairwise GC | **Sol's**; for when healing and splitting are built |
+| G-09 refused requests | new `declined` state | no new state; stop waiting, keep `requested` | **Sol's**; for the invite flow |
+| Home field encodings | not raised | specify every protocol home field; `flight` schema and `null` for none, agreed with `conformance/` | **Sol's**; proposed schema in `review/home-encoding.md`; Go reads empty and `null` |
+
+**Decided by Jesper, 2026-11-12: all of the "my recommendation" column** (deletes and sorted vectors as Fable; G-26 both; G-40, G-09 and home encodings as Sol).
 
 ## 3. What this means for our work
 
