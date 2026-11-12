@@ -422,6 +422,7 @@ func (w *World) Pending(devName, coll string) *device.Note {
 
 // Finishes: `X.dev finishes` the pending change it is shown.
 func (w *World) Finishes(devName, coll string) error {
+	w.Syncs(devName) // opening sharing syncs first
 	n := w.Pending(devName, coll)
 	if n == nil {
 		return errors.New("harness: no pending change shown")
@@ -431,6 +432,7 @@ func (w *World) Finishes(devName, coll string) error {
 
 // Discards: `X.dev discards` the pending change it is shown.
 func (w *World) Discards(devName, coll string) error {
+	w.Syncs(devName) // opening sharing syncs first
 	n := w.Pending(devName, coll)
 	if n == nil {
 		return errors.New("harness: no pending change shown")
@@ -475,6 +477,16 @@ func (w *World) Keys(user, coll string) map[string][]byte {
 				continue
 			}
 			for _, wr := range rs.Writes {
+				if wr.Field == "flight" && len(wr.Value) > 0 { // a pending change's key (owner devices)
+					var n device.Note
+					if json.Unmarshal(wr.Value, &n) == nil && n.Stmt != "" {
+						ep, err1 := tandem.ParseB64u(n.Stmt)
+						k, err2 := tandem.ParseB64u(n.K)
+						if err1 == nil && err2 == nil {
+							out[string(ep)] = k
+						}
+					}
+				}
 				if wr.Field != "keys" || wr.Op != tandem.OpAdd {
 					continue
 				}
@@ -625,6 +637,19 @@ func (w *World) Launches(devName string) error {
 	return err
 }
 
+// Opens starts a device's app from its stored state without carrying on
+// a key change it was making (the moment before Resume).
+func (w *World) Opens(devName string) {
+	w.T.Helper()
+	x := w.devs[devName]
+	x.g.Store = w.Hub.Client()
+	x.g.down = false
+	d, err := device.Open(ctx, x.dir, x.g)
+	w.must(err)
+	x.d = d
+	w.hook(x)
+}
+
 // Down stops a device without a word, as a crash, a flat battery or a
 // lost phone does, until it Launches.
 func (w *World) Down(devName string) { w.Dev(devName); w.devs[devName].g.down = true }
@@ -741,9 +766,11 @@ func (w *World) record(coll string, wr *tandem.Write) {
 }
 
 // Head is the head statement's ID as a device holds it: the announced
-// owner-signed statement with the highest n (statements others signed
-// don't count).
+// owner-signed statement with the highest n whose members are the ones
+// the device follows (statements others signed, and invalid ones, don't
+// count).
 func (w *World) Head(devName, coll string) []byte {
+	following := w.Dev(devName).Members(w.cid(coll))
 	genesis, stmts := w.Dev(devName).Roster(w.cid(coll))
 	var owner []byte
 	for _, s := range stmts {
@@ -755,6 +782,13 @@ func (w *World) Head(devName, coll string) []byte {
 	for i := range stmts {
 		s := &stmts[i]
 		if !s.Announced || !bytes.Equal(s.Signer, owner) {
+			continue
+		}
+		ms := map[string]string{}
+		for _, m := range s.Body.Members {
+			ms[m.Name] = m.Role
+		}
+		if fmt.Sprint(ms) != fmt.Sprint(following) {
 			continue
 		}
 		if best == nil || s.Body.N > best.Body.N {
@@ -847,6 +881,60 @@ func (w *World) SignsStatement(devName, coll string, edit func(*tandem.Statement
 	_, err = w.Hub.Client().Append(ctx, tag, env)
 	w.must(err)
 	return wr
+}
+
+// PublishFragment: a member posts an inventory fragment of its own making
+// into an epoch's channel (§10.5).
+func (w *World) PublishFragment(devName, coll string, epoch []byte, part, parts int, inv tandem.Inventory) {
+	w.T.Helper()
+	user, _, _ := strings.Cut(devName, ".")
+	k := w.Keys(user, coll)[string(epoch)]
+	if k == nil {
+		w.T.Fatalf("%s holds no key for that epoch", user)
+	}
+	b, err := inv.Bytes()
+	w.must(err)
+	p, err := json.Marshal(map[string]any{"inventory": map[string]any{
+		"epoch": tandem.B64u(epoch), "part": part, "parts": parts, "bytes": tandem.B64u(b)}})
+	w.must(err)
+	tag := tandem.CollectionTag(k, epoch)
+	env, err := tandem.Seal(k, tandem.KindRecord, tag, p, nil)
+	w.must(err)
+	_, err = w.Hub.Client().Append(ctx, tag, env)
+	w.must(err)
+}
+
+// Statement is a statement a device holds, by ID.
+func (w *World) Statement(devName, coll string, id []byte) *device.StatementView {
+	_, stmts := w.Dev(devName).Roster(w.cid(coll))
+	for i := range stmts {
+		if bytes.Equal(stmts[i].ID, id) {
+			return &stmts[i]
+		}
+	}
+	return nil
+}
+
+// RosterMessages counts the messages in an epoch's channel that hold
+// _roster.
+func (w *World) RosterMessages(user, coll string, epoch []byte) int {
+	k := w.Keys(user, coll)[string(epoch)]
+	if k == nil {
+		w.T.Fatalf("%s holds no key for that epoch", user)
+	}
+	tag := tandem.CollectionTag(k, epoch)
+	n := 0
+	for _, m := range w.Hub.Messages() {
+		if m.Tag != tag {
+			continue
+		}
+		if _, pt, err := tandem.Open(k, tag, m.Envelope); err == nil {
+			if rs, _, err := tandem.ParseKind1(pt, w.cid(coll)); err == nil && rs != nil && bytes.Equal(rs.Record, tandem.RosterID) {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // Unshared is a device's own writes a key change may have left behind.
