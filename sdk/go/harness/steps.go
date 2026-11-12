@@ -404,7 +404,7 @@ func (w *World) Dead(devName, coll string) bool { return w.Dev(devName).Dead(w.c
 // MakesRole: `X.dev makes Y a <role>`.
 func (w *World) MakesRole(ownerDev, coll, user, role string) error {
 	err := w.Dev(ownerDev).SetRole(ctx, w.cid(coll), w.UID(user), role)
-	if err == nil {
+	if _, member := w.members[coll][user]; member && err == nil {
 		w.members[coll][user] = role
 	}
 	return err
@@ -740,14 +740,21 @@ func (w *World) record(coll string, wr *tandem.Write) {
 	w.writes[cid][string(id)] = wr
 }
 
-// Head is the head statement's ID as a device holds it: the statement
-// with the highest n on the chain it follows.
+// Head is the head statement's ID as a device holds it: the announced
+// owner-signed statement with the highest n (statements others signed
+// don't count).
 func (w *World) Head(devName, coll string) []byte {
-	_, stmts := w.Dev(devName).Roster(w.cid(coll))
+	genesis, stmts := w.Dev(devName).Roster(w.cid(coll))
+	var owner []byte
+	for _, s := range stmts {
+		if bytes.Equal(s.ID, genesis) {
+			owner = s.Signer
+		}
+	}
 	var best *device.StatementView
 	for i := range stmts {
 		s := &stmts[i]
-		if !s.Announced {
+		if !s.Announced || !bytes.Equal(s.Signer, owner) {
 			continue
 		}
 		if best == nil || s.Body.N > best.Body.N {
@@ -873,4 +880,108 @@ func familyRuns(def int) (runs, first int) {
 		first, runs = s, 1
 	}
 	return runs, first
+}
+
+// ---- check world (permissions.md, "World checks") ----
+
+// EpochLabel names a device's current epoch of a collection by its key
+// counter (E0 at the genesis), "-" if it follows none.
+func (w *World) EpochLabel(devName, coll string) string {
+	ep := w.Epoch(devName, coll)
+	if ep == nil {
+		return "-"
+	}
+	_, stmts := w.Dev(devName).Roster(w.cid(coll))
+	for _, s := range stmts {
+		if bytes.Equal(s.ID, ep) {
+			return fmt.Sprint("E", s.Body.KeyN)
+		}
+	}
+	return "?"
+}
+
+// View is the world as `check world` records it, for every collection
+// and every device: the role its user has in the head it follows, its
+// epoch, whether it treats the collection as dead; and for every user
+// whether the key of the owner's current epoch is in their reach (home or
+// inbox).
+func (w *World) View() map[string]string {
+	w.T.Helper()
+	out := map[string]string{}
+	for _, coll := range sortedKeys(w.colls) {
+		cid := w.cid(coll)
+		var current []byte // the owner's current epoch, from a device of it that is up
+		for _, n := range w.userDevs(w.owner[coll]) {
+			if current == nil || !w.devs[n].g.down {
+				current = w.Epoch(n, coll)
+			}
+			if !w.devs[n].g.down {
+				break
+			}
+		}
+		users := map[string]bool{}
+		for _, n := range w.order {
+			x := w.devs[n]
+			users[x.user] = true
+			role := w.Dev(n).Members(cid)[x.user]
+			if role == "" {
+				role = "-"
+			}
+			out[coll+"/"+n+"/role"] = role
+			out[coll+"/"+n+"/epoch"] = w.EpochLabel(n, coll)
+			out[coll+"/"+n+"/dead"] = fmt.Sprint(x.d.Dead(cid))
+		}
+		for u := range users {
+			out[coll+"/"+u+"/key"] = fmt.Sprint(current != nil && w.Keys(u, coll)[string(current)] != nil)
+		}
+	}
+	return out
+}
+
+// WantDelta checks INV-BYSTANDER: after differs from before exactly by
+// delta (a key mapped to its new value). Keys absent from before (new
+// devices or collections) must be in delta.
+func (w *World) WantDelta(before, after, delta map[string]string) {
+	w.T.Helper()
+	keys := map[string]bool{}
+	for k := range before {
+		keys[k] = true
+	}
+	for k := range after {
+		keys[k] = true
+	}
+	var bad []string
+	for _, k := range sortedKeys(keys) {
+		want, ok := delta[k]
+		if !ok {
+			want = before[k]
+		}
+		if after[k] != want {
+			bad = append(bad, fmt.Sprintf("%s: %q, want %q", k, after[k], want))
+		}
+	}
+	if len(bad) > 0 {
+		w.T.Fatalf("the world changed beyond the delta:\n  %s", strings.Join(bad, "\n  "))
+	}
+}
+
+// Delta builds a delta for one collection: "dev/field" or "user/key" →
+// value, for each listed device or user.
+func Delta(coll string, kv ...string) map[string]string {
+	out := map[string]string{}
+	for i := 0; i+1 < len(kv); i += 2 {
+		out[coll+"/"+kv[i]] = kv[i+1]
+	}
+	return out
+}
+
+// Merge joins deltas.
+func Merge(ds ...map[string]string) map[string]string {
+	out := map[string]string{}
+	for _, d := range ds {
+		for k, v := range d {
+			out[k] = v
+		}
+	}
+	return out
 }
