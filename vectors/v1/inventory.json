@@ -60,14 +60,14 @@
             ]
           },
           {
+            "record": "88869ccb305b6142fa31b00844a5d68f",
+            "writes": []
+          },
+          {
             "record": "b95519dccb725901ec90e1cb2717a873",
             "writes": [
               "d9428e9b4f438d56df0583c22c66b4d746f676ea5dd5222dc4d987a42bd936d7"
             ]
-          },
-          {
-            "record": "88869ccb305b6142fa31b00844a5d68f",
-            "writes": []
           }
         ],
         "snapshot": "ae80e08470886f0bb920b7ef221e4bb1668b7ad9970179002ecfc98758bee9cc"

@@ -11,8 +11,8 @@ How Tandem is verified, what exists, and what waits. The protocol itself is in `
 | Testbed: a real JMAP + IMAP server with per-device network faults and hostile-hub tools | `testbed/` | Docker; Python standard library for `tb` | Done. 42 binding and real-time probes pass on Stalwart 1.1.0 |
 | Scenarios: 323 cases and families, with a format a harness can execute | `scenarios/` | Markdown | Drafted against an earlier design; refresh pending (`ASSUMPTIONS.md`) |
 | Reference model: the merge and roster rules, executable and proved | `proofs/` | Lean 4 + Mathlib | Project builds; theorems planned in `proofs/README.md` |
-| Reference SDK: the whole protocol, the harness driver, test vectors | `sdk/go/` | Go 1.26 | Empty module |
-| Production SDK for Liszto | Liszto's repository | Swift (CryptoKit) | Not started |
+| Reference SDK: the whole protocol, the harness driver, test vectors | `sdk/go/` | Go 1.26 | Primitives done; `vectors/v1` (14 files) generated deterministically |
+| Production SDK | `sdk/swift/` | Swift 6.4 (CryptoKit) | Primitives done; passes every vector |
 
 ## How they fit
 

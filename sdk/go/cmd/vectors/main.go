@@ -14,8 +14,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -473,7 +475,9 @@ func inventory() obj {
 		back, err := tandem.ParseInventory(b)
 		check(err == nil && len(back) == len(inv), "inventory round trip")
 		entries := []obj{}
-		for rec, ws := range inv {
+		recs := slices.Sorted(maps.Keys(inv)) // map order would make the file differ per run
+		for _, rec := range recs {
+			ws := inv[rec]
 			hs := []string{}
 			for _, x := range ws {
 				hs = append(hs, hx(x))
@@ -521,8 +525,8 @@ func signed(users []*tandem.User) []obj {
 		extra  obj
 	}
 	cases := []tc{
-		{"join request (sig)", a.Sign, tandem.JoinInput(coll, inv, a.UID, a.UKa, "Aimee"), obj{"name": "Aimee"}},
-		{"join request, name with a combining accent", a.Sign, tandem.JoinInput(coll, inv, a.UID, a.UKa, "Aimée"), obj{"name": "Aimée"}},
+		{"join request (sig)", a.Sign, tandem.JoinInput(coll, inv, a.UID, a.UKa, "Aimee"), obj{"display_name_hex": hx([]byte("Aimee"))}},
+		{"join request, name with a combining accent", a.Sign, tandem.JoinInput(coll, inv, a.UID, a.UKa, "Aime\u0301e"), obj{"display_name_hex": hx([]byte("Aime\u0301e"))}},
 		{"join request (isig, by the invite key)", vk, tandem.InviteInput(coll, inv, a.UID), obj{"invite_secret": hx(s)}},
 		{"grant", j.Sign, tandem.GrantInput(a.UID, coll, at, epoch, k), obj{"epoch_key": hx(k), "commit": hx(tandem.Commit(k))}},
 		{"key request", a.Sign, tandem.KeyRequestInput(coll, have, a.UID), obj{"note": "have is taken to be the 32-byte ID of the latest statement held; §11.4 doesn't say"}},

@@ -63,6 +63,15 @@ All three are fixed in the frozen draft, and each fix matches what we meant.
    - A device knows its own messages by `H(envelope)` and looks for an envelope on the hub before appending it again.
 3. **Device ID after a restore (§5.3, §6.3).** A new device ID whenever the secret is installed, by pairing or from the backup key.
 
+### New, from the test vectors (2026-11-12)
+
+Writing the vectors meant choosing bytes where the frozen draft is silent; `vectors/README.md` lists the seven choices. Two findings need a sentence in the draft:
+
+1. **Randomized signatures.** CryptoKit's Ed25519 adds randomness, so the same write signed twice in Swift has two signatures and one write ID. §11.6 ("the same bytes") should say "the same write ID", and §9.4's conflict should be between successors with different statement IDs, whatever their signatures.
+2. **Unnamed pairing and request payloads.** Pairing requests, challenges and replies share one channel with no `type` field, and the reply's JSON isn't given; join requests have no `type` either. The vectors cover their signed inputs only.
+
+Also open: whether named records (`_roster` included) really carry a `_name` write (§7.3), and in which scope a genesis's would be signed.
+
 ## 3. What this means for our work
 
 ### Scenarios (refresh pending)
