@@ -99,6 +99,11 @@ type Answer struct {
 	Head  string                 `json:"head"`
 	Dead  bool                   `json:"dead"`
 	State map[string]RecordState `json:"state"`
+
+	Channel  string            `json:"channel"`
+	Eligible []string          `json:"eligible"`
+	Epochs   map[string]string `json:"epochs"`
+	Held     []string          `json:"held"`
 }
 
 type RecordState struct {

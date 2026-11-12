@@ -154,3 +154,51 @@ func (d *Device) resign(ctx context.Context, c *col) error {
 	}
 	return nil
 }
+
+// carry keeps every old write the current epoch's inventory lists, whoever
+// wrote it, and re-publishes it if the new channel lacks it (§11.6, §12.2).
+// Without this, a listed write that missed the rotating device's upload is
+// lost even though other devices hold it (found by the harness family
+// TestFamilyCrashedKeyChange).
+func (d *Device) carry(ctx context.Context, c *col) error {
+	if c.roster == nil || c.roster.Dead() {
+		return nil
+	}
+	cur := c.roster.EpochOf(c.roster.Head().ID)
+	inv := c.invs[string(cur)]
+	k := d.key(c.id, cur)
+	if inv == nil || k == nil {
+		return nil
+	}
+	var touched [][]byte
+	for rec, ids := range inv {
+		for _, id := range ids {
+			if r, ok := c.recs[string(cur)][rec]; ok {
+				if _, kept := r.Kept[string(id)]; kept {
+					continue
+				}
+			}
+			if c.replacedIn(cur, id) {
+				continue
+			}
+			w := c.find(rec, id)
+			if w == nil {
+				continue
+			}
+			if v, _ := c.roster.Judge(w, cur, inv); v != tandem.Accept {
+				continue
+			}
+			d.mergeData(c, cur, w)
+			touched = append(touched, []byte(rec))
+		}
+	}
+	for _, rec := range touched {
+		if err := d.publishRecord(ctx, c, cur, k, rec); err != nil {
+			c.dirty[dirtyKey(cur, rec)] = true
+		}
+	}
+	if len(touched) > 0 {
+		return d.save()
+	}
+	return nil
+}

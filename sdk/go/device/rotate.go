@@ -104,7 +104,7 @@ func (d *Device) change(ctx context.Context, cid []byte, edit func([]tandem.Memb
 			if r, ok := c.recs[string(ep)][rec]; ok {
 				_, held = r.Kept[string(id)]
 			}
-			if !held && !c.replaced[string(id)] {
+			if !held && !c.replacedIn(ep, id) {
 				inv[rec] = append(inv[rec], id)
 			}
 		}
@@ -319,14 +319,11 @@ func (d *Device) uploadSnapshot(ctx context.Context, c *col, tag string) error {
 	return nil
 }
 
-// find looks a write up in any epoch's replica.
+// find looks up a write this device accepted, kept or since superseded: a
+// write superseded in an old epoch may be current in the next (replacedIn).
 func (c *col) find(rec string, id []byte) *tandem.Write {
-	for _, recs := range c.recs {
-		if r, ok := recs[rec]; ok {
-			if e, ok := r.Kept[string(id)]; ok {
-				return e.W
-			}
-		}
+	if h, ok := c.all[string(id)]; ok && string(h.W.Record) == rec {
+		return h.W
 	}
 	return nil
 }
@@ -358,7 +355,7 @@ func (d *Device) cleanOld(ctx context.Context, c *col, j *journal, newTag string
 		}
 		ok := true
 		for _, id := range m.Writes {
-			if listed[string(id)] && !inNew[string(id)] && !c.replaced[string(id)] {
+			if listed[string(id)] && !inNew[string(id)] && !c.replacedIn(j.StmtID, id) {
 				ok = false
 			}
 		}

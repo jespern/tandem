@@ -60,6 +60,12 @@ Jesper decided where the reviews differ. The code already follows every decision
     - Headers survive, and 100,000 messages in one folder work. Q1–Q3 can close.
     - IMAP IDLE works for every connection, but a JMAP change reaches IMAP about 58 s late.
 
+15. **Pruning across a key change (§9.3, §11.6).** Found by the scenario harness after this handover was first written:
+    - a write superseded in the old epoch only by a write the next inventory doesn't carry (for example a late write from a member being removed) is current again in the new epoch;
+    - §9.3 lets every device discard it first.
+
+    Proposed for §9.3: "A device keeps superseded writes of an epoch until the next epoch's inventory is fixed, and may then drop those it doesn't list." §11.6's "keeps every old write the new inventory lists" then holds. Details in `ASSUMPTIONS.md` ("Found by the harness").
+
 ## Still open, for Jesper
 
 - **Pairing `type` names:** Fable proposes `request`/`challenge`/`reply`, Sol `pairreq`/`pairchallenge`/`pairreply`.

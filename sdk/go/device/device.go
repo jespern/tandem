@@ -73,7 +73,8 @@ type col struct {
 	frags    map[string]map[int][]byte // epoch → part → bytes
 	parts    map[string]int
 	held     []heldWrite
-	replaced map[string]bool      // write IDs this device has seen superseded
+	replaced map[string]bool      // epoch||write ID: seen superseded in that epoch (replacedIn)
+	all      map[string]heldWrite // every data write accepted, by write ID; superseded ones too
 	resigned map[string]bool      // own old writes already decided: signed again, carried, or left
 	own      map[string]heldWrite // writes this device signed, by write ID, with their epoch
 	dirty    map[string]bool      // epoch||record not yet published (offline edits)
@@ -403,6 +404,9 @@ func (d *Device) sync(ctx context.Context) error {
 	}
 	for _, c := range d.cols {
 		d.settle(ctx, c)
+		if err := d.carry(ctx, c); err != nil {
+			return err
+		}
 		if err := d.resign(ctx, c); err != nil {
 			return err
 		}
@@ -457,7 +461,7 @@ func (d *Device) colFor(cid []byte) *col {
 	if !ok {
 		c = &col{id: cid, stmts: map[string]*tandem.Write{}, recs: map[string]map[string]*tandem.Record{},
 			invs: map[string]tandem.Inventory{}, frags: map[string]map[int][]byte{}, parts: map[string]int{},
-			replaced: map[string]bool{}, resigned: map[string]bool{}, own: map[string]heldWrite{}, unshared: map[string]bool{}, dirty: map[string]bool{}}
+			replaced: map[string]bool{}, resigned: map[string]bool{}, own: map[string]heldWrite{}, all: map[string]heldWrite{}, unshared: map[string]bool{}, dirty: map[string]bool{}}
 		d.cols[string(cid)] = c
 	}
 	return c
@@ -607,15 +611,21 @@ func (d *Device) mergeData(c *col, epoch []byte, w *tandem.Write) {
 		before[id] = true
 	}
 	r.Merge(e)
+	c.all[string(e.ID)] = heldWrite{w, epoch}
 	for id := range before {
 		if _, ok := r.Kept[id]; !ok {
-			c.replaced[id] = true
+			c.replaced[ep+id] = true
 		}
 	}
 	if _, ok := r.Kept[string(e.ID)]; !ok {
-		c.replaced[string(e.ID)] = true
+		c.replaced[ep+string(e.ID)] = true
 	}
 }
+
+// replacedIn reports whether this device has seen a write superseded in the
+// given epoch. Supersession is judged per epoch: a write replaced in an old
+// epoch by a write the next inventory doesn't carry is current again there.
+func (c *col) replacedIn(epoch, id []byte) bool { return c.replaced[string(epoch)+string(id)] }
 
 // ---- inbox (§11.4) ----
 

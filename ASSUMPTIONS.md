@@ -124,6 +124,13 @@ Fable and Sol agree on findings 1, 3, 5 and most of 6, and on the gaps being rea
 
 **Decided by Jesper, 2026-11-12: all of the "my recommendation" column** (deletes and sorted vectors as Fable; G-26 both; G-40, G-09 and home encodings as Sol).
 
+### Found by the harness (2026-11-12)
+
+The crash family (`sdk/go/harness/families_test.go`, `TestFamilyCrashedKeyChange`) found two ways a write the inventory lists could be lost; both fixed in the engine, 250 seeds now pass.
+
+1. **Listed writes must be carried by every device that holds them (§11.6).** A device moving to a new epoch only took listed writes from the new channel; one that missed the rotating device's upload was lost although other devices held it. The engine now moves every listed write it holds into the current epoch and republishes it, as §11.6 already says ("keeps every old write the new inventory lists … re-publishes one that the new channel lacks").
+2. **Pruning superseded writes isn't safe across a key change (§9.3, §11.6). Needs a sentence in the draft.** A listed write can be superseded in the old epoch by a late write the new epoch doesn't carry (here: a late write from the member being removed, who can't sign it again). In the new epoch the listed write is current again, but §9.3 let every device discard it as superseded. The engine now keeps every accepted write and judges "replaced" per epoch. Proposed text for §9.3: "A write superseded only by writes that a later epoch's inventory doesn't list becomes current again in that epoch. A device keeps superseded writes of an epoch until the next epoch's inventory is fixed; it may then drop those the inventory doesn't list."
+
 ## 3. What this means for our work
 
 ### Scenarios (refresh pending)
