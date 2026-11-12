@@ -1,0 +1,36 @@
+# Tandem testbed: a real mail server (JMAP + IMAP) behind a fault-injecting proxy.
+# Managed by ./tb; see README.md. Images are pinned by digest so runs are reproducible.
+
+name: tandem-testbed
+
+services:
+  stalwart:
+    image: stalwartlabs/stalwart:v1.1.0@sha256:f772aa6ef8cd8018969fa491640f1436b0270eb14e2c219b5f37f1a77020837e
+    init: true
+    volumes:
+      - etc:/etc/stalwart
+      - data:/var/lib/stalwart
+    ports:
+      - "${TB_BIND:-127.0.0.1}:${TB_JMAP_PORT:-8180}:8080"   # JMAP (HTTP), direct
+      - "${TB_BIND:-127.0.0.1}:${TB_IMAP_PORT:-1143}:143"    # IMAP, direct
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz/live"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.13.0@sha256:5d3dae09bc185dcc5ff6cf43abf6062a4a720aff0c4306a471e773acdcd107aa
+    ports:
+      - "${TB_BIND:-127.0.0.1}:${TB_TOXI_PORT:-8474}:8474"   # Toxiproxy control API
+      # Per-device proxies are created on demand from this range (tb fault proxy).
+      - "${TB_BIND:-127.0.0.1}:${TB_PROXY_RANGE:-21000-21099}:${TB_PROXY_RANGE:-21000-21099}"
+    depends_on:
+      stalwart:
+        condition: service_healthy
+
+volumes:
+  etc:
+    name: tandem-testbed-etc
+  data:
+    name: tandem-testbed-data

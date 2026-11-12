@@ -1,0 +1,4 @@
+#!/bin/sh
+# Tandem testbed command line. Needs Docker (Compose v2) and Python 3.14+.
+here="$(cd "$(dirname "$0")" && pwd)"
+PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m tandemtb "$@"
