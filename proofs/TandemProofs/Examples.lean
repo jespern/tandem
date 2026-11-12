@@ -149,10 +149,12 @@ example : ¬ sup (wr "b" "W" famC (field := "é") (hlc := 2) (ctx := [("device"
     sup (wr "b" "W" famC (field := "é") (hlc := 2) (ctx := [("device", 1)]))
       (wr "a" "W" famC (field := "é")) := by decide
 
--- test_only_the_owner_writes_the_collections_name
+-- test_only_the_owner_writes_the_collections_name; and a delete has no field or value (§9.2)
 example : eligible g R0 base (wr "n" "W" famC "meta") [g] none = false ∧
     eligible g R0 base (wr "n" "O" famC "meta") [g] none = true ∧
-    eligible g R0 base (wr "d" "O" famC "meta" (op := .delete)) [g] none = false := by decide
+    eligible g R0 base { wr "d" "O" famC "meta" "" (op := .delete) with value := "" } [g] none = false ∧
+    eligible g R0 base { wr "d" "O" famC "item" "" (op := .delete) with value := "" } [g] none = true ∧
+    eligible g R0 base (wr "d" "O" famC "item" (op := .delete)) [g] none = false := by decide
 
 -- test_oversized_vectors_are_invalid (evaluated, not decided: the kernel is slow on 1,025 entries)
 #guard eligible g R0 base (wr "big" "W" famC (ctx := (List.range 1025).map fun i => (toString i, 1)))

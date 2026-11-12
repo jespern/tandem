@@ -1,4 +1,5 @@
 import TandemProofs.Supersession
+import TandemProofs.VectorLimit
 import Mathlib.Data.List.MinMax
 import Mathlib.Data.List.Lex
 import Mathlib.Order.Prod.Lex.Basic
@@ -36,7 +37,7 @@ theorem add_remove_concurrent {a rm : Write} (hop : a.op = .add)
 supersedes it. -/
 theorem remove_supersedes_seen_add {a rm : Write} (hs : rm.slot = a.slot)
     (he : rm.epoch = a.epoch) (hseen : includes rm a) (hnot : ¬ includes a rm) : sup rm a :=
-  ⟨hs, Or.inr ⟨he, hseen, hnot⟩⟩
+  ⟨Or.inl hs, Or.inr ⟨he, hseen, hnot⟩⟩
 
 /-- If every add of an element is superseded by something held, the element is absent. -/
 theorem absent_of_all_adds_superseded {S : Finset Write} {rec field elem : String}
@@ -55,11 +56,9 @@ theorem replayed_add_stays_out {S : Finset Write} {a y : Write} (hy : y ∈ S) (
 
 def deleted (K : Finset Write) (rec : String) : Prop := ∃ x ∈ K, x.op = .delete ∧ x.record = rec
 
-theorem slot_delete {w x : Write} (h : w.slot = x.slot) (hx : x.op = .delete) :
-    w.op = .delete ∧ w.record = x.record := by
-  unfold Write.slot at h
-  rw [hx] at h
-  cases hw : w.op <;> rw [hw] at h <;> simp_all
+/-- Only a delete supersedes a delete. -/
+theorem sup_delete {w x : Write} (h : sup w x) (hx : x.op = .delete) :
+    w.op = .delete ∧ w.record = x.record := Write.governs_delete h.1 hx
 
 /-- Once any valid delete is held, every merge that contains it is deleted (§9.2, §12.3). -/
 theorem deleted_sticky {S T : Finset Write} {rec : String} (h : deleted S rec) :
@@ -67,17 +66,118 @@ theorem deleted_sticky {S T : Finset Write} {rec : String} (h : deleted S rec) :
   obtain ⟨d, hd, hop, hrec⟩ := h
   rcases kept_or_superseded sup_strict (S ∪ T) (Finset.mem_union_left T hd) with hk | ⟨k, hk, hkd⟩
   · exact ⟨d, hk, hop, hrec⟩
-  · obtain ⟨hkop, hkrec⟩ := slot_delete hkd.1 hop
+  · obtain ⟨hkop, hkrec⟩ := sup_delete hkd hop
     exact ⟨k, hk, hkop, hkrec.trans hrec⟩
 
-/-! ### Why the register of a delete needs saying
+/-- A kept delete stays kept until a delete that includes it arrives: whatever else is
+merged in, it is kept or superseded by a kept delete of its record. -/
+theorem kept_delete_stays {S : Finset Write} {d : Write} (hd : d ∈ S) (hop : d.op = .delete) :
+    d ∈ state S ∨ ∃ k ∈ state S, k.op = .delete ∧ k.record = d.record ∧ sup k d := by
+  rcases kept_or_superseded sup_strict S hd with hk | ⟨k, hk, hkd⟩
+  · exact Or.inl hk
+  · obtain ⟨h1, h2⟩ := sup_delete hkd hop
+    exact Or.inr ⟨k, hk, h1, h2, hkd⟩
 
-§9.2 says a record with any valid delete is deleted "whatever else happens to it", and §9.3
-defines a record's state as the writes nothing supersedes, with supersession between writes
-"to the same field". The design doesn't say which field a delete names (`sigInput` carries a
-field name for every op) or whether an `assign` can supersede a `delete`. If supersession
-looks only at (record, field), as `model/owner_model.py` does, a write that shares the
-delete's field and covers it drops the tombstone from the state: -/
+/-! ### A delete supersedes what it includes (decided 2026-11-12)
+
+A delete supersedes any write to its record that it includes, in any field and of any op,
+under the same vector test as everything else. So a delete built over the record's kept
+writes shrinks the record to its tombstone: one small message per deleted record (§12.3). -/
+
+/-- If every other write of the held set is superseded by some held delete, the state is
+exactly the kept deletes: the kept set of the deletes alone. -/
+theorem state_only_deletes {S : Finset Write}
+    (h : ∀ x ∈ S, x.op ≠ .delete → ∃ d ∈ S, d.op = .delete ∧ sup d x) :
+    state S = state (S.filter (·.op = .delete)) := by
+  ext x
+  simp only [state, mem_kept, Finset.mem_filter]
+  constructor
+  · rintro ⟨hx, hn⟩
+    by_cases hop : x.op = .delete
+    · exact ⟨⟨hx, hop⟩, fun y hy => hn y hy.1⟩
+    · obtain ⟨d, hd, -, hdx⟩ := h x hx hop
+      exact absurd hdx (hn d hd)
+  · rintro ⟨⟨hx, hop⟩, hn⟩
+    refine ⟨hx, fun y hy hyx => hn y ⟨hy, (sup_delete hyx hop).1⟩ hyx⟩
+
+/-- **One tombstone per deleted record** (§12.3). `K` is a record's state. A delete `d` of the
+current epoch `e`, its context and base built over all of `K` in every field (§9.2), with a dot
+none of `K` has seen, supersedes all of it: after merging, `d` is all that is kept. -/
+theorem delete_built_over_state {S : Finset Write} {d : Write} {e : Nat}
+    (hop : d.op = .delete) (hrec : ∀ k ∈ state S, k.record = d.record)
+    (he : d.epoch = e) (hle : ∀ k ∈ state S, k.epoch ≤ e)
+    (hctx : d.ctx = buildCtx (state S).toList e) (hbase : d.base = buildBase (state S).toList e)
+    (hfresh : ∀ k ∈ state S, k.epoch = e → ¬ includes k d) :
+    state (insert d S) = {d} := by
+  have hall : ∀ k ∈ (state S).toList, sup d k :=
+    build_supersedes he (fun k hk => Or.inr ⟨hop, (hrec k (Finset.mem_toList.1 hk)).symm⟩)
+      (fun k hk => hle k (Finset.mem_toList.1 hk)) hctx hbase
+      (fun k hk => hfresh k (Finset.mem_toList.1 hk))
+  have hnot : ∀ k ∈ state S, ¬ sup k d := by
+    rintro k hk ⟨-, ⟨hlt, -⟩ | ⟨hke, hi, -⟩⟩
+    · exact absurd (hle k hk) (by omega)
+    · exact hfresh k hk (hke.trans he) hi
+  have h1 : state {d} = {d} := by
+    ext x
+    simp only [state, mem_kept, Finset.mem_singleton]
+    exact ⟨fun h => h.1, fun h => ⟨h, fun y hy => hy ▸ h ▸ sup_irrefl _⟩⟩
+  rw [Finset.insert_eq, state_union, h1]
+  ext x
+  show x ∈ kept sup ({d} ∪ state S) ↔ _
+  simp only [mem_kept, Finset.mem_union, Finset.mem_singleton]
+  constructor
+  · rintro ⟨hx | hx, hn⟩
+    · exact hx
+    · exact absurd (hall x (Finset.mem_toList.2 hx)) (hn d (Or.inl rfl))
+  · rintro rfl
+    refine ⟨Or.inl rfl, fun y hy hyx => ?_⟩
+    rcases hy with rfl | hy
+    · exact sup_irrefl _ hyx
+    · exact hnot y hy hyx
+
+/-! ### Records without deletes are unaffected
+
+For records that hold no delete, `sup` is the register-only rule it was before the change, so
+display, sets and add-wins read exactly as they did. -/
+
+/-- Supersession keyed by `Write.slot` alone: the rule before 2026-11-12. -/
+def supSlot (w x : Write) : Prop :=
+  w.slot = x.slot ∧
+    ((x.epoch < w.epoch ∧ vle x.reach w.base ∧ vle x.base w.base) ∨
+     (w.epoch = x.epoch ∧ includes w x ∧ ¬ includes x w))
+
+instance : DecidableRel supSlot := fun _ _ => by unfold supSlot; infer_instance
+
+theorem sup_iff_supSlot {w x : Write} (hw : w.op ≠ .delete) : sup w x ↔ supSlot w x := by
+  unfold sup supSlot
+  rw [Write.governs_iff_slot hw]
+
+/-- The state of a record that holds no delete is what the old rule gave, whatever deletes
+other records hold. -/
+theorem state_of_undeleted {S : Finset Write} {rec : String}
+    (h : ∀ y ∈ S, y.record = rec → y.op ≠ .delete) :
+    (state S).filter (·.record = rec) = (kept supSlot S).filter (·.record = rec) := by
+  ext x
+  simp only [state, mem_kept, Finset.mem_filter]
+  constructor
+  · rintro ⟨⟨hx, hn⟩, rfl⟩
+    refine ⟨⟨hx, fun y hy hyx => ?_⟩, rfl⟩
+    have hyr : y.record = x.record := by
+      rw [← Write.slot_record y, ← Write.slot_record x, hyx.1]
+    exact hn y hy ((sup_iff_supSlot (h y hy hyr)).2 hyx)
+  · rintro ⟨⟨hx, hn⟩, rfl⟩
+    refine ⟨⟨hx, fun y hy hyx => ?_⟩, rfl⟩
+    have hyr := Write.governs_record hyx.1
+    exact hn y hy ((sup_iff_supSlot (h y hy hyr)).1 hyx)
+
+/-! ### The register of a delete, and why it needed saying
+
+§9.2 said a record with any valid delete is deleted "whatever else happens to it", and §9.3
+defined a record's state as the writes nothing supersedes, with supersession between writes
+"to the same field". The design didn't say which field a delete names (`sigInput` carries a
+field name for every op) or whether an `assign` can supersede a `delete` (finding F1). If
+supersession looks only at (record, field), as `model/owner_model.py` does, a write that shares
+the delete's field and covers it drops the tombstone from the state: -/
 
 /-- Supersession keyed by (record, field) only, ignoring the op. -/
 def supByField (w x : Write) : Prop :=
@@ -118,8 +218,29 @@ private def over : Write where
 /-- The counterexample: keyed by field, the assignment supersedes the delete. -/
 theorem tombstone_dropped_if_keyed_by_field : supByField over del := by decide
 
-/-- Keyed by `Write.slot` (a delete is its own register), it doesn't. -/
+/-- Under the decided rule, a write that covers a delete doesn't supersede it. -/
 theorem tombstone_kept_with_slot : ¬ sup over del := by decide
+
+/-- A note written before the delete was made, in another field. -/
+private def seen : Write := { over with id := "s", field := "note", hlc := 1, dev := "m", ctx := [] }
+/-- The delete, built over `seen`. -/
+private def delSeen : Write := { del with id := "d2", hlc := 2, ctx := [("m", 1)] }
+/-- An edit made offline, concurrently with the delete. -/
+private def concurrent : Write := { over with id := "c", field := "title", ctx := [("m", 1)] }
+
+/-- The delete supersedes the write it saw, though it is in another field. -/
+theorem delete_supersedes_seen_other_field : sup delSeen seen ∧ seen.field ≠ delSeen.field := by
+  decide
+
+/-- **A concurrent write survives under the tombstone**: neither supersedes the other, the
+record is deleted, and the edit is kept (the app doesn't show it). -/
+theorem concurrent_write_survives_delete :
+    state {delSeen, seen, concurrent} = {delSeen, concurrent} ∧
+      deleted (state {delSeen, seen, concurrent}) "r" := by
+  have hs : state {delSeen, seen, concurrent} = {delSeen, concurrent} := by decide
+  refine ⟨hs, ?_⟩
+  rw [hs]
+  exact ⟨delSeen, by simp, rfl, rfl⟩
 
 /-! ## Display (§9.2) -/
 

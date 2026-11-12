@@ -32,7 +32,7 @@ def roleOk (R : Records) (w : Write) : Bool :=
 /-- What can be judged from the write and the statement it names alone. -/
 def sourceValid (R : Records) (w : Write) : Bool :=
   decide (size w.ctx ≤ vectorLimit) && decide (size w.base ≤ vectorLimit) && roleOk R w &&
-  !(w.op == .delete && R.named.contains w.record)
+  !(w.op == .delete && R.named.contains w.record) && w.shapeOK
 
 /-- The part of the verdict that needs `E` and the inventory. -/
 def epochOk (w : Write) (E : Stmt) (inv : Option (List (String × String))) : Bool :=
@@ -90,6 +90,13 @@ theorem meta_owner_only {w : Write} (hm : w.record = R.metaRec) (r : Role) (hr :
 theorem named_delete_rejected {w : Write} (hop : w.op = .delete) (hn : w.record ∈ R.named) :
     sourceValid R w = false := by
   simp [sourceValid, hop, hn]
+
+/-- A delete with a field name, an element or a value is invalid (§9.2): every SDK signs a
+delete the same way. -/
+theorem malformed_delete_rejected {w : Write} (hop : w.op = .delete)
+    (h : w.field ≠ "" ∨ w.elem ≠ "" ∨ w.value ≠ "") : sourceValid R w = false := by
+  simp only [sourceValid, Write.shapeOK, hop]
+  rcases h with h | h | h <;> simp [h]
 
 /-- Matching a key or a counter is never enough: without the inventory, only writes whose
 source epoch is exactly `E` count. -/

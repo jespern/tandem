@@ -8,8 +8,9 @@ write (§9.2): its context is the join of `reach(k)` over the kept writes `k` of
 epoch, its base the join of every kept write's base and of `reach(k)` over those from earlier
 epochs.
 
-* A write so built supersedes every kept write, provided its dot is new to them
-  (`build_supersedes`).
+* A write so built supersedes every kept write it governs (its register; for a delete, every
+  write to the record, so a delete is built over all of them), provided its dot is new to
+  them (`build_supersedes`).
 * Its vectors name only devices already named by the kept writes (`build_devices`), and a
   re-signed write's base only devices of the original (`reissue_devices`). So if every write
   of a field names only devices that wrote the field, so does every new write: an honest
@@ -30,11 +31,11 @@ theorem vle_flatMap {K : List Write} {f : Write → VV} {k : Write} (hk : k ∈ 
 
 /-- A write built from the kept set supersedes all of it. -/
 theorem build_supersedes {K : List Write} {n : Write} {e : Nat} (he : n.epoch = e)
-    (hslot : ∀ k ∈ K, k.slot = n.slot) (hle : ∀ k ∈ K, k.epoch ≤ e)
+    (hgov : ∀ k ∈ K, n.governs k) (hle : ∀ k ∈ K, k.epoch ≤ e)
     (hctx : n.ctx = buildCtx K e) (hbase : n.base = buildBase K e)
     (hfresh : ∀ k ∈ K, k.epoch = e → ¬ includes k n) : ∀ k ∈ K, sup n k := by
   intro k hk
-  refine ⟨(hslot k hk).symm, ?_⟩
+  refine ⟨hgov k hk, ?_⟩
   rcases (hle k hk).lt_or_eq with hlt | heq
   · refine Or.inl ⟨he ▸ hlt, ?_, ?_⟩
     · rw [hbase]
