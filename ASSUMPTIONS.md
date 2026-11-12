@@ -97,15 +97,9 @@ Add scenarios for what is new: the fork rule itself (including the two defects a
 
 ### The reference model
 
-Fable's `model/tandem_model.py` now exists, is cited by the design (Q14), and is maintained alongside it. Writing a second executable model in Lean, as `TESTING.md` planned, would give two models to keep in step.
+Fable's `model/tandem_model.py` now exists and is cited by the design (Q14).
 
-**Revised plan:**
-
-- **The oracle:** Fable's Python model, extended to cover what it lacks (storage, the rotation procedure). The harness calls it as the oracle.
-- **The proofs:** Lean proves properties of the same definitions, transcribed.
-- **Keeping them equal:** a differential test feeds random inputs to both and compares their answers.
-
-This replaces the "Lean model is the oracle" decision in `TESTING.md`, pending Jesper's agreement.
+**Decided (Jesper, 2026-11-12): the reference model stays in Lean**, executable and proved, and is the harness's oracle, as `TESTING.md` says. Fable's Python model becomes an independent second implementation of the same rules. A differential test feeds both the same random inputs and compares their answers, so a disagreement points at either a bug or an ambiguity in the text. Its regression cases, and the two defects in §2, become Lean examples.
 
 ### Unaffected
 
