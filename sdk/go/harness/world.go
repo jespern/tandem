@@ -23,35 +23,57 @@ var errOffline = errors.New("harness: device is offline")
 // gate is a device's link to the hub, which a step can cut.
 type gate struct {
 	store.Store
-	off bool
+	off  bool
+	down bool // crashed, until the app launches again
+	// loseReplies: appends reach the hub but their answers are lost, as
+	// with a connection reset after the request (S-FLAP).
+	loseReplies bool
+	// failAppends, failFetches: those requests are cut before the hub
+	// acts on them (net: reset); everything else gets through.
+	failAppends, failFetches bool
 }
 
+var (
+	errReplyLost = fmt.Errorf("%w: the answer was lost", errOffline)
+	errReset     = fmt.Errorf("%w: connection reset", errOffline)
+)
+
 func (g *gate) EnsureFolder(c context.Context) error {
-	if g.off {
+	if g.off || g.down {
 		return errOffline
 	}
 	return g.Store.EnsureFolder(c)
 }
 func (g *gate) Append(c context.Context, tag string, env []byte) (string, error) {
-	if g.off {
+	if g.off || g.down {
 		return "", errOffline
+	}
+	if g.loseReplies {
+		g.Store.Append(c, tag, env)
+		return "", errReplyLost
+	}
+	if g.failAppends {
+		return "", errReset
 	}
 	return g.Store.Append(c, tag, env)
 }
 func (g *gate) Changes(c context.Context) ([]store.Ref, []string, error) {
-	if g.off {
+	if g.off || g.down {
 		return nil, nil, errOffline
 	}
 	return g.Store.Changes(c)
 }
 func (g *gate) Fetch(c context.Context, ids []string) (map[string]store.Message, error) {
-	if g.off {
+	if g.off || g.down {
 		return nil, errOffline
+	}
+	if g.failFetches {
+		return nil, errReset
 	}
 	return g.Store.Fetch(c, ids)
 }
 func (g *gate) Destroy(c context.Context, ids []string) error {
-	if g.off {
+	if g.off || g.down {
 		return errOffline
 	}
 	return g.Store.Destroy(c, ids)
@@ -205,13 +227,15 @@ func (w *World) userDevs(user string) []string {
 func (w *World) Offline(devName string) { w.Dev(devName); w.devs[devName].g.off = true }
 func (w *World) Online(devName string)  { w.Dev(devName); w.devs[devName].g.off = false }
 func (w *World) IsOffline(devName string) bool {
-	return w.devs[devName] != nil && w.devs[devName].g.off
+	return w.devs[devName] != nil && (w.devs[devName].g.off || w.devs[devName].g.down)
 }
 
 // Quits and Launches: the app stops and starts again from its stored state.
 func (w *World) Relaunches(devName string) {
 	w.T.Helper()
 	x := w.devs[devName]
+	x.g.Store = w.Hub.Client() // a new connection: the hub index isn't stored, so it reads from the start
+	x.g.down = false
 	d, err := device.Open(ctx, x.dir, x.g)
 	w.must(err)
 	x.d = d
@@ -269,7 +293,7 @@ func (w *World) Check(coll string) {
 	var refState map[string]device.RecordView
 	for _, n := range w.order {
 		x := w.devs[n]
-		if _, member := w.members[coll][x.user]; !member || x.g.off {
+		if _, member := w.members[coll][x.user]; !member || x.g.off || x.g.down {
 			continue
 		}
 		if x.d.Dead(cid) {
@@ -290,8 +314,9 @@ func (w *World) Check(coll string) {
 	w.checkOracle(coll, ref, refState)
 }
 
-func (w *World) checkOracle(coll string, ref *dev, got map[string]device.RecordView) {
-	w.T.Helper()
+// oracleRequest is what the reference model is asked about a collection:
+// the roster and inventory ref holds, and every write any device signed.
+func (w *World) oracleRequest(coll string, ref *dev) map[string]any {
 	cid := w.cid(coll)
 	genesis, stmts := ref.d.Roster(cid)
 	ep, inv := ref.d.Inventory(cid)
@@ -300,7 +325,7 @@ func (w *World) checkOracle(coll string, ref *dev, got map[string]device.RecordV
 		writes = append(writes, writeOf(w.writes[string(cid)][id]))
 	}
 	req := map[string]any{"genesis": hx(genesis), "statements": statements(stmts), "writes": writes,
-		"meta": []string{hx(tandem.NamedID("_meta"))}, "named": []string{hx(tandem.NamedID("_meta"))}, "channel": hx(ep)}
+		"meta": hx(tandem.NamedID("_meta")), "named": []string{hx(tandem.NamedID("_meta")), hx(tandem.RosterID)}, "channel": hx(ep)}
 	if inv != nil {
 		m := map[string][]string{}
 		for rec, ids := range inv {
@@ -310,7 +335,13 @@ func (w *World) checkOracle(coll string, ref *dev, got map[string]device.RecordV
 		}
 		req["inventory"] = m
 	}
-	a, err := w.Oracle.Ask(req)
+	return req
+}
+
+func (w *World) checkOracle(coll string, ref *dev, got map[string]device.RecordView) {
+	w.T.Helper()
+	cid := w.cid(coll)
+	a, err := w.Oracle.Ask(w.oracleRequest(coll, ref))
 	w.must(err)
 	if a.Dead {
 		w.T.Fatalf("oracle: %s is dead", coll)

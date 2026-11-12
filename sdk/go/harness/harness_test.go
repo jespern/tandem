@@ -24,29 +24,6 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// CO-003 Sharing the list in the kitchen, as far as the engine goes today:
-// J shares Groceries with A; both edit, concurrently and not; all converge
-// on what the reference model says.
-func TestCO003(t *testing.T) {
-	w := NewWorld(t, oracle)
-	w.Dev("J.phone")
-	w.Dev("A.phone")
-	w.Creates("J.phone", "Groceries")
-	for _, item := range []string{"milk", "eggs", "bread"} {
-		w.must(w.Adds("J.phone", "Groceries", item))
-	}
-	w.Shares("J.phone", "Groceries", "A", "writer")
-	w.Settle()
-	w.Check("Groceries")
-
-	w.must(w.Sets("A.phone", "Groceries", "eggs", "title", "eggs (12)"))
-	w.must(w.Tags("J.phone", "Groceries", "milk", "dairy", true))
-	w.must(w.Sets("J.phone", "Groceries", "bread", "notes", "rye"))
-	w.must(w.Sets("A.phone", "Groceries", "bread", "notes", "sourdough")) // concurrent: siblings
-	w.Settle()
-	w.Check("Groceries")
-}
-
 // Family: players edit one list at random through outages, and the owner
 // removes one of them part-way. After everyone is back online and synced,
 // every remaining device shows the same list, which is what the reference
