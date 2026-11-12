@@ -391,12 +391,20 @@ func (d *Device) Resume(ctx context.Context) error {
 	}
 	announced := c != nil && slices.ContainsFunc(c.roster.Announced(), func(id []byte) bool { return bytes.Equal(id, j.StmtID) })
 	note := d.membership(j.Col).flight
-	ours := note != nil && note.Stmt == tandem.B64u(j.StmtID) && c != nil && bytes.Equal(c.roster.Head().ID, j.Parent)
+	headIsParent := c != nil && bytes.Equal(c.roster.Head().ID, j.Parent)
+	ours := note != nil && note.Stmt == tandem.B64u(j.StmtID) && headIsParent
 	switch {
 	case announced:
 		// Made, by this device or by the one that finished it: carry on.
 		if j.Step < 4 {
 			j.Step = 4
+		}
+	case ours:
+		// Its own note is in home, whatever the local flag says: an append
+		// whose answer was lost may have landed (found by Sol). Resume.
+		if !j.NoteWritten {
+			j.NoteWritten = true
+			j.Step = max(j.Step, 3)
 		}
 	case !j.NoteWritten:
 		// Nothing left the device but the journal. Its statement may only
@@ -411,9 +419,6 @@ func (d *Device) Resume(ctx context.Context) error {
 			}
 			return d.save()
 		}
-	case ours:
-		// Still pending, its note in home and its parent the head: resume
-		// where the journal says.
 	default:
 		// No note of its own, another device's note, or a new head: the
 		// change was discarded or overtaken. A draft may always be dropped

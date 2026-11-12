@@ -420,3 +420,64 @@ func TestFastmailIMAPConnectionCap(t *testing.T) {
 	}
 	t.Logf("40 concurrent IMAP connections accepted on one credential")
 }
+
+// Fastmail keeps one EventSource connection per token: a second one with the
+// same token closes the first, another token's is unaffected. Needs a second
+// token in ~/.config/tandem/fastmail2.json.
+func TestFastmailOneStreamPerToken(t *testing.T) {
+	d1 := fastmail(t)
+	home, _ := os.UserHomeDir()
+	raw, err := os.ReadFile(filepath.Join(home, ".config", "tandem", "fastmail2.json"))
+	if err != nil {
+		t.Skip("no second token in ~/.config/tandem/fastmail2.json")
+	}
+	d2 := d1
+	d2.Token = string(bytes.TrimSpace(raw))
+	j1, j2 := openJMAP(t, d1), openJMAP(t, d2)
+
+	// stream opens an EventSource and reports when the server closes it.
+	stream := func(j *JMAP, ctx context.Context) <-chan string {
+		out := make(chan string, 1)
+		u := strings.NewReplacer("{types}", "Email", "{closeafter}", "no", "{ping}", "60").Replace(j.esURL)
+		req, _ := http.NewRequestWithContext(ctx, "GET", j.rebase(u), nil)
+		j.auth(req)
+		go func() {
+			resp, err := j.http.Do(req)
+			if err != nil {
+				out <- "error"
+				return
+			}
+			defer resp.Body.Close()
+			sc := bufio.NewScanner(resp.Body)
+			for sc.Scan() {
+				if strings.TrimSpace(sc.Text()) == "event: close" {
+					out <- "closed"
+					return
+				}
+			}
+			out <- "ended"
+		}()
+		return out
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	a := stream(j1, ctx)
+	time.Sleep(3 * time.Second)
+	b := stream(j2, ctx)
+	time.Sleep(3 * time.Second)
+	c := stream(j2, ctx) // same token as b
+	select {
+	case got := <-b:
+		t.Logf("second connection with token 2: %s once a third opened", got)
+	case <-time.After(5 * time.Second):
+		t.Error("token 2's first connection survived a second one with the same token")
+	}
+	select {
+	case got := <-a:
+		t.Errorf("token 1's connection was %s by token 2's connections", got)
+	case got := <-c:
+		t.Errorf("token 2's newest connection was %s", got)
+	case <-time.After(5 * time.Second):
+		t.Log("token 1's connection and token 2's newest stayed open")
+	}
+}

@@ -107,6 +107,21 @@ In the Go engine, the vectors and the Swift SDK; the draft text waits for Sol's 
 
 Not yet in the engine, because the engine doesn't have the feature yet: leave notices (G-06), signing again (G-26), pairing payloads with `type`, declines (G-09), split records (G-40), version handling (G-60), HLC loss (G-20).
 
+### Sol's review (2026-11-12) and where it disagrees with Fable's
+
+`review/2026-11-12-sol.md`, written against `1c2631d`, before Fable's corrections were applied. Three code bugs, all fixed with regression tests: a field could alias the delete register (`"\x00delete"`); a lost answer to the note's append made `Resume` drop its journal and strand the note; a `flight` of JSON `null` (as `conformance/` writes it) read as a pending change. The Fastmail one-stream-per-token result is now a repeatable test (`TestFastmailOneStreamPerToken`).
+
+Fable and Sol agree on findings 1, 3, 5 and most of 6, and on the gaps being real. Where they differ (decisions for Jesper):
+
+| Topic | Fable | Sol | Implemented now |
+|---|---|---|---|
+| Deletes | supersede every write of the record they include, so a deleted record shrinks to one write (§12.3) | a register of their own; other fields' writes stay | Fable's (Go, Swift, Lean proved) |
+| Vectors in JSON | must arrive sorted | any order, sorted for signing | Fable's |
+| G-26 poisoned base | at signing again, a vector entry for one's own device ID above anything it issued is forged; sign again anyway | keep such writes as possibly unshared work and show them to the app | neither yet |
+| G-40 split records | domination by a set of messages, with a hash tie-break | rejects that: `{a,b}`, `{b,c}`, `{a,c}` each dominated by the other two; publish only when the union doesn't dominate, keep pairwise GC | neither yet |
+| G-09 refused requests | new `declined` state | no new state; stop waiting, keep `requested` | neither yet |
+| Home field encodings | not raised | specify every protocol home field; `flight` schema and `null` for none, agreed with `conformance/` | Go accepts both empty and `null` |
+
 ## 3. What this means for our work
 
 ### Scenarios (refresh pending)

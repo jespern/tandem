@@ -231,9 +231,11 @@ func (d *Device) membership(cid []byte) membership {
 	if v, ok := r.Value("owner"); ok {
 		m.owner = v
 	}
-	if v, ok := r.Value("flight"); ok && len(v) > 0 {
+	// No pending change: an empty value, or JSON null (conformance/ writes
+	// null). Anything that doesn't name a statement isn't a note.
+	if v, ok := r.Value("flight"); ok && len(v) > 0 && string(v) != "null" {
 		var n Note
-		if json.Unmarshal(v, &n) == nil {
+		if json.Unmarshal(v, &n) == nil && n.Stmt != "" {
 			m.flight = &n
 		}
 	}

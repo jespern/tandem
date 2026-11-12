@@ -341,3 +341,48 @@ func TestStaleNoteIsLeftAlone(t *testing.T) {
 	mustOK(t, w.j1.Resume(ctx))
 	w.checkRemoved()
 }
+
+// ackLoss stores the first append to one tag but reports an error, as when
+// the answer to an append is lost.
+type ackLoss struct {
+	store.Store
+	tag  string
+	lost bool
+}
+
+func (s *ackLoss) Append(ctx context.Context, tag string, body []byte) (string, error) {
+	id, err := s.Store.Append(ctx, tag, body)
+	if err == nil && tag == s.tag && !s.lost {
+		s.lost = true
+		return "", errors.New("answer lost after the append landed")
+	}
+	return id, err
+}
+
+// Sol's witness: the note reached home but its answer was lost. After a
+// restart the device must find its own note and finish, not strand it.
+func TestLostAnswerToTheNote(t *testing.T) {
+	w := newWorld(t)
+	loss := &ackLoss{Store: w.j1.hub, tag: tandem.HomeTag(w.j1.u.Home)}
+	w.j1.hub = loss
+	if err := w.j1.Remove(ctx, w.cid, w.aimee.UID()); err == nil {
+		t.Fatal("expected the lost answer to surface")
+	}
+	if !loss.lost || w.j1.journal == nil || w.j1.journal.NoteWritten {
+		t.Fatal("not at the intended point")
+	}
+	w.reopen()
+	mustOK(t, w.j1.Resume(ctx))
+	w.checkRemoved()
+}
+
+// A flight of JSON null (conformance/'s spelling of "none") is no change.
+func TestNullFlightIsNoChange(t *testing.T) {
+	w := newWorld(t)
+	mustOK(t, w.j1.setMembership(ctx, w.cid, "flight", []byte("null")))
+	if w.j1.Pending(w.cid) != nil {
+		t.Fatal("null read as a pending change")
+	}
+	mustOK(t, w.j1.Remove(ctx, w.cid, w.aimee.UID()))
+	w.checkRemoved()
+}

@@ -28,22 +28,32 @@ func NewEntry(w *Write, epoch []byte, n int64) (Entry, error) {
 	return Entry{W: w, ID: id, Epoch: string(epoch), EpochN: n}, nil
 }
 
-// slot is what one register holds writes for: a field, and for set ops one
-// element of it. Field names compare as bytes (§9.1).
+// slot is the register a write belongs to: (assign, field), (set, field,
+// element) or (delete). Field names compare as bytes (§9.1). The kind is
+// explicit: a reserved field name would alias a field someone can write
+// (found by Sol: "\x00delete" is valid JSON).
 type slot struct {
+	kind    slotKind
 	field   string
-	set     bool
 	element string
 }
+
+type slotKind uint8
+
+const (
+	slotAssign slotKind = iota
+	slotSet
+	slotDelete
+)
 
 func slotOf(w *Write) slot {
 	switch w.Op {
 	case OpAdd, OpRemove:
-		return slot{w.Field, true, string(w.Element)}
+		return slot{slotSet, w.Field, string(w.Element)}
 	case OpDelete:
-		return slot{field: "\x00delete"} // the record's tombstones; see Supersedes
+		return slot{kind: slotDelete} // the record's tombstones; see Supersedes
 	}
-	return slot{field: w.Field}
+	return slot{kind: slotAssign, field: w.Field}
 }
 
 // vector operations

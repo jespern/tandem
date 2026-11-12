@@ -196,3 +196,29 @@ func TestDeleteSupersedesWhatItSaw(t *testing.T) {
 		t.Fatal("a delete with a field name is invalid")
 	}
 }
+
+// Sol's witness: an assign to the field "\x00delete" whose context covers a
+// tombstone must not supersede it.
+func TestNoFieldAliasesTheDeleteRegister(t *testing.T) {
+	p, q := [8]byte{1}, [8]byte{2}
+	mk := func(op Op, field string, d Dot, ctx VV) Entry {
+		w := &Write{Scope: make([]byte, 16), Record: make([]byte, 16), Field: field, Op: op,
+			Author: make([]byte, 32), Dot: d, Ref: make([]byte, 32), Context: ctx, Base: VV{}}
+		if op == OpAssign {
+			w.Value = []byte("v")
+		}
+		e, err := NewEntry(w, []byte("e"), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	rec := NewRecord(make([]byte, 16))
+	rec.Merge(mk(OpDelete, "", Dot{p, 1, 0}, VV{}), mk(OpAssign, "\x00delete", Dot{q, 2, 0}, VV{{p, 1, 0}}))
+	if !rec.Deleted() {
+		t.Fatal("an assign to \"\\x00delete\" removed the tombstone")
+	}
+	if slotOf(mk(OpAssign, "\x00delete", Dot{q, 3, 0}, VV{}).W) == slotOf(mk(OpDelete, "", Dot{p, 4, 0}, VV{}).W) {
+		t.Fatal("a field shares the delete register")
+	}
+}
