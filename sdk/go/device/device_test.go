@@ -74,6 +74,7 @@ func newHub(t *testing.T) hub {
 	mustOK(t, json.Unmarshal(out, &raw))
 	jd, err := store.ParseDescriptor(raw.JMAP)
 	mustOK(t, err)
+	jd.RebaseURLs = true // Stalwart advertises its own host name
 	id, err := store.ParseDescriptor(raw.IMAP)
 	mustOK(t, err)
 	return &testbedHub{ds: []store.Descriptor{jd, id}}

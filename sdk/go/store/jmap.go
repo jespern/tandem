@@ -72,12 +72,15 @@ func OpenJMAP(ctx context.Context, d Descriptor) (*JMAP, error) {
 	return j, nil
 }
 
-// rebase keeps the session URL's origin: a server may advertise URLs with
-// its own host name, and through a proxy the client must stay on the proxy.
+// rebase resolves a URL the server advertises. With RebaseURLs it keeps the
+// session URL's origin: through a proxy the client must stay on the proxy.
 func (j *JMAP) rebase(raw string) string {
 	u, err := j.origin.Parse(raw)
 	if err != nil {
 		return raw
+	}
+	if !j.d.RebaseURLs {
+		return u.String()
 	}
 	u.Scheme, u.Host = j.origin.Scheme, j.origin.Host
 	return u.String()
@@ -389,26 +392,31 @@ func (j *JMAP) headers(ctx context.Context, ids []string) (map[string]string, er
 func (j *JMAP) resync(ctx context.Context) ([]Ref, []string, error) {
 	var ids []string
 	state := ""
+	// Page until the reported total: a server may return fewer than the
+	// limit asked for, so a short page doesn't mean the last one.
 	for pos := 0; ; {
 		r, err := j.calls(ctx,
 			call{"Email/get", map[string]any{"accountId": j.account, "ids": []string{}}},
 			call{"Email/query", map[string]any{"accountId": j.account, "filter": map[string]any{"inMailbox": j.mailbox},
-				"position": pos, "limit": 1000}})
+				"position": pos, "limit": 1000, "calculateTotal": true}})
 		if err != nil {
 			return nil, nil, err
 		}
 		var g struct{ State string }
-		var q struct{ IDs []string }
+		var q struct {
+			IDs   []string
+			Total int
+		}
 		json.Unmarshal(r[0], &g)
 		json.Unmarshal(r[1], &q)
 		if state == "" {
 			state = g.State // before the first page: changes after it are caught next time
 		}
 		ids = append(ids, q.IDs...)
-		if len(q.IDs) < 1000 {
+		pos += len(q.IDs)
+		if len(q.IDs) == 0 || pos >= q.Total {
 			break
 		}
-		pos += len(q.IDs)
 	}
 	tags, err := j.headers(ctx, ids)
 	if err != nil {
@@ -501,8 +509,16 @@ func (j *JMAP) Destroy(ctx context.Context, ids []string) error {
 // Watch follows the EventSource (§10.2). Reconnects when neither an event
 // nor a ping arrives for two of the intervals the server says it pings at;
 // every (re)connect counts as a change, since events may have been missed.
+//
+// Fastmail keeps one EventSource connection per credential and closes the
+// older one when another opens. Devices sharing a token would knock each
+// other off for ever, so a connection that is closed soon after opening
+// backs off, doubling up to five minutes, and the back-off resets once a
+// connection lasts a minute.
 func (j *JMAP) Watch(ctx context.Context, onChange func()) error {
+	wait := time.Second
 	for ctx.Err() == nil {
+		opened := time.Now()
 		err := j.watchOnce(ctx, onChange)
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -510,9 +526,14 @@ func (j *JMAP) Watch(ctx context.Context, onChange func()) error {
 		if errors.Is(err, ErrAuth) {
 			return err
 		}
-		select { // brief back-off before reconnecting after an error
+		if time.Since(opened) > time.Minute {
+			wait = time.Second
+		} else {
+			wait = min(2*wait, 5*time.Minute)
+		}
+		select {
 		case <-ctx.Done():
-		case <-time.After(time.Second):
+		case <-time.After(wait):
 		}
 	}
 	return ctx.Err()

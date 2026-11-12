@@ -44,6 +44,7 @@ func hub(t *testing.T) (jmap, imap Descriptor, name string) {
 	if imap, err = ParseDescriptor(d.IMAP); err != nil {
 		t.Fatal(err)
 	}
+	jmap.RebaseURLs = true // Stalwart advertises its own host name
 	return jmap, imap, name
 }
 

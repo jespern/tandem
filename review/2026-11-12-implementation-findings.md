@@ -54,6 +54,10 @@ Validity (§8.2) is relative to the parent. A statement can be valid relative to
 
 The AAD carries the tag as its b32 text; the genesis numbers `n` and `key.n` from 0 and carries its 16 random bytes as `nonce`; home record names spell IDs in b64u; a key request's `have` is a 32-byte statement ID; vectors may arrive in any JSON order but name a device once; `v` only on assign and `e` only on add/remove; HLC millis at or above 2^48 are invalid. Also unspecified: pairing request, challenge and reply share a channel without a `type` field, and the reply's JSON isn't given; whether named records (`_roster` included) really carry a `_name` write. Please confirm or replace each.
 
+### 7. Fastmail allows one push connection per token (§10.2, §13.1, §18 Q1)
+
+Measured against a real Fastmail account (`ASSUMPTIONS.md`, "Fastmail"): a second EventSource connection with the same token makes the server close the first within 0.4 s; another token's connections are unaffected. Under §13.1's default, one credential shared by everyone, only one device has push at a time and the others are kicked off as soon as they reconnect. Options: require a token per device on Fastmail (a token can only be made in Fastmail's settings, by the account owner); accept push on one device and catch-up on launch elsewhere; or let one device per user hold push and relay changes, which needs something Tandem doesn't have. Which should the draft say?
+
 ## Scenario gaps worth a decision first
 
 From the 62 in `scenarios/README.md`; the scenario IDs point to the full cases.

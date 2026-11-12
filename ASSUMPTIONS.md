@@ -84,6 +84,17 @@ These need a sentence in the draft. Ranked by impact.
 
 The scenario refresh found 62 open gaps in all (`scenarios/README.md`, "Open gaps"); G-08 is item 1 above.
 
+### Fastmail, §18 Q1–Q3 (2026-11-12)
+
+Measured on a dedicated account (`liszto@noehr.org`) with API tokens; `sdk/go/store/fastmail_test.go`.
+
+- **Q1, push: yes, but one EventSource connection per token.** Push reaches API-token clients, about 0.4–0.6 s from append to another client seeing it. A second connection with the **same token** makes the server send `event: close` to the older one within 0.4 s; another token's connection is unaffected. With §13.1's default of one shared credential, only one device has push at any moment and devices knock each other off. Per-device tokens fix it, but each needs the hub owner to make a token in Fastmail's settings. **This needs a design decision** (see the review request). The Go binding backs off up to 5 minutes when connections are closed quickly, so devices sharing a token don't fight every second.
+- **Q1, limits:** `maxObjectsInSet` 4,096, `maxCallsInRequest` 50, `maxConcurrentRequests` 10, `maxSizeRequest` 10 MB. 500 appends in one `Email/set` take 2.7 s. Ten parallel small `Email/get` calls average about 0.9 s each, so batch reads instead. No rate-limit errors seen.
+- **Q1, pings:** reported as `{"interval":60}`. With `ping=0` the server sends none.
+- **Q2, headers: yes.** `Tandem-Version` and `Tandem-Channel` are stored and returned unchanged. The body is kept as `text/plain`, 7-bit, `us-ascii`. Fastmail writes its own `Date` (here with a −05:00 offset).
+- **Q3, folder size: 100,000 messages work.** Appending them took 5:48. A full resync (`Email/query` paged, plus headers) took 64 s; an incremental change 0.27 s; fetching 100 bodies 0.6 s; destroying all 16 s. At 10,000 messages the full resync took 2.1 s.
+- **Found on the way:** the JMAP binding must follow the URLs the server advertises. Fastmail's download URL is on another host, so rewriting it to the session host (which the testbed's proxy needs) is now opt-in. A full resync must page until `total`, not until a short page.
+
 ## 3. What this means for our work
 
 ### Scenarios (refresh pending)

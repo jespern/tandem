@@ -57,6 +57,12 @@ type Descriptor struct {
 	TLS      *bool  `json:"tls,omitempty"` // default true; the testbed's IMAP has none
 	User     string `json:"user,omitempty"`
 	Password string `json:"password,omitempty"`
+
+	// RebaseURLs makes the JMAP binding keep the session URL's host for the
+	// API, download and push URLs the server advertises. Only for a hub
+	// reached through a proxy, like the testbed's; real servers may put
+	// those URLs on other hosts (Fastmail does). Not part of the descriptor.
+	RebaseURLs bool `json:"-"`
 }
 
 // ErrAuth means the hub rejected the credential (§13.3).
