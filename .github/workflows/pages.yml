@@ -1,0 +1,45 @@
+# Builds tandem.airforce from DESIGN.md and site/, and publishes it on GitHub Pages.
+name: Site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - DESIGN.md
+      - site/**
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    env:
+      # The same pandoc the pages are built with locally; the runner's own is too old.
+      PANDOC: 3.13
+      PANDOC_SHA256: 7e3736f255090296ca5d1a14291a76b9b3c43cd385011b1621a4d0c16091a70f
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install pandoc
+        run: |
+          curl -fsSL -o pandoc.deb "https://github.com/jgm/pandoc/releases/download/$PANDOC/pandoc-$PANDOC-1-amd64.deb"
+          echo "$PANDOC_SHA256  pandoc.deb" | sha256sum -c -
+          sudo dpkg -i pandoc.deb
+      - name: Build
+        run: sh site/build.sh
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site/out
+      - id: deploy
+        uses: actions/deploy-pages@v5

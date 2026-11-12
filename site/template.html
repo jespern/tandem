@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$pagetitle$</title>
+$if(description)$<meta name="description" content="$description$">
+$endif$<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%20-24%2088%2088'%3E%3Cpath%20d='M15%2025%2034%2027%2052%2027%2067.4%2013M15%2025%2030.2%2011%2066.5%2011M34%2027%2029%206M52%2027%2047%206M73%2025%2064.2%206%2060.5%206M25.5%206h6.5M43.5%206h6.5'%20fill='none'%20stroke='%237b8494'%20stroke-width='3'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3Ccircle%20cx='15'%20cy='25'%20r='13'%20fill='%231d3fa8'/%3E%3Ccircle%20cx='15'%20cy='25'%20r='8.67'%20fill='%23fff'/%3E%3Ccircle%20cx='15'%20cy='25'%20r='4.33'%20fill='%23c8102e'/%3E%3Ccircle%20cx='73'%20cy='25'%20r='13'%20fill='%231d3fa8'/%3E%3Ccircle%20cx='73'%20cy='25'%20r='8.67'%20fill='%23fff'/%3E%3Ccircle%20cx='73'%20cy='25'%20r='4.33'%20fill='%23c8102e'/%3E%3C/svg%3E">
+<style>
+:root{color-scheme:light;--paper:#fff;--ink:#000;--dim:#565c68;--rule:#cdd2da;--wash:#f3f4f7;--blue:#00247d;--seen:#4b2a86;--ring:#00247d;--red:#c8102e}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;padding:2.5rem 1.25rem 7rem clamp(1.25rem,9vw,10rem);background:var(--paper);color:var(--ink);font:1.0625rem/1.55 Charter,"Bitstream Charter","Sitka Text",Cambria,serif;overflow-wrap:break-word;container-type:inline-size}
+::selection{background:var(--blue);color:var(--paper)}
+a{color:var(--blue);text-decoration-thickness:1px;text-underline-offset:.16em}
+a:visited{color:var(--seen)}
+a:hover{text-decoration-thickness:2px}
+a:focus-visible{outline:2px solid var(--blue);outline-offset:2px;border-radius:2px}
+.crumbs,h2,h3,p,ul,ol,hr,.front{max-width:37rem}
+h1{max-width:46rem}
+.crumbs{margin:0 0 2.2rem;font-size:.94rem}
+.tagline{margin:-.6rem 0 1.6rem;font-size:1.2rem;line-height:1.4}
+h1,h2,h3{line-height:1.2;text-wrap:balance;scroll-margin-top:1rem}
+h1{display:flex;align-items:flex-start;gap:.5em;margin:0 0 1.6rem;font-size:2.1rem;letter-spacing:-.01em}
+.mark{flex:none;width:2.75em;height:1.25em;margin-top:-.03em;color:var(--dim)}
+h2{margin:3.2rem 0 .7rem;padding-top:1.3rem;border-top:1px solid var(--rule);font-size:1.45rem}
+h3{margin:2.2rem 0 .5rem;font-size:1.12rem}
+p,ul,ol{margin:0 0 .9rem}
+ul,ol{padding-left:1.3em}
+li{margin:.25rem 0}
+hr{border:0;border-top:1px solid var(--rule);margin:1.5rem 0}
+nav{columns:3 15rem;column-gap:2.5rem;max-width:62rem;margin:1.8rem 0 0;font-size:.94rem;font-variant-numeric:tabular-nums}
+nav ul{list-style:none;margin:0;padding:0}
+nav > ul > li{break-inside:avoid;margin:0 0 .7rem}
+nav li{margin:.1rem 0}
+nav ul ul{padding-left:1.3em;font-size:.94em}
+nav a{text-decoration:none}
+nav a:hover{text-decoration:underline}
+table{border-collapse:collapse;max-width:min(100%,64rem);margin:1.3rem 0 1.6rem;font-size:.94rem;line-height:1.42;font-variant-numeric:tabular-nums}
+th,td{padding:.45rem 1.2rem .45rem 0;border-bottom:1px solid var(--rule);text-align:left;vertical-align:top}
+td code,th code{overflow-wrap:anywhere}
+.date{white-space:nowrap}
+@media (max-width:22rem){th,td{overflow-wrap:anywhere}}
+th{border-bottom-color:var(--ink)}
+th:last-child,td:last-child{padding-right:0}
+code,pre{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+code{font-size:.86em}
+pre{box-sizing:border-box;width:max-content;max-width:100%;margin:1.2rem 0 1.5rem;padding:.9rem 1.1rem;background:var(--wash);white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5;font-size:clamp(.7rem,calc((100cqw - 2.2rem)/(var(--cols)*.62)),.88rem)}
+pre.diagram{white-space:pre;line-height:1.25;font-size:min(.88rem,calc((100cqw - 2.2rem)/(var(--cols)*.62)))}
+pre code{font-size:inherit}
+@media (max-width:40rem){body{padding-top:1.5rem;font-size:1rem}h1{font-size:1.7rem}h2{font-size:1.3rem}}
+</style>
+</head>
+<body>
+<p class="crumbs"><a href="https://noehr.org">Jesper Nøhr</a>$if(front)$$else$ / <a href="index.html">Tandem</a>$endif$</p>
+<h1><svg class="mark" viewBox="0 0 88 40" aria-hidden="true"><path d="M15 25 34 27 52 27 67.4 13M15 25 30.2 11 66.5 11M34 27 29 6M52 27 47 6M73 25 64.2 6 60.5 6M25.5 6h6.5M43.5 6h6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="15" cy="25" r="13" fill="var(--ring)"/><circle cx="15" cy="25" r="8.67" fill="#fff"/><circle cx="15" cy="25" r="4.33" fill="var(--red)"/><circle cx="73" cy="25" r="13" fill="var(--ring)"/><circle cx="73" cy="25" r="8.67" fill="#fff"/><circle cx="73" cy="25" r="4.33" fill="var(--red)"/></svg><span>$title$</span></h1>
+$if(front)$
+<div class="front">
+$for(include-before)$
+$include-before$
+$endfor$
+</div>
+$else$
+$for(include-before)$
+$include-before$
+$endfor$
+$endif$
+$if(toc)$
+<nav>
+$table-of-contents$
+</nav>
+$endif$
+$body$
+</body>
+</html>
