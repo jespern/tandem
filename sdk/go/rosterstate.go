@@ -183,6 +183,16 @@ func (r *Roster) Add(w *Write, inEpoch []byte) error {
 	return nil
 }
 
+// Announced lists the epoch-starting statements seen announced.
+func (r *Roster) Announced() [][]byte {
+	var out [][]byte
+	for id := range r.announced {
+		out = append(out, []byte(id))
+	}
+	slices.SortFunc(out, bytes.Compare)
+	return out
+}
+
 // Announce marks an epoch-starting statement as announced, as a verified
 // grant for it does (§11.6).
 func (r *Roster) Announce(id []byte) { r.announced[string(id)] = true }

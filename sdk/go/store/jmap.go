@@ -250,6 +250,9 @@ func (j *JMAP) Append(ctx context.Context, tag string, env []byte) (string, erro
 
 // AppendBatch appends several envelopes, up to maxObjectsInSet per request.
 func (j *JMAP) AppendBatch(ctx context.Context, tags []Ref, envs [][]byte) ([]string, error) {
+	if err := j.folder(ctx); err != nil {
+		return nil, err
+	}
 	var ids []string
 	for start := 0; start < len(envs); start += j.maxSet {
 		create := map[string]any{}
@@ -278,7 +281,22 @@ func (j *JMAP) AppendBatch(ctx context.Context, tags []Ref, envs [][]byte) ([]st
 	return ids, nil
 }
 
+// folder finds the Tandem mailbox the first time it's needed, so a client
+// opened after a restart works without an explicit EnsureFolder.
+func (j *JMAP) folder(ctx context.Context) error {
+	j.mu.Lock()
+	known := j.mailbox != ""
+	j.mu.Unlock()
+	if known {
+		return nil
+	}
+	return j.EnsureFolder(ctx)
+}
+
 func (j *JMAP) Changes(ctx context.Context) ([]Ref, []string, error) {
+	if err := j.folder(ctx); err != nil {
+		return nil, nil, err
+	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.state == "" {

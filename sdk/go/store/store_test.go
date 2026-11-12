@@ -239,3 +239,24 @@ func TestMovedOut(t *testing.T) {
 		}
 	}
 }
+
+// A client opened after a restart reads and appends without calling
+// EnsureFolder first (found by the device crash tests on the testbed).
+func TestNoEnsureFolderNeeded(t *testing.T) {
+	jd, id, _ := hub(t)
+	ctx := context.Background()
+	open(t, jd) // creates the folder
+	for _, d := range []Descriptor{jd, id} {
+		s, err := Open(ctx, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		if _, _, err := s.Changes(ctx); err != nil {
+			t.Fatalf("%s changes without EnsureFolder: %v", d.Kind, err)
+		}
+		if _, err := s.Append(ctx, "tag", []byte("TNDM\x01\x01")); err != nil {
+			t.Fatalf("%s append without EnsureFolder: %v", d.Kind, err)
+		}
+	}
+}

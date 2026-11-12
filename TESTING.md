@@ -9,9 +9,9 @@ How Tandem is verified, what exists, and what waits. The protocol itself is in `
 | Layer | Where | Language | Status |
 |---|---|---|---|
 | Testbed: a real JMAP + IMAP server with per-device network faults and hostile-hub tools | `testbed/` | Docker; Python standard library for `tb` | Done. 42 binding and real-time probes pass on Stalwart 1.1.0 |
-| Scenarios: 323 cases and families, with a format a harness can execute | `scenarios/` | Markdown | Drafted against an earlier design; refresh pending (`ASSUMPTIONS.md`) |
-| Reference model: the merge and roster rules, executable and proved | `proofs/` | Lean 4 + Mathlib | Project builds; theorems planned in `proofs/README.md` |
-| Reference SDK: the whole protocol, the harness driver, test vectors | `sdk/go/` | Go 1.26 | Primitives and both bindings (`sdk/go/store`, IMAP on emersion/go-imap v2) done; `vectors/v1` (14 files); round trips pass on the testbed (`TANDEM_TESTBED=1 go test ./store`) |
+| Scenarios: 340 cases and families, with a format a harness can execute | `scenarios/` | Markdown | Refreshed against the frozen draft; 62 open gaps listed in its README |
+| Reference model: the merge and roster rules, executable and proved | `proofs/` | Lean 4 + Mathlib | All planned modules proved; `tandem-oracle` (`proofs/ORACLE.md`) agrees with `model/owner_model.py` over 5,300 random runs (`proofs/difftest.py`) |
+| Reference SDK: the whole protocol, the harness driver, test vectors | `sdk/go/` | Go 1.26 | Primitives and both bindings (`sdk/go/store`, IMAP on emersion/go-imap v2) done; `vectors/v1` (14 files); round trips pass on the testbed (`TANDEM_TESTBED=1 go test ./store`). Engine (`merge.go`, `rosterstate.go`, `device/`): collections, members, grants, the journalled key change, finishing or discarding another device's; crash tests at 10 points, both ways, on an in-memory hub and on the testbed |
 | Production SDK | `sdk/swift/` | Swift 6.4 (CryptoKit) | Primitives done; passes every vector |
 
 ## How they fit

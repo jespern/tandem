@@ -72,6 +72,18 @@ Writing the vectors meant choosing bytes where the frozen draft is silent; `vect
 
 Also open: whether named records (`_roster` included) really carry a `_name` write (§7.3), and in which scope a genesis's would be signed.
 
+### New, from the Go engine and the proofs (2026-11-12)
+
+These need a sentence in the draft. Ranked by impact.
+
+1. **Resuming a key change can kill the collection (§8.2, §11.6; scenario gap G-08).** Found by `device_test.go`, crash point `2:journal`. The first device journals its signed statement and crashes before writing the note. The second device sees no note and makes the change itself. The first restarts and, as §11.6 says, "resumes with the same signed bytes": two successors, dead. **Fix (implemented):** signed bytes that were never exported may be dropped. On resume, a device that hadn't written its note uses its statement only if the parent is still the head and no other note is present. And just before announcing, a device checks that the note is still its own and the parent still the head; otherwise it drops the change and tells the user.
+2. **Which register a delete belongs to (§9.2; Lean F1).** Not stated. Read by (record, field), as `owner_model.py` does, a covering assign drops a tombstone. Read as its own register, as Lean and the Go engine do, only a delete supersedes a delete. The SDKs must agree.
+3. **Inventory entries with no writes (§8.3; Lean F3).** The format allows them, so the bytes aren't a function of the listed set. Require at least one write per entry.
+4. **"Valid roster statement" (§8.3).** A statement can be valid relative to an invalid parent. The Go engine accepts data only under a statement whose whole chain back to the genesis is valid.
+5. **Our plan, not the design (Lean F2).** A re-signed write *can* supersede a write the snapshot kept, rightly: it replaces it again. `Reissue` proves what holds instead.
+
+The scenario refresh found 62 open gaps in all (`scenarios/README.md`, "Open gaps"); G-08 is item 1 above.
+
 ## 3. What this means for our work
 
 ### Scenarios (refresh pending)
