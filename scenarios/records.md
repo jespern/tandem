@@ -1,8 +1,8 @@
 # Records, writes and merge
 
-Scope: creating, editing and deleting records; how concurrent writes merge (registers, siblings, sets, tombstones, unknown fields, clocks, `context` and `base` across epochs); when a data write is valid; how Liszto's items map onto all of it; and what a member with a modified client can do to a collection's data.
+Scope: creating, editing and deleting records; how concurrent writes merge (registers, siblings, sets, tombstones, unknown fields, clocks, `context` and `base` across epochs, the 1,024-entry vector limit); when a data write is valid and eligible in an epoch; how Liszto's items map onto all of it; and what a member with a modified client can do to a collection's data.
 
-Conventions for this file: unless a scenario says otherwise, `Groceries` is owned by J with A as writer and is in epoch 4. It holds items `milk`, `eggs` and `bread`, created by A.phone, each with Liszto's fields (§17): registers `title`, `notes`, `parentID`, `sortKey`, `completedAt`, and the set `tags`. `House` is a second collection owned by J with A as writer. A step names the write it creates in parentheses (`j1`). **Kept** is the set of valid writes to a field (or to one set element) that no other valid write supersedes (§9.3). **Displayed** is the kept write greatest by `(epoch, hlc, author, deviceID, writeID)` (§9.2). **Reported** means Tandem tells the app the field has concurrent values (§9.2, §13.2). Vectors are written `{device: hlc}`; where only order matters, HLCs are small integers. `MAX` is an HLC millis of 2^48 − 1.
+Conventions for this file: unless a scenario says otherwise, `Groceries` is owned by J with A as writer and is in epoch `E4` (labels as in `rotation.md`: the protocol knows an epoch only by its starting statement's ID, §7.1). It holds items `milk`, `eggs` and `bread`, created by A.phone, each with Liszto's fields (§17): registers `title`, `notes`, `parentID`, `sortKey`, `completedAt`, and the set `tags`. `House` is a second collection owned by J with A as writer. A step names the write it creates in parentheses (`j1`). **Kept** is the set of valid writes to a field (or to one set element) that no other valid write supersedes (§9.3). **Displayed** is the kept write greatest by `(epoch, hlc, author, deviceID, writeID)` (§9.2). **Reported** means Tandem tells the app the field has concurrent values (§9.2, §13.2). Vectors are written `{device: hlc}`; where only order matters, HLCs are small integers. `MAX` is an HLC millis of 2^48 − 1.
 
 ---
 
@@ -60,22 +60,20 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
 
 ### RC-004 Jesper renames the list while Aimee ticks items off
 - **Kind:** real-world
-- **Design:** §7.3, §8.2, §9.4, §17
+- **Design:** §7.3, §8.3, §9.2, §17
 - **Binding:** any
 - **Setup:** Default. `J.phone` offline.
 - **Steps:**
-  1. `J.phone` renames `Groceries` to "Shopping" (a `_collection` write, hlc T).
-  2. `J.mac` renames `Groceries` to "Food" (hlc T + 60 s).
+  1. `J.phone` renames `Groceries` to "Shopping" (a `_meta` write, hlc T).
+  2. `J.mac` renames `Groceries` to "Food" (hlc T + 60 s), not having seen step 1.
   3. `A.phone sets milk.completedAt = now`; `A.phone sets eggs.completedAt = now`.
   4. `J.phone online`; every device syncs.
 - **Expect:**
-  - Every device shows the list as "Food": of two log writes that count and that neither builds on, the greater `(hlc, author, deviceID, writeID)` wins (§9.4).
+  - `_meta.name` holds two siblings; every device shows "Food" (greater `(epoch, hlc, …)`) and reports "Shopping".
   - `milk` and `eggs` are ticked on every device.
-  - Both rename writes stay in `_collection` on the hub; log writes are never discarded (§9.4).
-  - The epoch stays 4.
-  - `A.phone` offers no rename action (§7.3; Liszto appoints no admins, §17).
+  - No roster statement and no key change: `_meta` is an ordinary data record (§8.1).
+  - `A.phone` offers no rename action; a rename from a modified client is rejected (§8.3).
 - **Invariants:** INV-CONVERGE, INV-AUTHZ, INV-MONOTONE-EPOCH
-- **Notes:** Every rename is a log write copied at every rotation for the life of the list (Q16, SC-007).
 
 ### RC-005 Offline edits on a plane
 - **Kind:** real-world
@@ -131,7 +129,7 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
   - After step 6: kept for `organic` = {`r2`}; `milk.tags` = {dairy}.
   - Nothing is reported for `tags`; sets have no siblings to show.
 - **Invariants:** INV-CONVERGE
-- **Notes:** GAP: §17 maps `tags` to a set but doesn't say how a tag becomes element bytes. "Café" typed on iOS (NFC) and pasted on macOS (NFD), or "Dairy" and "dairy", become distinct elements, and one device's remove never touches the other's add. The mapping needs a normalization rule, or the app must define one.
+- **Notes:** §9.1 and §10.5 settle the bytes: set elements, like field names, are compared as UTF-8 bytes, so "Café" typed on iOS (NFC) and pasted on macOS (NFD), or "Dairy" and "dairy", are distinct elements. Normalising tags is Liszto's job (§17 doesn't yet say how).
 
 ### RC-008 Undo after delete
 - **Kind:** real-world
@@ -149,7 +147,7 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
   - After step 5: `A.phone` shows exactly one "Eggs" item, a new record with `notes` "Large". The old `eggs` record is tombstoned on the hub and holds `aN`. "Organic" appears nowhere.
   - The restored records' writes are authored by J; Liszto's "added by" shows Jesper, no longer Aimee.
 - **Invariants:** INV-CONVERGE, INV-UX
-- **Notes:** ⌘Z is outside the step vocabulary. GAP: §10.7 coalesces *publishes*, but nothing says whether a signed, unpublished write (step 1's delete) may be withdrawn rather than published. If it may, undo inside the debounce keeps the record ID; otherwise it never does. GAP: undo-by-recreation changes record identity and authorship (against goal 5, attribution) and silently drops concurrent edits made on other devices (`aN`); §17 says nothing about how Liszto should restore an item or rewrite references to it (`parentID`, RC-010).
+- **Notes:** ⌘Z is outside the step vocabulary. GAP (G-29): §10.7 coalesces *publishes*, but nothing says whether a signed, unpublished write (step 1's delete) may be withdrawn rather than published. If it may, undo inside the debounce keeps the record ID; otherwise it never does. GAP (G-30): undo-by-recreation changes record identity and authorship (against goal 5, attribution) and silently drops concurrent edits made on other devices (`aN`); §17 says nothing about how Liszto should restore an item or rewrite references to it (`parentID`, RC-010).
 
 ### RC-009 Moving an item while the other person edits it
 - **Kind:** real-world
@@ -165,7 +163,7 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
   - Every device shows "Batteries" in `House` and nothing in `Groceries`.
   - The hub's `Groceries` state for `batteries` holds J's `delete` and `a`. "AA batteries" is shown nowhere.
 - **Invariants:** INV-CONVERGE, INV-UX
-- **Notes:** GAP: delete-wins is deliberate (§9.2), but for a move the losing edit is a live user's change, made in good faith, to an item that still exists elsewhere. Tandem gives the app no signal that a write landed on a tombstoned record, so Liszto can't tell A her edit was dropped (INV-UX).
+- **Notes:** GAP (G-31): delete-wins is deliberate (§9.2), but for a move the losing edit is a live user's change, made in good faith, to an item that still exists elsewhere. Tandem gives the app no signal that a write landed on a tombstoned record, so Liszto can't tell A her edit was dropped (INV-UX).
 
 ### RC-010 A sub-item added under a parent that is being deleted
 - **Kind:** real-world
@@ -182,9 +180,9 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
   - `candles` is a live record whose `parentID` names a deleted record.
   - Every device shows `candles` in the same place, and no device writes to `candles` unless exactly one repair write results.
 - **Invariants:** INV-CONVERGE, INV-QUIESCE
-- **Notes:** That Liszto deletes children with their parent is an assumption, flagged for the harness. GAP: §17 maps `parentID` to a register but says nothing about a sub-item whose parent is deleted (show at top level, hide, delete). If Liszto repairs orphans by writing, every device that sees one repairs it at once (the RC-039 problem). After an undo (RC-008) the parent comes back under a new ID and the orphan still points at the old one.
+- **Notes:** That Liszto deletes children with their parent is an assumption, flagged for the harness. GAP (G-32): §17 maps `parentID` to a register but says nothing about a sub-item whose parent is deleted (show at top level, hide, delete). If Liszto repairs orphans by writing, every device that sees one repairs it at once (the RC-039 problem). After an undo (RC-008) the parent comes back under a new ID and the orphan still points at the old one.
 
-### RC-011 The share extension saves a link while the app edits, during a rotation
+### RC-011 The share extension saves a link while the app edits, during a key change
 - **Kind:** real-world
 - **Design:** §9.1, §11.6, §17 (extension direct-save)
 - **Binding:** any
@@ -192,15 +190,15 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
 - **Steps:**
   1. `J.phone sets milk.title = "Milk 2L"`; at the same moment the share extension on `J.phone` saves a URL to `Groceries` as a new item `link1`.
   2. `J.phone syncs`; `A.phone syncs`.
-  3. `J.phone quits`. `J.mac rotates Groceries` (epoch 5).
+  3. `J.phone quits`. `J.mac` asks for a new key for Groceries (`E5`).
   4. The share extension on `J.phone` saves a URL as item `link2`, without the app running.
   5. `J.mac syncs`; `A.phone syncs`; `J.phone launches`.
 - **Expect:**
   - The writes from step 1 have distinct dots on `J.phone` with strictly increasing HLCs; no two writes from `J.phone` share a dot.
   - `A.phone` shows "Milk 2L" and `link1` after step 2.
-  - `link2` appears on every device in epoch 5 within one sync of the device that publishes or forwards it, and `A.phone` never reads it from the epoch-4 channel only.
-- **Invariants:** INV-CONVERGE, INV-NO-LOSS, INV-CUT
-- **Notes:** Extension actions are outside the step vocabulary. GAP: §11.6 requires a device to sync a channel before publishing to it, so that it learns of a rotation first, but §17's extension "appends one record message" directly. Nothing says the extension checks the channel's `_epoch` or how it learns the current epoch key. If it appends to epoch 4, `link2` survives only as a forwarded late write. Had the rotation removed a member, it would also have been readable by them (§11.6).
+  - `link2` appears on every device in `E5`: either the extension wrote it there, or the app signed it again on launch.
+- **Invariants:** INV-CONVERGE, INV-NO-LOSS
+- **Notes:** Extension actions are outside the step vocabulary. See G-16 (`faults.md` FT-024) for the extension publishing into an old epoch.
 
 ---
 
@@ -239,42 +237,41 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
   - `A.phone`'s next write carries an HLC near its own clock, not near `J.mac`'s (devices don't adopt other devices' clocks).
 - **Invariants:** INV-CONVERGE
 
-### RC-014 Offline edits queued across a rotation
+### RC-014 Offline edits queued across a key change
 - **Kind:** edge
-- **Design:** §8.3, §9.1, §9.2, §11.6
+- **Design:** §8.3, §9.2, §11.6 (signing again)
 - **Binding:** any
 - **Setup:** Default, with B also a writer.
 - **Steps:**
   1. `J.phone offline`.
-  2. `J.phone sets milk.title = "Oat milk"` (`j`, stamped epoch 4).
-  3. `J.mac removes B`; `J.mac syncs` (rotation to epoch 5).
-  4. `A.phone sets milk.title = "Whole milk"` (`a`, epoch 5).
+  2. `J.phone sets milk.title = "Oat milk"` (`j`, naming an `E4` statement), not published.
+  3. `J.mac removes B` (`E5`).
+  4. `A.phone sets milk.title = "Whole milk"` (`a`, in `E5`).
   5. `J.phone online`; `J.phone syncs`; all sync.
 - **Expect:**
-  - `J.phone` appends nothing to the epoch-4 channel after coming online; it switches to epoch 5 first.
-  - `j` reaches the epoch-5 channel stamped epoch 4, named by a `_carried` write that `J.phone` signs in epoch 5.
-  - Kept {`j`, `a`}. Every device shows "Whole milk" (epoch 5 beats epoch 4 in the display order) and reports "Oat milk".
-  - `B.phone` cannot read `j`.
+  - `J.phone` appends nothing to channel `E4` after coming online; it moves to `E5` first.
+  - `j` isn't in `inv(E5)`, so `J.phone` signs it again as `j'`: same dot, empty context, base = `j.base` ∪ `reach(j)`, `ref` = the first `E5` statement listing J.
+  - Kept {`j'`, `a`}: neither covers the other's dot. The displayed one is the greater by `(epoch, hlc, author, deviceID, writeID)`; both are `E5`, so the later HLC wins (here `a`, "Whole milk"), and "Oat milk" is reported.
+  - `B.phone` cannot read `j'`.
 - **Invariants:** INV-CONVERGE, INV-CUT, INV-NO-LOSS
-- **Notes:** GAP: §11.6 says the device "publishes what it queued" but not how. The Expect follows §9.1 (a write keeps the epoch it was authored in), which means the device must vouch for its own writes with `_carried`; §11.6 describes vouching only for late writes found in the old channel. Since `j` was never published, an SDK may instead discard and re-sign it as an epoch-5 write after merging. That gives kept {`j'`}, "Oat milk", and no conflict. Both are internally consistent, but users see a different title for the same history depending on the SDK.
 
-### RC-015 A write lands in the old channel during a rotation
+### RC-015 A write lands in the old channel during a key change
 - **Kind:** edge
-- **Design:** §8.3 (carried), §9.2, §11.6 (late writes)
+- **Design:** §8.3, §9.2, §11.6 (signing again)
 - **Binding:** any
-- **Setup:** Default, with B also a writer. `A.mac clock = +1 min`. `milk.completedAt` holds an epoch-4 write `c4`.
+- **Setup:** Default, with B also a writer. `A.mac clock = +1 min`. `milk.completedAt` holds an `E4` write `c4`.
 - **Steps:**
-  1. `A.mac syncs` (epoch 4 current).
-  2. `J.mac removes B`; `J.mac syncs` (genesis for epoch 5 appended to both channels; the snapshot's `_carried` for `milk` names `c4`).
-  3. `A.mac sets milk.title = "Milk 1L"` (`x`, stamped 4) and appends it to the epoch-4 channel without re-syncing.
-  4. `A.phone syncs`; `A.phone sets milk.title = "Whole milk"` (`a5`, epoch 5).
-  5. `J.mac syncs` (sees `x`, which changes its old replica, and forwards it); all sync.
+  1. `A.mac syncs` (`E4` current).
+  2. `J.mac removes B`; it fixes `inv(E5)` (listing `c4`).
+  3. `A.mac sets milk.title = "Milk 1L"` (`x`) and appends it to channel `E4` without re-syncing.
+  4. `J.mac` announces `E5`. `A.phone syncs`; `A.phone sets milk.title = "Whole milk"` (`a5`, in `E5`).
+  5. `A.mac syncs`; all sync.
 - **Expect:**
-  - `x` is valid in epoch 5 on every device, named by a `_carried` write from a member write-enabled in epoch 5. If several devices forward it, every forward is valid and the result is the same.
-  - Kept for `milk.title` = {`x`, `a5`}. Every device shows "Whole milk", although `x` has the greater HLC, and reports "Milk 1L".
-  - `milk.completedAt` still shows `c4` after the forward.
+  - `x` isn't eligible in `E5` as it stands. `A.mac` (its author's device) signs it again as `x'`; no other device forwards it.
+  - Kept for `milk.title` = {`x'`, `a5`}: `a5` never saw `x`. Both are `E5`; `x'` keeps `x`'s dot, whose HLC (one minute fast) is the greater, so every device shows "Milk 1L" and reports "Whole milk".
+  - `milk.completedAt` still shows `c4`.
 - **Invariants:** INV-CONVERGE, INV-NO-LOSS
-- **Notes:** The interleaving of step 3 (sync, then genesis, then append) must be forced by the harness. The last Expect item fails under a literal reading of §8.3 and §9.2; see RC-033.
+- **Notes:** The interleaving of step 3 must be forced by the harness. That an old dot can outrank a newer write in the display order is a consequence of keeping the dot when signing again (§11.6).
 
 ### RC-016 Concurrent `parentID` changes make a cycle and a second level
 - **Kind:** edge
@@ -291,64 +288,62 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
   - Every device shows the same one-level tree, with no cycle and no item two levels deep.
   - Devices either write nothing or produce exactly one repair write per item.
 - **Invariants:** INV-CONVERGE, INV-QUIESCE
-- **Notes:** GAP: §17 maps `parentID` to a per-record register, so concurrent moves can produce a cycle (cake → party → cake) or two levels (candles → cake → party), which Liszto's "one level of sub-items" forbids. Nothing says how the app derives a deterministic tree from such state, or which device, if any, repairs it.
+- **Notes:** GAP (G-33): §17 maps `parentID` to a per-record register, so concurrent moves can produce a cycle (cake → party → cake) or two levels (candles → cake → party), which Liszto's "one level of sub-items" forbids. Nothing says how the app derives a deterministic tree from such state, or which device, if any, repairs it.
 
-### RC-017 Unknown fields from a newer app version
+### RC-017 Unknown fields and operations from a newer app version
 - **Kind:** edge
 - **Design:** §9.1, §9.2 (unknown fields), §10.5, §10.7, §11.6, §15
 - **Binding:** any
-- **Setup:** Default. `J.mac` and `J.ipad` run Liszto v2, which adds the register `priority`, the set `assignees`, and writes a reserved field `_pin`. `J.phone` (an owner device) and `A.phone` run v1.
+- **Setup:** Default. `J.mac` and `J.ipad` run Liszto v2, which adds the register `priority`, the set `assignees`, and a reserved field `_pin`. `J.phone` (an owner device) and `A.phone` run v1.
 - **Steps:**
   1. `J.mac sets milk.priority = "high"`; `J.mac tags milk.assignees +A`; `J.mac sets milk._pin = 1`; all sync.
   2. `A.phone sets milk.title = "Milk 2L"`; `A.phone syncs` and destroys J.mac's message, now dominated (§10.7).
   3. `J.mac` and `J.ipad`, both offline, set `milk.priority` to "low" and "urgent"; both online; all sync.
-  4. `J.phone rotates Groceries`.
+  4. `J.phone` asks for a new key.
+  5. A v2 client publishes a write with `op` 5 to `milk.flags`.
 - **Expect:**
   - After step 2 the hub's message for `milk`, published by `A.phone`, contains J.mac's `priority`, `assignees` and `_pin` writes byte-identical (same `v`, same `s`).
   - `J.mac` shows `priority` high and title "Milk 2L".
   - After step 3, v1 devices keep both `priority` siblings and write nothing to `priority`; v2 devices report the conflict.
-  - After step 4, `J.phone`'s epoch-5 snapshot names every `priority`, `assignees` and `_pin` write in `_carried`, and `J.mac` still shows them.
+  - After step 4, `inv(E5)` lists every `priority`, `assignees` and `_pin` write, and `J.mac` still shows them.
+  - Step 5: every v1 device reaches the same verdict on the `op` 5 write and doesn't destroy a message holding it.
 - **Invariants:** INV-CONVERGE, INV-NO-LOSS, INV-GC-SAFE
-- **Notes:** GAP: §9.1 reserves `_` names and §15 lets payloads gain keys, but neither says whether a v1 client keeps a write to an unknown `_` field, or a write with an unknown `op` value (say 5), or drops it as malformed (§8.3). A client that drops them and then publishes and garbage-collects (step 2) destroys v2 data.
+- **Notes:** GAP (G-23): §9.2 carries unknown *fields*, but nothing says whether a write with an unknown `op` value is carried like an unknown field, dropped as malformed (§8.3), or makes the message "a version it doesn't understand" (§15). A client that drops it and then garbage-collects destroys v2 data.
 
-### RC-018 Writes that arrive before the log entry admitting them
+### RC-018 Writes that arrive before the statement admitting their author
 - **Kind:** edge
-- **Design:** §6.2, §8.3 (held), §9.2, §9.4
+- **Design:** §8.3 (held), §9.2 (building a write), §10.7
 - **Binding:** any
 - **Setup:** Default. B not yet a member.
 - **Steps:**
-  1. `B.phone joins via link` to `Groceries`; `J.mac approves B`.
-  2. `hub: withhold J.mac's roster message from A.phone`.
-  3. `B.phone syncs`; `B.phone adds chips to Groceries`; `B.phone sets milk.title = "Milk!"` (`b`).
+  1. `B.phone joins via link` to `Groceries`; `J.mac approves B` (statement `s`).
+  2. `hub: withhold` the message holding `s` from `A.phone`.
+  3. `B.phone syncs`; `B.phone adds chips to Groceries`; `B.phone sets milk.title = "Milk!"` (`b`, `ref` = `s`).
   4. `A.phone syncs`; `A.phone sets milk.title = "Milk 2L"` (`a`).
-  5. `J.phone pairs J.ipad`; `hub: withhold J's profile messages from A.phone`; `J.ipad adds napkins to Groceries`; `A.phone syncs`.
-  6. Hub stops withholding; `A.phone syncs`.
+  5. The hub stops withholding; `A.phone syncs`.
 - **Expect:**
-  - After step 4, `A.phone` shows neither `chips` nor "Milk!" and shows no error. B's writes are held, not dropped.
-  - After step 5, `A.phone` doesn't show `napkins` (J.ipad's device entry not yet seen).
-  - After step 6, `A.phone` shows `chips` and `napkins` without any new write, and holds no held writes.
+  - After step 4, `A.phone` shows neither `chips` nor "Milk!" and shows no error. B's writes are held (they name a statement it doesn't have), not dropped.
+  - `a`'s context doesn't cover `b`: held writes aren't kept writes, so they don't enter a new write's vectors (§9.2).
+  - A message holding `b` isn't destroyed meanwhile: held writes count for domination (§10.7).
+  - After step 5, `A.phone` shows `chips`; kept for `milk.title` = {`a`, `b`} and the conflict is reported.
 - **Invariants:** INV-CONVERGE, INV-AUTHZ, INV-NO-HOLD-FOREVER
-- **Notes:** "Stops withholding" is outside the step vocabulary. GAP: §9.2 builds a write's context from "kept writes" and doesn't say whether held writes count. If `a`'s context covers `b`, kept for `milk.title` is {`a`}; if not, it is {`a`, `b`} with a conflict reported. Which one users see depends on the SDK.
+- **Notes:** "Stops withholding" is outside the step vocabulary.
 
-### RC-019 A removed member's last edit, before and after the rotation
+### RC-019 A removed member's last edit, before and after the inventory
 - **Kind:** edge
 - **Design:** §3.3, §8.3, §11.6
 - **Binding:** any
-- **Setup:** Default, with B also a writer. `J.phone` offline.
+- **Setup:** Default, with B also a writer.
 - **Steps:**
-  1. `J.mac removes B`.
-  2. `B.phone`, not yet synced, `adds wine to Groceries` and publishes to epoch 4.
-  3. `A.phone syncs`.
-  4. `J.mac syncs` (it merges `wine` after its own removal write, then rotates to epoch 5).
-  5. `J.phone online`; `J.phone syncs` (it sees `wine` in the epoch-4 channel).
-  6. All sync.
+  1. `B.phone adds wine to Groceries` and publishes it to `E4`.
+  2. `J.mac removes B`: it syncs and fixes `inv(E5)` (S1–S2), then announces.
+  3. Variant: `B.phone` publishes `wine` only after `J.mac` fixed `inv(E5)` and before the announcement; `A.phone` syncs in between and shows it.
+  4. All sync.
 - **Expect:**
-  - After step 3, `A.phone` shows `wine`: B is write-enabled in epoch 4 until the rotation (§8.3).
-  - J.mac's epoch-5 snapshot doesn't name `wine`'s writes.
-  - After step 6, `wine` is absent on every device in epoch 5 (§3.3: a cut member's old-epoch writes aren't forwarded).
-  - `A.phone`, which showed `wine`, is told it disappeared.
-- **Invariants:** INV-CUT, INV-AUTHZ, INV-NO-LOSS, INV-UX
-- **Notes:** GAP: §11.6 lets a device forward "only writes whose author was entitled to make them" without saying *when* entitled. B was entitled in epoch 4, and §8.3 accepts a `_carried` signed by any write-enabled member, so `J.phone` forwarding `wine` at step 5 makes it valid in epoch 5, contradicting §3.3 and the snapshot rule. The same holds for a demoted writer. GAP: no part of the design tells the app that an item it displayed was left behind by a rotation; the last Expect item has no mechanism.
+  - Main run: `wine` is in `inv(E5)`, carried with B's signature, and shows author B on every device. B wrote before the change took effect (§3.3).
+  - Variant: `wine` is valid in `E4` but not eligible in `E5`, and B can't sign it again (no `E5` statement lists B). It disappears from `A.phone` when A moves to `E5`.
+- **Invariants:** INV-CUT, INV-AUTHZ, INV-UX
+- **Notes:** GAP (G-24, minor): nothing tells the app that an item it displayed was left behind by a key change (§11.6, "another user's late write can be lost"). Liszto can't explain the vanished item.
 
 ### RC-020 Sets: replayed adds, concurrent removes, removing what was never added
 - **Kind:** edge
@@ -382,7 +377,7 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
   - `batteries` in `Groceries` is deleted; its state holds both `delete` writes.
   - `House` holds one "Batteries" (created by J); A's `Later` holds another (created by A). A sees both; J sees one.
 - **Invariants:** INV-CONVERGE
-- **Notes:** GAP: §17 keeps move as "create in target + delete in source (unchanged)". Nothing links the copies to the original, so concurrent moves duplicate and no device can detect it. The design should say so, or record the source in the new record.
+- **Notes:** GAP (G-34): §17 keeps move as "create in target + delete in source (unchanged)". Nothing links the copies to the original, so concurrent moves duplicate and no device can detect it. The design should say so, or record the source in the new record.
 
 ---
 
@@ -421,7 +416,7 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
 
 ### RC-024 A context claiming the future erases edits not yet made
 - **Kind:** adversarial
-- **Design:** §9.2, §9.3
+- **Design:** §9.2, §9.3, §1.2
 - **Binding:** any
 - **Setup:** Default, with M a writer. `milk.title` kept {`a0`, dot `(A.phone, T − 1 h)`}. `J.phone` offline since before T.
 - **Steps:**
@@ -434,9 +429,9 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
   - After step 3: kept {`j1`, `j2`}. The two writes include each other because both contexts carry M's `J.phone: T + 1 h`. Displayed "Milk!"; "Milk" (J's own earlier value) is reported as a conflict.
   - After step 4: kept {`j3`}; nothing reported.
 - **Invariants:** INV-CONVERGE
-- **Notes:** The supersession here follows §9.2 as written ("binds only its own epoch"). GAP: §9.3 sums up the damage as "keep a field in conflict, or pin a value"; it doesn't mention that an honest write made without seeing M's is silently discarded, with no conflict reported, or that a device's own consecutive edits then report conflicts with each other. `J.phone` could detect a context entry for itself above its own HLC, but the design neither requires nor suggests flagging it.
+- **Notes:** §9.3 accepts this as "pin a value of their own on top" while M is a member. `J.phone` could notice a context entry for itself above its own HLC; the design doesn't ask it to.
 
-### RC-025 A future context for every device disables supersession for the epoch
+### RC-025 A future context for every device keeps a field in conflict
 - **Kind:** adversarial
 - **Design:** §9.2, §9.3, §10.7, §17
 - **Binding:** any
@@ -444,34 +439,34 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
 - **Steps:**
   1. `M.phone signs` `m`: `eggs.notes = "x"`, dot `(M.phone, T)`, context naming `J.phone`, `J.mac`, `J.ipad`, `A.phone`, `A.mac`, `B.phone`, `C.phone`, `M.phone`, each at `MAX`. All sync.
   2. `J.phone sets eggs.notes` to "a" (`j1`), then "b" (`j2`); `A.phone sets eggs.notes = "c"` (`a1`); all sync.
-  3. `J.phone pairs J.new`; `J.new sets eggs.notes = "d"` (`n1`); `J.phone sets eggs.notes = "e"` (`j3`); all sync.
-  4. `J.mac removes M`; rotation to epoch 5; `J.mac sets eggs.notes = "f"` (`f5`); all sync.
+  3. `J.new` (a device of J restored with the backup key, so with a new device ID) `sets eggs.notes = "d"` (`n1`); `J.phone sets eggs.notes = "e"` (`j3`); all sync.
+  4. `J.mac removes M` (`E5`); `J.mac sets eggs.notes = "f"` (`f5`); all sync.
 - **Expect:**
   - After step 2: kept {`m`, `j1`, `j2`, `a1`}; no write supersedes another; displayed the one with the greatest HLC.
-  - Liszto's notes resolution (§17) on any device writes a merged value that supersedes nothing and adds one more kept write. As written, devices keep resolving and the kept set grows on every pass.
-  - After step 3: `n1` supersedes all of them (M didn't list `J.new`); then `j3` and every later listed-device write pile up again.
+  - After step 3: `n1` supersedes all of them (M didn't list `J.new`); then `j3` and later writes from listed devices pile up again.
   - After step 4: kept {`f5`}.
-- **Invariants:** INV-CONVERGE; INV-QUIESCE fails under the current text (see GAP)
-- **Notes:** GAP: once a context lists every device at `MAX`, every honest write inherits those entries (§9.2, "Building a write"), so honest writes all include each other and none is ever superseded until the next rotation. Each edit adds a kept write that no GC can drop. Liszto's auto-resolution (§17) never converges and never stops publishing. §9.3 describes the effect as a field kept "in conflict" and says removal ends it, but the honest members also need some way to notice: the app sees only honest authors in the growing sibling list once `m` scrolls out of the 16 shown.
+  - Liszto doesn't loop: an automatic notes resolution (§17) that can't settle the field isn't written again and again.
+- **Invariants:** INV-CONVERGE, INV-QUIESCE
+- **Notes:** §9.3 accepts the conflict while M is a member. GAP (G-25, Liszto): §17 has Liszto resolve `notes` siblings "by writing a merged value covering both"; here every such write is one more kept sibling, so a device that resolves whenever it sees a conflict publishes for ever. The rule needs a stop (resolve only what the new write would supersede, or once per user action).
 
-### RC-026 A future-claiming context outlives its epoch through `base`
+### RC-026 A future-claiming context pre-empts late writes of its epoch
 - **Kind:** adversarial
-- **Design:** §9.2, §9.3, §11.6 (late writes), §19 (2026-11-11 context/base decision)
+- **Design:** §9.2 (building a write), §9.3, §11.6 (signing again), §8.3
 - **Binding:** any
 - **Setup:** Default, with M and B writers.
 - **Steps:**
   1. `M.phone signs` `m`: `milk.title = "M"`, with a context naming every device at `MAX`. All sync.
-  2. `A.mac syncs`. `J.mac removes M` and `removes B`; `J.mac syncs` (epoch 5; `m` is carried).
-  3. `A.mac sets milk.title = "Milk 1L"` (`x`, stamped 4) and appends it to the epoch-4 channel without re-syncing.
-  4. `A.phone sets milk.title = "Whole milk"` (`a5`, epoch 5).
-  5. `J.mac syncs` (forwards `x`); all sync.
+  2. `A.mac syncs`. `J.mac removes M` and B; `J.mac` fixes `inv(E5)` (listing `m`).
+  3. `A.mac sets milk.title = "Milk 1L"` (`x`, naming an `E4` statement) and appends it to channel `E4` without re-syncing.
+  4. `J.mac` announces `E5`. `A.phone sets milk.title = "Whole milk"` (`a5`, in `E5`).
+  5. `A.mac` moves to `E5`; all sync.
   6. Control run: the same steps without step 1.
 - **Expect:**
-  - Control run: kept {`x`, `a5`}; "Milk 1L" reported (as in RC-015).
-  - With step 1, as written: `a5.base` inherits `A.mac: MAX` from `reach(m)`, so it covers `reach(x)`. `x` is superseded on arrival; kept {`a5`}; "Milk 1L" is never displayed or reported.
-  - The same holds for late writes, in every later epoch, from any device M listed.
+  - Control run: `A.mac` signs `x` again; kept {`x'`, `a5`}; one is reported (as RC-015).
+  - With step 1, as written: `a5.base` contains `reach(m)`, so it covers `reach(x)` and `x.base`: the new state supersedes `x`. `A.mac` therefore doesn't sign it again (§11.6), and "Milk 1L" is never displayed or reported.
+  - The same holds for every write of the old epoch that missed the inventory, and for inventory entries carried forward unseen (§8.3) when they are restored.
 - **Invariants:** INV-NO-LOSS fails under the current text (see GAP)
-- **Notes:** Step 3's interleaving is forced by the harness, as in RC-015. GAP: §9.2 ("a context that claims to cover the future binds only its own epoch") and the decision log ("so that a malformed context can't outlive its epoch") don't hold. "Building a write" puts `reach(k)` of earlier-epoch kept writes into `base`, so M's context becomes every later write's base. Because base is inherited by join, it never leaves, and late writes from the listed devices are silently pre-superseded forever, after M's removal too.
+- **Notes:** GAP (G-26): §9.2 says a context that claims the future "binds only its own epoch". That is literally true, but the epoch it binds includes its late writes, which only become visible after the next key change. "Building a write" copies `reach(m)` into every new write's `base`, so `m` pre-supersedes them, and §11.6's "a write the snapshot replaced is not signed again" then drops them silently, after M's removal too. A fix: build `base` only from writes the device actually holds (cap each entry at the highest dot seen from that device), or exclude a removed author's claims from `base`.
 
 ### RC-027 Pinning a title, ended by removal
 - **Kind:** adversarial
@@ -481,14 +476,14 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
 - **Steps:**
   1. `M.phone signs` `m`: `milk.title = "Mallory was here"`, hlc `(MAX, 0)`, context naming every device (`M.phone` included) at `MAX`. All sync.
   2. `J.mac sets milk.title = "Milk"` (`j1`); `A.phone sets milk.title = "Milk 2L"` (`a1`); all sync.
-  3. `J.mac removes M`; rotation to epoch 5; all sync.
+  3. `J.mac removes M` (`E5`); all sync.
   4. `J.mac sets milk.title = "Milk"` (`j5`); all sync.
 - **Expect:**
   - After step 2: kept {`m`, `j1`, `a1`}; every device shows "Mallory was here" and reports two others.
-  - After step 3: unchanged. `m` was merged before the cut, so the snapshot carries it.
-  - After step 4: kept {`j5`}; every device shows "Milk". `M.phone` can't read epoch 5.
+  - After step 3: unchanged. `m` was merged before the change, so `inv(E5)` lists it.
+  - After step 4: kept {`j5`}; every device shows "Milk". `M.phone` can't read `E5`.
 - **Invariants:** INV-CONVERGE, INV-CUT
-- **Notes:** The removal ends the pin, as §9.3 says, but not the effects in RC-026 and SC-013, which persist after it.
+- **Notes:** The removal ends the pin, as §9.3 says; RC-026 is what survives it.
 
 ### RC-028 A flood of siblings beyond the 16 shown
 - **Kind:** adversarial
@@ -504,87 +499,70 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
   - After step 3: kept is 21 writes everywhere; displayed `m20`. The app is shown 16 values, `m05`…`m20`; `j` is not among them, including on `J.phone`.
   - After step 4: kept {`j2`} (its context entry `M.phone: T + 20` covers all of M's); every M message for `milk` is dominated and destroyed by some device.
 - **Invariants:** INV-CONVERGE, INV-GC-SAFE, INV-UX
-- **Notes:** GAP: §9.2 caps presentation at 16 but doesn't tell the app how many siblings exist, or guarantee that the local user's own value is among those shown. With 16 high-HLC siblings, M hides any honest value from everyone, its author included.
+- **Notes:** GAP (G-35): §9.2 caps presentation at 16 but doesn't tell the app how many siblings exist, or guarantee that the local user's own value is among those shown. With 16 high-HLC siblings, M hides any honest value from everyone, its author included.
 
 ### RC-029 Forged attribution and cut-and-paste of a signed write
 - **Kind:** adversarial
-- **Design:** §5.5, §6.2, §8.3, §9.2
+- **Design:** §5.5, §8.3, §9.2
 - **Binding:** any
 - **Setup:** Default, with M a writer of `Groceries` and `House`.
 - **Steps:**
   1. `A.phone sets milk.title = "Milk 2L"` (`a`); all sync.
-  2. `M.phone` republishes `a` unchanged except for: (i) record `eggs`; (ii) field `notes`; (iii) inside a `House` message; (iv) `ep` = 5.
+  2. `M.phone` republishes `a` unchanged except for: (i) record `eggs`; (ii) field `notes`; (iii) inside a `House` message; (iv) `r` naming a different statement.
   3. `M.phone signs` a write to `bread.title` with `a` = A's user ID and `d` = `M.phone`.
   4. `A.phone sets milk.title = "Milk 1L"` (`a2`); all sync; `hub: replay` the message holding `a`.
 - **Expect:**
-  - Every honest device drops (i)–(iv) and step 3's write (signature or chain check fails), logs them, never displays them, and doesn't hold them.
+  - Every honest device drops (i)–(iv) and step 3's write (the signature check fails: `sigInput` covers scope, record, field and `ref`, and the author's key is the user ID), logs them, never displays them, and doesn't hold them.
   - `a` stays valid in `milk` until superseded; after step 4, kept {`a2`} and the replay changes nothing.
 - **Invariants:** INV-SIGNED, INV-AUTHZ, INV-CONVERGE
 
 ### RC-030 A reader signs writes
 - **Kind:** adversarial
-- **Design:** §8.3 (held), §10.7, §12.2
+- **Design:** §8.3, §9.4 (holding limits), §10.7, §12.2
 - **Binding:** any
 - **Setup:** Default, with M a reader.
 - **Steps:**
-  1. `M.phone signs` `milk.title = "Beer"` (valid signature, epoch 4), and 10,000 writes creating new records with 1 KiB values each.
-  2. All sync; `wait 1 day`.
-  3. `hub: destroy` every message `M.phone` appended; all sync.
+  1. `M.phone signs` `milk.title = "Beer"` naming the current statement, and 10,000 writes creating new records with 1 KiB values each.
+  2. `M.phone signs` 10,000 more naming a statement ID that doesn't exist.
+  3. All sync; `wait 31 days`.
 - **Expect:**
-  - No honest device displays "Beer" or any of the new records.
-  - Literal reading: every honest device holds all of M's writes (a promotion of M could still arrive, §8.3), about 10 MiB each. The hub keeps M's messages, since held writes count for domination (§10.7).
-  - Desired: held writes are bounded, and after step 3 no honest device re-publishes a reader's writes.
-- **Invariants:** INV-AUTHZ; INV-NO-HOLD-FOREVER has no mechanism (see GAP)
-- **Notes:** GAP: §8.3 says a reader's writes are never valid, and also that a write not yet authorized is held. A device can't tell which applies, since a promotion might come, and no rule says when a held data write is dropped (end of epoch? never?). So a reader, who otherwise can't write, can make every member device store unbounded data. And because held writes count in domination, it's unclear whether healing (§12.2) re-publishes them.
+  - Step 1's writes are rejected on every device (the named statement lists M as reader) and not held.
+  - Step 2's writes are held (the statement might still arrive), never displayed, and evicted locally after the holding limit (30 days, configurable). Their messages are not destroyed because of the eviction (§9.4).
+  - No honest device re-publishes any of them.
+- **Invariants:** INV-AUTHZ, INV-NO-HOLD-FOREVER
 
-### RC-031 Malformed writes that two parsers may read differently
+### RC-031 Malformed writes that two SDKs may read differently
 - **Kind:** adversarial
-- **Design:** §5.5, §8.3, §9.1, §10.5
+- **Design:** §5.5, §8.3, §9.1, §9.2, §10.5
 - **Binding:** any
 - **Setup:** Default, with M a writer. `J.mac` runs SDK 1 and `A.mac` runs SDK 2 (two independent implementations).
 - **Steps:** `M.phone signs` and publishes, each to a different item:
-  1. A write object with two `"v"` keys whose values differ; the signature matches the second.
-  2. A context whose entries aren't sorted by device ID; the signature covers the entries in the order given.
-  3. A context with two entries for the same device.
-  4. A dot whose millis is 2^50 (above §9.1's u48, within §5.5's u64, and exact in JSON).
-  5. An `add` (op 2) to `title`, a field every other write treats as a register.
-  6. A `v` in non-canonical base64url (with padding, or non-zero trailing bits).
-  7. A `delete` (op 4) carrying a field name and a value.
+  1. A context whose entries aren't sorted by device ID; the signature covers the entries sorted.
+  2. A context with two entries for the same device.
+  3. A dot whose millis is 2^50 (above §9.1's u48, within §5.5's u64 and §10.5's 2^53).
+  4. An `add` (op 2) to `title`, a field every other write treats as a register.
+  5. A `delete` (op 4) carrying a field name and a value.
 - **Expect:**
   - For each write, `J.mac` and `A.mac` make the same accept-or-drop decision and end in the same state.
   - Nothing malformed is displayed.
 - **Invariants:** INV-CONVERGE, INV-SIGNED
-- **Notes:** Running two SDKs is a harness capability outside the step vocabulary. GAP: §8.3 drops "a malformed write" but nothing defines malformed. For (1) and (6), two conforming JSON/base64 decoders produce different bytes, so the signature verifies on one device and fails on the other. That is exactly the divergence §5.5 forbids for signatures. For (2) and (3), it isn't said whether `vv()` is computed from the entries as sent or after sorting. For (4), nothing rejects millis above 2^48. For (5), a field's type is decided per write, and §9.2 doesn't say how a register mixes with set writes or what is displayed. For (7), see RC-034.
+- **Notes:** Running two SDKs is a harness capability outside the step vocabulary. Repeated JSON keys and non-canonical base64url, formerly here, are settled by §10.5 and tested in `reading.md`. GAP (G-27): still unsaid are (1) whether a context's JSON order must already be sorted or is sorted before `vv()`; (2) whether a vector may name one device twice, and what "covers" means if it does; (3) whether millis above 2^48 make a write invalid; (4) how a field holding both `assign` and `add`/`remove` writes merges and displays; (5) see RC-034.
 
-### RC-032 Writes stamped with the wrong epoch
+### RC-032 Writes naming the wrong statements
 - **Kind:** adversarial
-- **Design:** §8.3, §9.1, §11.6
+- **Design:** §8.3, §11.6
 - **Binding:** any
-- **Setup:** `Groceries` in epoch 6, with M a writer.
+- **Setup:** `Groceries` in `E6`, with M a writer.
 - **Steps:**
-  1. `M.phone signs` a write to `milk.title` = "Nine" stamped `ep` 9 and publishes it in the epoch-6 channel.
-  2. `J.mac sets role M = reader`; rotation to epoch 7.
-  3. `M.phone` (a reader holding `K(7)`) re-encrypts her own epoch-6 write `milk.title = "Cake"` into the epoch-7 channel, with no `_carried`, then signs a `_carried` naming it.
+  1. `M.phone signs` a write to `milk.title` = "Nine" naming a made-up statement ID and publishes it in channel `E6`.
+  2. `J.mac` makes M a reader (`E7`).
+  3. `M.phone` (a reader holding `K(E7)`) re-encrypts her own unlisted `E6` write `milk.title = "Cake"` into channel `E7`.
+  4. `M.phone` signs "Cake" again, naming the `E7` start.
 - **Expect:**
-  - Step 1's write is dropped and logged on every device, never displayed and not held (`a ≤ e` fails, and that can't change).
-  - Step 3's write is never displayed. M's `_carried` is invalid (a reader).
+  - Step 1's write is held (unknown statement), never displayed, evicted after the holding limit.
+  - Step 3's write is ineligible in `E7` (not `E7`'s own, not in `inv(E7)`).
+  - Step 4's write is rejected: `E7`'s statements list M as reader.
 - **Invariants:** INV-AUTHZ, INV-CONVERGE
-- **Notes:** GAP: §8.3 doesn't say whether an old-epoch write with no valid list is held (a valid list might still arrive) or dropped; it is the same lifetime question as RC-030. GAP: had M still been a writer, she could carry any member's archived writes, even of a record deleted past the horizon. The design accepts this because "a writer could as well write the record anew", but a re-created record would carry M's name, while a carried one shows A as its author.
-
-### RC-033 Mallory un-carries a record's history
-- **Kind:** adversarial
-- **Design:** §8.3 (carried), §9.2, §11.6
-- **Binding:** any
-- **Setup:** `Groceries` was rotated from 5 to 6 by `J.mac`. `milk` has epoch-5 writes `t5` (title, A), `c5` (completedAt, J) and `d5` (tag add), named by the snapshot's `_carried` write `s`. `bread` was deleted in epoch 5 (`del5`); its snapshot list is `sb`. M is a writer.
-- **Steps:**
-  1. `M.phone signs` `milk._carried` = "" (empty), with a context covering `reach(s)`.
-  2. `M.phone signs` `bread._carried` naming every `bread` write except `del5`, with a context covering `reach(sb)`.
-  3. Honest variant: `J.phone` forwards a late write `y` to `eggs`, signing `eggs._carried = [y]` with its context built per §9.2 (so it covers the snapshot's `_carried` for `eggs`).
-  4. All sync.
-- **Expect (desired, per §8.3: "nothing merged in an epoch can turn invalid later in that epoch"):**
-  - `milk` unchanged; `bread` still deleted; `eggs` keeps its epoch-5 fields and gains `y`.
-- **Invariants:** INV-CONVERGE, INV-NO-LOSS, INV-AUTHZ
-- **Notes:** GAP: `_carried` is an ordinary field and "every kept value applies" (§8.3), so under §9.2 a later `_carried` write supersedes the snapshot's. Read literally, step 1 makes `t5`, `c5` and `d5` invalid (`milk` loses its title, completion and tag, or vanishes). Step 2 resurrects `bread` under A's original authorship. And an honest forward (step 3, also RC-015) un-carries everything the snapshot listed unless the forwarder repeats it. `_carried` needs grow-only semantics (every valid `_carried` write applies, superseded or not), or must never be superseded.
 
 ### RC-034 A writer deletes every item
 - **Kind:** adversarial
@@ -593,13 +571,13 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
 - **Setup:** `Groceries` holds 40 items, with M a writer.
 - **Steps:**
   1. `M.phone deletes` all 40 items; all sync.
-  2. `J.mac removes M`; rotation to epoch 5; all sync.
+  2. `J.mac removes M` (`E5`); all sync.
 - **Expect:**
   - After step 1 every device shows `Groceries` empty; each record's hub state holds M's tombstone.
-  - After step 2 all 40 are still deleted (the tombstones were merged before the cut and are carried). `M.phone` holds no epoch-5 key.
-  - Honest devices still hold each deleted record's field writes until a rotation after the horizon (§12.3). Restoring an item means creating a new record.
+  - After step 2 all 40 are still deleted (the tombstones are in `inv(E5)`). `M.phone` holds no `K(E5)`.
+  - The tombstones stay for good (§12.3). Restoring an item means creating a new record.
 - **Invariants:** INV-CONVERGE, INV-CUT
-- **Notes:** Accepted risk (§1.2): writers can vandalise what they can write. GAP: neither §5.5 nor §10.5 says what a `delete` write's field name, value, context and base are. `sigInput` needs a field name (empty?), and §10.5 shows `f` on every write. Two SDKs that encode deletes differently can't verify each other's.
+- **Notes:** Accepted risk (§1.2): writers can vandalise what they can write. GAP (G-28): neither §5.5 nor §10.5 says what a `delete` write's field name, context and base are. `sigInput` needs a field name (empty?), and §10.5 shows `f` on every write. Two SDKs that encode deletes differently can't verify each other's. Nor is it said whether a key change must carry a deleted record's other field writes or only its tombstone.
 
 ---
 
@@ -620,7 +598,7 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
 - **Expect (desired):**
   - "4 cartons" is reported as a conflict on every device; kept {`a1`, `j2`}.
 - **Invariants:** INV-NO-LOSS fails under the current text (see GAP)
-- **Notes:** GAP: §9.1 requires a device's HLCs to be strictly increasing but not that the HLC be persisted before a write leaves the device, or rebuilt on launch from the device's own highest published dot. As written, `j2`'s dot falls below `J.phone`'s entry in `a1`'s context, so `a1` supersedes `j2` although A never saw it. J's latest edit vanishes everywhere with no report. With an exact clock match the same failure reuses a dot.
+- **Notes:** GAP (G-20): §9.1 requires a device's HLCs to be strictly increasing but not that the HLC be persisted before a write leaves the device, or rebuilt on launch from the device's own highest published dot. As written, `j2`'s dot falls below `J.phone`'s entry in `a1`'s context, so `a1` supersedes `j2` although A never saw it. J's latest edit vanishes everywhere with no report. With an exact clock match the same failure reuses a dot.
 
 ### RC-036 Crash between the two halves of a move
 - **Kind:** fault
@@ -633,7 +611,7 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
 - **Expect (desired):**
   - `batteries` appears in exactly one list on every device.
 - **Invariants:** INV-CONVERGE, INV-NO-LOSS
-- **Notes:** GAP: a move spans two key domains and two writes (§9.5); the design doesn't say the app must journal it. Read literally, `batteries` stays in both lists. The opposite order (delete first) would lose it on a crash; §9.5 implies create first but doesn't require it.
+- **Notes:** GAP (G-36): a move spans two key domains and two writes (§9.5); the design doesn't say the app must journal it. Read literally, `batteries` stays in both lists. The opposite order (delete first) would lose it on a crash; §9.5 implies create first but doesn't require it.
 
 ### RC-037 A partially fetched record and set contexts
 - **Kind:** fault
@@ -647,7 +625,7 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
 - **Expect:**
   - `balloons` is present on every device: J never saw `a1`, so add wins (§9.2). Kept for `balloons` = {`r`, `a1`}.
 - **Invariants:** INV-CONVERGE, INV-NO-LOSS
-- **Notes:** GAP: "Building a write" takes the join of `reach(k)` over "the kept writes" without saying whether, for a set, that is the kept writes of the element or of the whole field. With a per-field context, `r` carries `A.phone: 60` (from `cake`), covers `reach(a1)`, and removes `balloons` that J never saw, breaking add-wins. That can happen whenever a device holds a later dot of a device without an earlier one, as a split record (§10.6) allows. Contexts must be per element.
+- **Notes:** GAP (G-37): "Building a write" takes the join of `reach(k)` over "the kept writes" without saying whether, for a set, that is the kept writes of the element or of the whole field. With a per-field context, `r` carries `A.phone: 60` (from `cake`), covers `reach(a1)`, and removes `balloons` that J never saw, breaking add-wins. That can happen whenever a device holds a later dot of a device without an earlier one, as a split record (§10.6) allows. Contexts must be per element.
 
 ---
 
@@ -666,7 +644,7 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
   - `J.mac` tells J the item was deleted by Aimee and offers to keep the text, rather than closing the editor silently.
   - J's typed text is not discarded without a message.
 - **Invariants:** INV-UX
-- **Notes:** GAP: §13.2 lists no flow for a local edit that lands on a tombstoned record, and Tandem defines no signal to the app for it. Read literally, `eggs` disappears from J's screen and the writes made in step 2 go into a deleted record's state, never shown (also RC-005, RC-009).
+- **Notes:** GAP (G-31): §13.2 lists no flow for a local edit that lands on a tombstoned record, and Tandem defines no signal to the app for it. Read literally, `eggs` disappears from J's screen and the writes made in step 2 go into a deleted record's state, never shown (also RC-005, RC-009).
 
 ### RC-039 Two devices resolve the same notes conflict at once
 - **Kind:** ux
@@ -682,7 +660,7 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
   - `C.phone` shows the displayed sibling and writes nothing (a reader's writes are never valid).
   - No device publishes for `eggs` after the first 60 s.
 - **Invariants:** INV-QUIESCE, INV-CONVERGE
-- **Notes:** GAP: §17 says Liszto resolves `notes` siblings "by writing a merged value covering both" but not which device does it. Both phones resolve concurrently, giving two new siblings `mJ`, `mA`. Liszto's conflict-text rule is perspective-dependent ("local" vs "remote"), so `mJ ≠ mA`, and the next merge nests the texts ("A / B / B / A"). Even identical texts stay a conflict, because they are different writes. Nothing designates a resolver, delays resolution as §10.7 delays publishing, or treats equal-valued siblings as one.
+- **Notes:** GAP (G-38): §17 says Liszto resolves `notes` siblings "by writing a merged value covering both" but not which device does it. Both phones resolve concurrently, giving two new siblings `mJ`, `mA`. Liszto's conflict-text rule is perspective-dependent ("local" vs "remote"), so `mJ ≠ mA`, and the next merge nests the texts ("A / B / B / A"). Even identical texts stay a conflict, because they are different writes. Nothing designates a resolver, delays resolution as §10.7 delays publishing, or treats equal-valued siblings as one.
 
 ### RC-040 A three-way title conflict and picking a winner
 - **Kind:** ux
@@ -698,3 +676,50 @@ Conventions for this file: unless a scenario says otherwise, `Groceries` is owne
   - After step 3: kept {`j3`}; nothing reported; every device shows "Oat milk".
 - **Invariants:** INV-CONVERGE, INV-QUIESCE
 - **Notes:** Picking from a conflict list is outside the step vocabulary. §17 describes conflict UI only for `notes`; whether Liszto shows title conflicts at all is a product choice, and the Expect only checks what Tandem reports.
+## Validity and limits
+
+### RC-041 A delete on a named record
+- **Kind:** adversarial
+- **Design:** §7.3
+- **Binding:** any
+- **Setup:** Default.
+- **Steps:**
+  1. A modified client on `J.mac` (the owner) signs a `delete` on `_meta`.
+  2. M (a writer) signs a `delete` on `_roster`.
+- **Expect:**
+  - Both are invalid and rejected everywhere; `_meta` and the roster are unchanged.
+- **Invariants:** INV-AUTHZ
+
+### RC-042 A vector at the limit
+- **Kind:** adversarial
+- **Design:** §9.2 (vector size), §5.5 (`vv`)
+- **Binding:** any
+- **Setup:** Default, with M a writer.
+- **Steps:**
+  1. `M.phone signs` a write to `milk.notes` whose context has 1,025 entries.
+  2. `M.phone signs` one whose context has exactly 1,024 made-up device IDs.
+  3. `J.mac sets milk.notes`; then `J.mac` removes M (`E5`); then `A.phone` deletes `milk` and creates it again as `milk2`.
+- **Expect:**
+  - Step 1's write is invalid everywhere.
+  - Step 2's write is valid. `J.mac`'s next write would need more than 1,024 entries, so it writes with what fits; it doesn't supersede step 2's write, and the app is told the field can't be settled.
+  - After M's removal, deleting and re-creating the record settles it: `milk2.notes` takes ordinary vectors.
+- **Invariants:** INV-CONVERGE, INV-UX
+- **Notes:** This is the design's answer to the old "vectors that never shrink" finding (`scale.md` SC-011).
+
+### RC-043 Eligibility through the inventory
+- **Kind:** adversarial
+- **Design:** §8.3
+- **Binding:** any
+- **Setup:** `Groceries` moved from `E4` to `E5`. A discarded draft `E5'` also existed (`rotation.md` RO-022). `inv(E5)` lists A's write `t`.
+- **Steps:**
+  1. A device publishes `t` into channel `E5`.
+  2. M publishes a write whose ID and record are listed in `inv(E5)` but whose named statement is in `E5'`'s history and not an ancestor of `E5` (harness constructs it).
+  3. M publishes a write naming an `E4` statement with the same key commitment as `E5` (harness).
+- **Expect:**
+  - Step 1: eligible.
+  - Steps 2–3: ineligible. A listed ID with the wrong ancestry, or a matching key or counter, is never enough.
+- **Invariants:** INV-AUTHZ
+
+---
+
+Retired: RC-033 (`_carried` lists belong to a withdrawn design, §19).
