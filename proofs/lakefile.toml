@@ -11,3 +11,7 @@ rev = "v4.35.0"
 
 [[lean_lib]]
 name = "TandemProofs"
+
+[[lean_exe]]
+name = "tandem-oracle"
+root = "Oracle.Main"

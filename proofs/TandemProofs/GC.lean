@@ -32,6 +32,12 @@ def coversW (r : α → α → Prop) (n : Finset α) (w : α) : Prop := w ∈ n 
 
 def dominated (r : α → α → Prop) (m n : Finset α) : Prop := ∀ w ∈ m, coversW r n w
 
+instance [DecidableRel r] (n : Finset α) (w : α) : Decidable (coversW r n w) := by
+  unfold coversW; infer_instance
+
+instance [DecidableRel r] (m n : Finset α) : Decidable (dominated r m n) := by
+  unfold dominated; infer_instance
+
 theorem dominated_refl (m : Finset α) : dominated r m m := fun _ h => Or.inl h
 
 theorem coversW_trans (hr : IsStrict r) {n p : Finset α} {w : α} (hw : coversW r n w)
@@ -48,6 +54,9 @@ theorem dominated_trans (hr : IsStrict r) {m n p : Finset α} (h1 : dominated r 
 /-- The frozen rule: `m` (hash `hm`) may be destroyed on account of `n` (hash `hn`). -/
 def mayDestroy (r : α → α → Prop) (m n : Finset α) (hm hn : ℕ) : Prop :=
   dominated r m n ∧ (¬ dominated r n m ∨ hn < hm)
+
+instance [DecidableRel r] (m n : Finset α) (hm hn : ℕ) : Decidable (mayDestroy r m n hm hn) := by
+  unfold mayDestroy; infer_instance
 
 /-- The rule before the testbed finding: tie-break only for identical write sets. -/
 def mayDestroyOld (r : α → α → Prop) (m n : Finset α) (hm hn : ℕ) : Prop :=

@@ -154,7 +154,7 @@ def children (g : Node) (S : List Stmt) (s : Stmt) : List Stmt :=
 def headFrom (g : Node) (S : List Stmt) : Nat → Stmt → Stmt
   | 0, s => s
   | k + 1, s =>
-    if ((authenticated g S).filter fun c => c.tail == s).length ≤ 1 then
+    if (((authenticated g S).filter fun c => c.tail == s).eraseDups).length ≤ 1 then
       match children g S s with
       | c :: _ => headFrom g S k c
       | [] => s
