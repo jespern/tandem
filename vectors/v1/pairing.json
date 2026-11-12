@@ -1,0 +1,47 @@
+{
+  "cases": [
+    {
+      "code": "849598",
+      "ek": "0502925f68c39f352261e3a4859b24ed7a7338984d734224513c9ff9ee19a5a8",
+      "hash": "28b3753e2f880fb667837630b3af24586ef73d5dbeb036100fa15e7fb7c2f078",
+      "n": "3fcab0833bb16b503d25b44bf88b1d68",
+      "pairing_secret": "0ef590bf143af1b6bbf058e8f260ef993b37c1137ca98c8104d1bbb4e10d2e4d"
+    },
+    {
+      "code": "920006",
+      "ek": "9bbddbaa7736d2ef709fc267d914dbb555b5018b81dabe9845e2c457043bb458",
+      "hash": "bc771206469cef3e56329d1b81f45a4a7e6e3eb0e52e9ddedfac019360f792f0",
+      "n": "46ae1e70a0de72db27c1eb8bcf34f7db",
+      "pairing_secret": "076c320c400dc32b9b4bb7ffcb0b8e97649d35937561baf24d06d76720e5c632"
+    },
+    {
+      "code": "154668",
+      "ek": "961a613ecb9ae72d0ae9e66494b6ba8b4e1f9d24174928461dbe427e8ff93bba",
+      "hash": "6f878decffd63297dd5258deb6f9141d9fca2c6ade258769aef6764047852e9e",
+      "n": "fb0055c4e255eb83182d90d2c13263f5",
+      "pairing_secret": "6acbb298156d238836b10d2d2ffab5c89b7b255deecd8858f3571fc45ceb62b5"
+    },
+    {
+      "code": "813984",
+      "ek": "54fcf8f6c4146cd5b01d69708e88e43641aa09bb53dcc566214713be6c7aeded",
+      "hash": "4d981ae06d67be442929f0fd104821da169fd9ad3f02f1e9c7bea39e4aad221e",
+      "n": "641cfd009c64fa994a00f8eabf78aefd",
+      "pairing_secret": "4f9dc3765391717031fd1a3e97165d4488a2e33bde68ac9a448405e0108ddc5e"
+    },
+    {
+      "code": "747648",
+      "ek": "eb79a7a3b42683a6d4eac802cecac35c50981151b2f154ea586091c9075817da",
+      "hash": "95793140605fafd95e2a53afa1db0c4a9543b65af4910878a1e66b7056e36ff6",
+      "n": "b622c2d38baeb3e031a47381a69ac52d",
+      "pairing_secret": "1c5a10a1ea333547b4b498bc527657be7ee1bc24edc9bcba440dd93b6293d6d7"
+    },
+    {
+      "code": "419304",
+      "ek": "59a068e1eb793d9bc73095e07f3705fd78bfdd1b3f580a4dcfdd8b27cb7680f4",
+      "hash": "2af0b9e8a10a5f02afe8bd9323ccf742bb3d088529909d4a566a7e865750718d",
+      "n": "7a0cf73e37fb562f3b22e7eafba8579b",
+      "pairing_secret": "f3dba109ea92ba4669343c5194e124188f5240421bec8e2fe8a2bd8403d886ab"
+    }
+  ],
+  "description": "Pairing codes (§6.3)."
+}

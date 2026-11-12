@@ -1,0 +1,86 @@
+{
+  "cases": [
+    {
+      "author_secret": "a56b492a2accb08f7cecebd4497b780e7933d3f73327c3ca9051ca8c6db53457",
+      "name": "assign, empty vectors",
+      "payload": "{\"rec\":\"2GDgw63u1JP1F_2TEQY0WA\",\"writes\":[{\"f\":\"title\",\"op\":1,\"v\":\"QnV5IG1pbGs\",\"a\":\"tDG9iJQ4vMN2oktUfhAMZbIgqfijalY23OkVtvBbUAY\",\"d\":[\"7ux1xCu7SdI\",1731312000123,0],\"r\":\"ApXzq4UWvYFNBjyE14G-2CFdgCT_Euq6JSBG0Lu31Fk\",\"c\":[],\"b\":[],\"s\":\"Oz7Hh2BpasCTKPu03Yl0u_m8hkU9i-auy-rll-c4O8nhzLu-7WR8Rjfbx7NlWBJT5g9ERau8TCTHgJzURWbGBg\"}]}",
+      "scope": "ec8e84c6d6b3cded4f23db46a3fde7b4",
+      "sig_input": "54414e44454d2d57524954452d5631ec8e84c6d6b3cded4f23db46a3fde7b4d860e0c3adeed493f517fd9311063458000000057469746c650100000000df3db8a9ea05f22ce0238a243ce14e9e7829f22b5fdec7e6536f656849e46db1b431bd889438bcc376a24b547e100c65b220a9f8a36a5636dce915b6f05b5006eeec75c42bbb49d2000001931a3c9c7b00000295f3ab8516bd814d063c84d781bed8215d8024ff12eaba252046d0bbb7d45900000000",
+      "signature": "3b3ec78760696ac09328fbb4dd8974bbf9bc86453d8be6aecbeae597e7383bc9e1ccbbbeed647c4637dbc7b365581253e60f4445abbc4c24c7809cd44566c606",
+      "write_id": "95a2d4b1f7bf6a95374a71ec582b953869bdfaecd2d386a49a05323469df6f21"
+    },
+    {
+      "author_secret": "b0cff2de5e2e9627032ec7b86875c96f3a53bef5f8a91819720239577baced9e",
+      "name": "assign with context and base",
+      "payload": "{\"rec\":\"2GDgw63u1JP1F_2TEQY0WA\",\"writes\":[{\"f\":\"title\",\"op\":1,\"v\":\"QnV5IG9hdCBtaWxr\",\"a\":\"bz4WDksApaeWTiC0WfJH-6nzqZGzO9ugynFDYINC_i0\",\"d\":[\"w0_afdhd4A4\",1731312005123,2],\"r\":\"ApXzq4UWvYFNBjyE14G-2CFdgCT_Euq6JSBG0Lu31Fk\",\"c\":[[\"w0_afdhd4A4\",1731312000133,1],[\"7ux1xCu7SdI\",1731312000123,0]],\"b\":[[\"ZMcM8RzQHE0\",1731225600123,0]],\"s\":\"SSoYSN_6RUg2tpR-SV1xHsMFXMFk0xl2ZeTP1ByJ013zwcTyZCMsjnNHdWvxdlhPSb-yVBf6q8C1rA0LmhILAg\"}]}",
+      "scope": "ec8e84c6d6b3cded4f23db46a3fde7b4",
+      "sig_input": "54414e44454d2d57524954452d5631ec8e84c6d6b3cded4f23db46a3fde7b4d860e0c3adeed493f517fd9311063458000000057469746c650100000000a7af68d5763eb358aeb83cf559b84766c109fa42d87645a5a402b0ba51792f726f3e160e4b00a5a7964e20b459f247fba9f3a991b33bdba0ca7143608342fe2dc34fda7dd85de00e000001931a3cb00300020295f3ab8516bd814d063c84d781bed8215d8024ff12eaba252046d0bbb7d4590002c34fda7dd85de00e000001931a3c9c850001eeec75c42bbb49d2000001931a3c9c7b0000000164c70cf11cd01c4d000001931516407b0000",
+      "signature": "492a1848dffa454836b6947e495d711ec3055cc164d3197665e4cfd41c89d35df3c1c4f264232c8e7347756bf176584f49bfb25417faabc0b5ac0d0b9a120b02",
+      "write_id": "85f0474a25ae79622ddaf709c874831e7e8aa3f96caa76323634c42aaef68aea"
+    },
+    {
+      "author_secret": "a56b492a2accb08f7cecebd4497b780e7933d3f73327c3ca9051ca8c6db53457",
+      "name": "assign of an empty value",
+      "payload": "{\"rec\":\"2GDgw63u1JP1F_2TEQY0WA\",\"writes\":[{\"f\":\"notes\",\"op\":1,\"v\":\"\",\"a\":\"tDG9iJQ4vMN2oktUfhAMZbIgqfijalY23OkVtvBbUAY\",\"d\":[\"7ux1xCu7SdI\",1731312000124,65535],\"r\":\"ApXzq4UWvYFNBjyE14G-2CFdgCT_Euq6JSBG0Lu31Fk\",\"c\":[],\"b\":[],\"s\":\"BPlUHHmSlGRRlDKM-5HPkVOsh-x7BRXkFnixjikkgjXQM8gie5fkWtFShwg_FF8TtwgJNQUNO_kVmf_PlGtPBg\"}]}",
+      "scope": "ec8e84c6d6b3cded4f23db46a3fde7b4",
+      "sig_input": "54414e44454d2d57524954452d5631ec8e84c6d6b3cded4f23db46a3fde7b4d860e0c3adeed493f517fd9311063458000000056e6f7465730100000000e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855b431bd889438bcc376a24b547e100c65b220a9f8a36a5636dce915b6f05b5006eeec75c42bbb49d2000001931a3c9c7cffff0295f3ab8516bd814d063c84d781bed8215d8024ff12eaba252046d0bbb7d45900000000",
+      "signature": "04f9541c799294645194328cfb91cf9153ac87ec7b0515e41678b18e29248235d033c8227b97e45ad15287083f145f13b7080935050d3bf91599ffcf946b4f06",
+      "write_id": "098787379377248791344723c79e39e1df8acf3267be5634c08f7f1c90ff1cb4"
+    },
+    {
+      "author_secret": "a56b492a2accb08f7cecebd4497b780e7933d3f73327c3ca9051ca8c6db53457",
+      "name": "add",
+      "payload": "{\"rec\":\"2GDgw63u1JP1F_2TEQY0WA\",\"writes\":[{\"f\":\"tags\",\"op\":2,\"e\":\"ZXJyYW5k\",\"a\":\"tDG9iJQ4vMN2oktUfhAMZbIgqfijalY23OkVtvBbUAY\",\"d\":[\"7ux1xCu7SdI\",1731312000125,0],\"r\":\"ApXzq4UWvYFNBjyE14G-2CFdgCT_Euq6JSBG0Lu31Fk\",\"c\":[],\"b\":[],\"s\":\"pXcgELaa-d56Ul8atHTyydUc40gS0rH150OR1zfl6savJ-5pSwoiGKwNdfO0g9pA3XVY8rDhuR0_sj0sHRIhDA\"}]}",
+      "scope": "ec8e84c6d6b3cded4f23db46a3fde7b4",
+      "sig_input": "54414e44454d2d57524954452d5631ec8e84c6d6b3cded4f23db46a3fde7b4d860e0c3adeed493f517fd931106345800000004746167730200000006657272616e64e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855b431bd889438bcc376a24b547e100c65b220a9f8a36a5636dce915b6f05b5006eeec75c42bbb49d2000001931a3c9c7d00000295f3ab8516bd814d063c84d781bed8215d8024ff12eaba252046d0bbb7d45900000000",
+      "signature": "a5772010b69af9de7a525f1ab474f2c9d51ce34812d2b1f5e74391d737e5eac6af27ee694b0a2218ac0d75f3b483da40dd7558f2b0e1b91d3fb23d2c1d12210c",
+      "write_id": "ee2ec9229affe2a8c75fbeea7c1692299a02d1740118f75c6714a9f190cecda1"
+    },
+    {
+      "author_secret": "a56b492a2accb08f7cecebd4497b780e7933d3f73327c3ca9051ca8c6db53457",
+      "name": "remove of an empty element",
+      "payload": "{\"rec\":\"2GDgw63u1JP1F_2TEQY0WA\",\"writes\":[{\"f\":\"tags\",\"op\":3,\"e\":\"\",\"a\":\"tDG9iJQ4vMN2oktUfhAMZbIgqfijalY23OkVtvBbUAY\",\"d\":[\"7ux1xCu7SdI\",1731312000126,0],\"r\":\"ApXzq4UWvYFNBjyE14G-2CFdgCT_Euq6JSBG0Lu31Fk\",\"c\":[[\"7ux1xCu7SdI\",1731312000125,0]],\"b\":[],\"s\":\"7q-D8lc267O2NIBnUeYFirm6ZCWznuMWF_04IpJfS2Y7pPGhwIJ1081rpZ-gz29gLEfxpwqL9v0XWRJDT2JvCw\"}]}",
+      "scope": "ec8e84c6d6b3cded4f23db46a3fde7b4",
+      "sig_input": "54414e44454d2d57524954452d5631ec8e84c6d6b3cded4f23db46a3fde7b4d860e0c3adeed493f517fd931106345800000004746167730300000000e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855b431bd889438bcc376a24b547e100c65b220a9f8a36a5636dce915b6f05b5006eeec75c42bbb49d2000001931a3c9c7e00000295f3ab8516bd814d063c84d781bed8215d8024ff12eaba252046d0bbb7d4590001eeec75c42bbb49d2000001931a3c9c7d00000000",
+      "signature": "eeaf83f25736ebb3b634806751e6058ab9ba6425b39ee31617fd3822925f4b663ba4f1a1c08275d3cd6ba59fa0cf6f602c47f1a70a8bf6fd175912434f626f0b",
+      "write_id": "d7ba76ab0f14552476b3b422d40c91c8578b0aac84a711438fedb996dfb074a5"
+    },
+    {
+      "author_secret": "b0cff2de5e2e9627032ec7b86875c96f3a53bef5f8a91819720239577baced9e",
+      "name": "delete",
+      "payload": "{\"rec\":\"2GDgw63u1JP1F_2TEQY0WA\",\"writes\":[{\"f\":\"\",\"op\":4,\"a\":\"bz4WDksApaeWTiC0WfJH-6nzqZGzO9ugynFDYINC_i0\",\"d\":[\"w0_afdhd4A4\",1731312009123,0],\"r\":\"ApXzq4UWvYFNBjyE14G-2CFdgCT_Euq6JSBG0Lu31Fk\",\"c\":[],\"b\":[],\"s\":\"3vjVECqtfqnygEWsa7AmhRg7ueWBfp-PZEi2jz2YLjtbuN_bXBGPzvJZZfnR4zM55WEOlP1hAxeVGXFXUVctCA\"}]}",
+      "scope": "ec8e84c6d6b3cded4f23db46a3fde7b4",
+      "sig_input": "54414e44454d2d57524954452d5631ec8e84c6d6b3cded4f23db46a3fde7b4d860e0c3adeed493f517fd9311063458000000000400000000e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b8556f3e160e4b00a5a7964e20b459f247fba9f3a991b33bdba0ca7143608342fe2dc34fda7dd85de00e000001931a3cbfa300000295f3ab8516bd814d063c84d781bed8215d8024ff12eaba252046d0bbb7d45900000000",
+      "signature": "def8d5102aad7ea9f28045ac6bb02685183bb9e5817e9f8f6448b68f3d982e3b5bb8dfdb5c118fcef25965f9d1e33339e5610e94fd6103179519715751572d08",
+      "write_id": "68da12469dac275a954ed7bae81a303c1ffc69d774b8ab251013e3bdc83845d8"
+    },
+    {
+      "author_secret": "a56b492a2accb08f7cecebd4497b780e7933d3f73327c3ca9051ca8c6db53457",
+      "name": "field name é as one code point",
+      "payload": "{\"rec\":\"2GDgw63u1JP1F_2TEQY0WA\",\"writes\":[{\"f\":\"café\",\"op\":1,\"v\":\"MQ\",\"a\":\"tDG9iJQ4vMN2oktUfhAMZbIgqfijalY23OkVtvBbUAY\",\"d\":[\"7ux1xCu7SdI\",1731312000127,0],\"r\":\"ApXzq4UWvYFNBjyE14G-2CFdgCT_Euq6JSBG0Lu31Fk\",\"c\":[],\"b\":[],\"s\":\"MMkvBPHymQ66ulxMZVe0-JJ4Ie1aDx54t0VksXt-EKEZXpyc8Clzs7hvB83UWHlUtUQF_YmFVO2KBOzzlo_MBw\"}]}",
+      "scope": "ec8e84c6d6b3cded4f23db46a3fde7b4",
+      "sig_input": "54414e44454d2d57524954452d5631ec8e84c6d6b3cded4f23db46a3fde7b4d860e0c3adeed493f517fd931106345800000005636166c3a901000000006b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4bb431bd889438bcc376a24b547e100c65b220a9f8a36a5636dce915b6f05b5006eeec75c42bbb49d2000001931a3c9c7f00000295f3ab8516bd814d063c84d781bed8215d8024ff12eaba252046d0bbb7d45900000000",
+      "signature": "30c92f04f1f2990ebaba5c4c6557b4f8927821ed5a0f1e78b74564b17b7e10a1195e9c9cf02973b3b86f07cdd4587954b54405fd898554ed8a04ecf3968fcc07",
+      "write_id": "7f2c9a5ac6eb9b1c426f0a65b1dc99822a4df945f014686225858d248dd09351"
+    },
+    {
+      "author_secret": "a56b492a2accb08f7cecebd4497b780e7933d3f73327c3ca9051ca8c6db53457",
+      "name": "field name é as e plus a combining accent: another field",
+      "payload": "{\"rec\":\"2GDgw63u1JP1F_2TEQY0WA\",\"writes\":[{\"f\":\"café\",\"op\":1,\"v\":\"MQ\",\"a\":\"tDG9iJQ4vMN2oktUfhAMZbIgqfijalY23OkVtvBbUAY\",\"d\":[\"7ux1xCu7SdI\",1731312000127,0],\"r\":\"ApXzq4UWvYFNBjyE14G-2CFdgCT_Euq6JSBG0Lu31Fk\",\"c\":[],\"b\":[],\"s\":\"kHNPXmWg5zFJBSlmiZ-yCXSl0NCNzGqjYyxB6a0RvHUtsugSwvGoOLPz6qtpjATf29dGVCSjMFkjXo81L_WIBA\"}]}",
+      "scope": "ec8e84c6d6b3cded4f23db46a3fde7b4",
+      "sig_input": "54414e44454d2d57524954452d5631ec8e84c6d6b3cded4f23db46a3fde7b4d860e0c3adeed493f517fd93110634580000000663616665cc8101000000006b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4bb431bd889438bcc376a24b547e100c65b220a9f8a36a5636dce915b6f05b5006eeec75c42bbb49d2000001931a3c9c7f00000295f3ab8516bd814d063c84d781bed8215d8024ff12eaba252046d0bbb7d45900000000",
+      "signature": "90734f5e65a0e73149052966899fb20974a5d0d08dcc6aa3632c41e9ad11bc752db2e812c2f1a838b3f3eaab698c04dfdbd7465424a33059235e8f352ff58804",
+      "write_id": "6b1f74f62ffe1070cd8924507dd916f71a7af0f7b009e25060171a0975faa1b4"
+    },
+    {
+      "author_secret": "a56b492a2accb08f7cecebd4497b780e7933d3f73327c3ca9051ca8c6db53457",
+      "name": "home write",
+      "payload": "{\"rec\":\"rPQfig6OiAFiubnnfuiTFg\",\"writes\":[{\"f\":\"order\",\"op\":1,\"v\":\"WyJ4Il0\",\"a\":\"tDG9iJQ4vMN2oktUfhAMZbIgqfijalY23OkVtvBbUAY\",\"d\":[\"7ux1xCu7SdI\",1731312000129,0],\"c\":[],\"b\":[],\"s\":\"ygsnWGZRiC4ySGf0T-ON3Ki3MRpEH_P7WrfpYCoDMhFvUeWy2LB77JvLePHP7oxEDCMcUoubYsxxaLUeAP-1Dw\"}]}",
+      "scope": "628b1cc3b64c591b6b0a75fd13e28500",
+      "sig_input": "54414e44454d2d57524954452d5631628b1cc3b64c591b6b0a75fd13e28500acf41f8a0e8e880162b9b9e77ee89316000000056f726465720100000000cd65ea2c2ad99e94a85b1b6df72efef9cb2ed0ae933a60c32ce16317f7d7d6aab431bd889438bcc376a24b547e100c65b220a9f8a36a5636dce915b6f05b5006eeec75c42bbb49d2000001931a3c9c810000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "signature": "ca0b27586651882e324867f44fe38ddca8b7311a441ff3fb5ab7e9602a0332116f51e5b2d8b07bec9bcb78f1cfee8c440c231c528b9b62cc7168b51e00ffb50f",
+      "write_id": "f449eb9f89453ab13a2360c97568ed78c6397ca58fb49f894c149c10ab66cbfe"
+    }
+  ],
+  "description": "Writes: sigInput, write ID, signature and payload JSON (§5.5, §9.1, §10.5)."
+}

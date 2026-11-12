@@ -1,0 +1,78 @@
+{
+  "cases": {
+    "invalid": [
+      {
+        "bytes": "00000002b95519dccb725901ec90e1cb2717a87300000001ab0fa573d3fb83e521cdf0c8e901eb42cf0c17fab0a6c5efb6c180a50b42317037756e7ce5fba04f6eb0bcbad725c0da000000027a6ff4d93a2aa3d0d8e8b6555ab6f011cec667011b954356a4a924598194299af315bec6ff93c530ebf8fd5587341cfea714f81eb4c8f06887b6fc98caa231ee",
+        "why": "records not sorted"
+      },
+      {
+        "bytes": "0000000237756e7ce5fba04f6eb0bcbad725c0da000000027a6ff4d93a2aa3d0d8e8b6555ab6f011cec667011b954356a4a924598194299af315bec6ff93c530ebf8fd5587341cfea714f81eb4c8f06887b6fc98caa231ee37756e7ce5fba04f6eb0bcbad725c0da00000001ab0fa573d3fb83e521cdf0c8e901eb42cf0c17fab0a6c5efb6c180a50b423170",
+        "why": "a record twice"
+      },
+      {
+        "bytes": "0000000237756e7ce5fba04f6eb0bcbad725c0da000000027a6ff4d93a2aa3d0d8e8b6555ab6f011cec667011b954356a4a924598194299a7a6ff4d93a2aa3d0d8e8b6555ab6f011cec667011b954356a4a924598194299ab95519dccb725901ec90e1cb2717a87300000001ab0fa573d3fb83e521cdf0c8e901eb42cf0c17fab0a6c5efb6c180a50b423170",
+        "why": "a write twice"
+      },
+      {
+        "bytes": "0000000237756e7ce5fba04f6eb0bcbad725c0da000000027a6ff4d93a2aa3d0d8e8b6555ab6f011cec667011b954356a4a924598194299af315bec6ff93c530ebf8fd5587341cfea714f81eb4c8f06887b6fc98caa231eeb95519dccb725901ec90e1cb2717a87300000001ab0fa573d3fb83e521cdf0c8e901eb42cf0c17fab0a6c5efb6c180a50b42317000",
+        "why": "trailing byte"
+      },
+      {
+        "bytes": "0000000237756e7ce5fba04f6eb0bcbad725c0da000000027a6ff4d93a2aa3d0d8e8b6555ab6f011cec667011b954356a4a924598194299af315bec6ff93c530ebf8fd5587341cfea714f81eb4c8f06887b6fc98caa231eeb95519dccb725901ec90e1cb2717a87300000001ab0fa573d3fb83e521cdf0c8e901eb42cf0c17fab0a6c5efb6c180a50b4231",
+        "why": "short"
+      },
+      {
+        "bytes": "",
+        "why": "empty: the empty inventory is a zero count"
+      },
+      {
+        "bytes": "00000001",
+        "why": "count larger than the entries"
+      }
+    ],
+    "valid": [
+      {
+        "bytes": "00000000",
+        "entries": [],
+        "snapshot": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119"
+      },
+      {
+        "bytes": "0000000137756e7ce5fba04f6eb0bcbad725c0da00000001f315bec6ff93c530ebf8fd5587341cfea714f81eb4c8f06887b6fc98caa231ee",
+        "entries": [
+          {
+            "record": "37756e7ce5fba04f6eb0bcbad725c0da",
+            "writes": [
+              "f315bec6ff93c530ebf8fd5587341cfea714f81eb4c8f06887b6fc98caa231ee"
+            ]
+          }
+        ],
+        "snapshot": "2bd9f3d8bdc3a7c84a62df2651c1861457b95a5ed406798301020e94a6b020e5"
+      },
+      {
+        "bytes": "0000000337756e7ce5fba04f6eb0bcbad725c0da000000037a6ff4d93a2aa3d0d8e8b6555ab6f011cec667011b954356a4a924598194299aab0fa573d3fb83e521cdf0c8e901eb42cf0c17fab0a6c5efb6c180a50b423170f315bec6ff93c530ebf8fd5587341cfea714f81eb4c8f06887b6fc98caa231ee88869ccb305b6142fa31b00844a5d68f00000000b95519dccb725901ec90e1cb2717a87300000001d9428e9b4f438d56df0583c22c66b4d746f676ea5dd5222dc4d987a42bd936d7",
+        "entries": [
+          {
+            "record": "37756e7ce5fba04f6eb0bcbad725c0da",
+            "writes": [
+              "ab0fa573d3fb83e521cdf0c8e901eb42cf0c17fab0a6c5efb6c180a50b423170",
+              "f315bec6ff93c530ebf8fd5587341cfea714f81eb4c8f06887b6fc98caa231ee",
+              "7a6ff4d93a2aa3d0d8e8b6555ab6f011cec667011b954356a4a924598194299a"
+            ]
+          },
+          {
+            "record": "b95519dccb725901ec90e1cb2717a873",
+            "writes": [
+              "d9428e9b4f438d56df0583c22c66b4d746f676ea5dd5222dc4d987a42bd936d7"
+            ]
+          },
+          {
+            "record": "88869ccb305b6142fa31b00844a5d68f",
+            "writes": []
+          }
+        ],
+        "snapshot": "ae80e08470886f0bb920b7ef221e4bb1668b7ad9970179002ecfc98758bee9cc"
+      }
+    ]
+  },
+  "description": "Snapshot inventories (§8.3): canonical bytes and their hash, and spellings to reject."
+}

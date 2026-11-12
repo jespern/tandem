@@ -1,0 +1,50 @@
+{
+  "cases": [
+    {
+      "backup_key": "uvvu skrk zsyi 67hm 5pke s63y bz4t hu7x gmt4 hsuq khfi y3nv grlv ibzw",
+      "home_key": "a3d443f841c64c22aa6ecf3e46f33c9ccb85c35baeb069cb3f78186b79306ee0",
+      "home_scope": "628b1cc3b64c591b6b0a75fd13e28500",
+      "home_tag": "dzftdlxei6ywx2o2xmizykhcwoeaptiy",
+      "inbox_tag": "nc56gjumcl4ave3rtrmdpkr3k2a2bk2v",
+      "kid": "eaed5687d51ffcf0cd109f49e35c1e4f6f54e20c8ffd402d486d7e079c1dd4a6",
+      "uid": "b431bd889438bcc376a24b547e100c65b220a9f8a36a5636dce915b6f05b5006",
+      "uid_b64u": "tDG9iJQ4vMN2oktUfhAMZbIgqfijalY23OkVtvBbUAY",
+      "uid_display": "wqy3 3ceu hc6m g5vc jnkh 4eam mwzc bkpy",
+      "uka": "614672e7f260882b7e09bf1ee31c80bbfa5bf26648d14b49b26be9410524567a",
+      "uka_private": "d70c88fbf6dd7c33ac963b31bcfffc0adae0d0010a56e6c39310727ee3c775fa",
+      "uks_seed": "5428092af62587380b752c7683b09f86922753122b09997e215ddd6a97cc6cd1",
+      "user_secret": "a56b492a2accb08f7cecebd4497b780e7933d3f73327c3ca9051ca8c6db53457"
+    },
+    {
+      "backup_key": "wdh7 fxs6 f2lc oazo y64g q5oj n45f hpxv 7cur qgls ai4v o65m 5wpo irok",
+      "home_key": "a53bcc80c06c7f267278d21aaf82e15f17f1006ea3e868a83ed38f8dfc485bd9",
+      "home_scope": "81890a1cb5a8ad718467b67be96e4e28",
+      "home_tag": "n4wqmk5hmcvweswwq6rfuzfa5bn3ib4k",
+      "inbox_tag": "3kqn6osswxllba4htv5py6zbdndszds3",
+      "kid": "63db2c76c04b39acf241cb4599b55a1b2b3b9cdb9803536c25b044ec37d959ef",
+      "uid": "6f3e160e4b00a5a7964e20b459f247fba9f3a991b33bdba0ca7143608342fe2d",
+      "uid_b64u": "bz4WDksApaeWTiC0WfJH-6nzqZGzO9ugynFDYINC_i0",
+      "uid_display": "n47b mdsl acs2 pfso ec2f t4sh 7ou7 hkmr",
+      "uka": "49e981bfb4a8c68eefb2f093771ba94f7f3197b93afe5aa79649d7690916c84a",
+      "uka_private": "4a4e610ca3ad9eb63c66530f8afbf7b3b680d4b5e73bb4f311e97543fee3491e",
+      "uks_seed": "6318e47cd24fde50c3dbf81e967e706fce131879f6926b67e71c0fa5d16bb5ed",
+      "user_secret": "b0cff2de5e2e9627032ec7b86875c96f3a53bef5f8a91819720239577baced9e"
+    },
+    {
+      "backup_key": "mi4q jyky cgsf c6li qqhf 2mb2 vum3 n65x s6lg yxsj izfj euyq 3lt6 afz4",
+      "home_key": "ab546b0f6f9e1cf7db8bc354a3fb06eea298376c86afde6fc8477106260ded80",
+      "home_scope": "8481c024ed60261c2bc7d2ea43acd30b",
+      "home_tag": "vp7mcm5vnmqimuul3ar2flfoz2o2y525",
+      "inbox_tag": "hzcezkmxl6zbw5qhwocposhlqrea4go4",
+      "kid": "46018f9b140549c4843bf53ccca7dc18f4bc46d9ab22807938ebefc33428d83a",
+      "uid": "d078247de73bcb8e13a4c02a242f751e47ffe3ad7bdd7ef0fca899c88c1d340a",
+      "uid_b64u": "0Hgkfec7y44TpMAqJC91Hkf_46173X7w_KiZyIwdNAo",
+      "uid_display": "2b4c i7ph hpfy 4e5e yavc il3v dzd7 7y5n",
+      "uka": "3843f41377214ce3e1270c53613470d28cc494de07643c8df18d17017e22fa21",
+      "uka_private": "bbc06f3ca3efb5566cd5370c3849393c148447f55ffe1ae5c5ac8c3a73b5874c",
+      "uks_seed": "4d6325e063429275175579dbf896ce43cce21d2d630a279bb352f796c1e878d1",
+      "user_secret": "623904e15811a4517968840e5d303aad19b6fbb797966c5e49464a925310dae7"
+    }
+  ],
+  "description": "User keys from a user secret (§5.3, §5.6, §6.2, §6.3). uka_private is the X25519 scalar as derived (unclamped)."
+}

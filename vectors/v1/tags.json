@@ -1,0 +1,68 @@
+{
+  "cases": {
+    "collection": {
+      "commit": "e2510d5cc71a2e832c2c85e54c6817878ccdb311aa3b360dd009b3b4373669a7",
+      "epoch_id": "56e0441720bdc45df654583c709f2bacef09636ec0eb7eb6335ac55af6658540",
+      "epoch_key": "767010095be17224f4456fd2fc44a2653be87e4e9ee2689ee5f5c8887098e102",
+      "tag": "ufokkzijabsafyrbrfmqay7jyt5kl6gb"
+    },
+    "home": {
+      "home_key": "a3d443f841c64c22aa6ecf3e46f33c9ccb85c35baeb069cb3f78186b79306ee0",
+      "tag": "dzftdlxei6ywx2o2xmizykhcwoeaptiy"
+    },
+    "inbox": {
+      "tag": "nc56gjumcl4ave3rtrmdpkr3k2a2bk2v",
+      "uid": "b431bd889438bcc376a24b547e100c65b220a9f8a36a5636dce915b6f05b5006"
+    },
+    "invite": {
+      "invite_key": "4b4ba085f29c18eec0a71be413bbb4d3714dd04ebd8d5e1c0a2c1edb97755966",
+      "invite_secret": "305fc7c7e695a6a82e89758196db707c4bce9f46a216948d18ac144a78cfba77",
+      "invite_signing_public": "66068facc2dc0bc1249dfd79b31ea8ca2e0a0b5b77d0508bd909d1781dd96397",
+      "tag": "k5h3uhpfcqz5er5o2welo323wybsospj"
+    },
+    "named": [
+      {
+        "name": "_roster",
+        "name_hex": "5f726f73746572",
+        "record_id": "267ddd41f5a140a8b0daedf3857fc4f8"
+      },
+      {
+        "name": "_meta",
+        "name_hex": "5f6d657461",
+        "record_id": "89bdd6f9fd8b5194e2e2461cd65dbd9b"
+      },
+      {
+        "name": "membership:vF9WUuzgkYOHMlEXEZFFFw",
+        "name_hex": "6d656d626572736869703a7646395755757a676b594f484d6c4558455a46464677",
+        "record_id": "409d549e9728b21f6dffb87bb338a81c"
+      },
+      {
+        "name": "invite:fDrJoheRU86cXAQz6vmbXw",
+        "name_hex": "696e766974653a6644724a6f686552553836635841517a36766d625877",
+        "record_id": "afc695550b9563c5a5116765a59690ea"
+      },
+      {
+        "name": "settings:liszto",
+        "name_hex": "73657474696e67733a6c69737a746f",
+        "record_id": "acf41f8a0e8e880162b9b9e77ee89316"
+      },
+      {
+        "name": "café",
+        "name_hex": "636166c3a9",
+        "record_id": "5319d243caae5b430d02ec410204cacb"
+      },
+      {
+        "name": "café",
+        "name_hex": "63616665cc81",
+        "record_id": "e5b4c40ad293b7e5144ef79c33225d7d"
+      }
+    ],
+    "note": "Membership and invite record names are taken to spell their IDs in b64u; §6.2 doesn't say.",
+    "pairing": {
+      "pair_key": "1d4ca2d437f05709ca3a8760a0c5091a4ff3e540c0cc4317f1c18853332956cc",
+      "pairing_secret": "9a49b2e4b76f533cae5afa67f0f26bea5b0284c4b489f2804dda084afb122613",
+      "tag": "oq34bmm3sdhsmidtsvyfdmiu5z3ftksl"
+    }
+  },
+  "description": "Channel keys and tags (§5.6), key commitments (§5.7), named record IDs (§7.3)."
+}

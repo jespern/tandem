@@ -1,0 +1,150 @@
+{
+  "cases": {
+    "invalid": [
+      {
+        "hex": "7b2261223a312c2261223a327d",
+        "text": "{\"a\":1,\"a\":2}",
+        "why": "repeated name"
+      },
+      {
+        "hex": "7b2278223a5b7b2261223a312c2262223a322c2261223a337d5d7d",
+        "text": "{\"x\":[{\"a\":1,\"b\":2,\"a\":3}]}",
+        "why": "repeated name, nested"
+      },
+      {
+        "hex": "7b2261223a312c2261223a327d",
+        "text": "{\"a\":1,\"a\":2}",
+        "why": "repeated name, one of them escaped"
+      },
+      {
+        "hex": "7b226e223a312e307d",
+        "text": "{\"n\":1.0}",
+        "why": "fraction"
+      },
+      {
+        "hex": "7b226e223a3165337d",
+        "text": "{\"n\":1e3}",
+        "why": "exponent"
+      },
+      {
+        "hex": "7b226e223a393030373139393235343734303939337d",
+        "text": "{\"n\":9007199254740993}",
+        "why": "beyond 2^53"
+      },
+      {
+        "hex": "7b226e223a2d393030373139393235343734303939337d",
+        "text": "{\"n\":-9007199254740993}",
+        "why": "beyond -2^53"
+      },
+      {
+        "hex": "7b226e223a30317d",
+        "text": "{\"n\":01}",
+        "why": "leading zero"
+      },
+      {
+        "hex": "7b226e223a2b317d",
+        "text": "{\"n\":+1}",
+        "why": "plus sign"
+      },
+      {
+        "hex": "efbbbf7b2261223a317d",
+        "why": "byte-order mark"
+      },
+      {
+        "hex": "7b2261223a22ff227d",
+        "why": "invalid UTF-8"
+      },
+      {
+        "hex": "7b2261223a22eda080227d",
+        "why": "a surrogate encoded in UTF-8"
+      },
+      {
+        "hex": "7b2261223a22c0af227d",
+        "why": "overlong UTF-8"
+      },
+      {
+        "hex": "7b2261223a225c7564383030227d",
+        "text": "{\"a\":\"\\ud800\"}",
+        "why": "unpaired high surrogate"
+      },
+      {
+        "hex": "7b2261223a225c7564633030227d",
+        "text": "{\"a\":\"\\udc00\"}",
+        "why": "unpaired low surrogate"
+      },
+      {
+        "hex": "7b2261223a225c756438303041227d",
+        "text": "{\"a\":\"\\ud800A\"}",
+        "why": "high surrogate followed by a non-surrogate"
+      },
+      {
+        "hex": "7b2261223a317d207b2262223a327d",
+        "text": "{\"a\":1} {\"b\":2}",
+        "why": "two values"
+      },
+      {
+        "hex": "7b2261223a317d78",
+        "text": "{\"a\":1}x",
+        "why": "trailing garbage"
+      },
+      {
+        "hex": "7b2261223a227461620968657265227d",
+        "text": "{\"a\":\"tab\there\"}",
+        "why": "raw control character in a string"
+      },
+      {
+        "hex": "7b2261223a312c7d",
+        "text": "{\"a\":1,}",
+        "why": "trailing comma"
+      },
+      {
+        "hex": "7b2761273a317d",
+        "text": "{'a':1}",
+        "why": "single quotes"
+      },
+      {
+        "hex": "",
+        "text": "",
+        "why": "empty"
+      }
+    ],
+    "valid": [
+      {
+        "hex": "7b2261223a312c2262223a5b747275652c66616c73652c6e756c6c2c2278225d7d",
+        "text": "{\"a\":1,\"b\":[true,false,null,\"x\"]}",
+        "why": "plain"
+      },
+      {
+        "hex": "20090d0a7b2261223a7b7d7d200a",
+        "text": " \t\r\n{\"a\":{}} \n",
+        "why": "whitespace around the value"
+      },
+      {
+        "hex": "7b22636166c3a9223a312c2263616665cc81223a327d",
+        "text": "{\"café\":1,\"café\":2}",
+        "why": "é as one code point and as e plus a combining accent are two names"
+      },
+      {
+        "hex": "7b2261223a7b2262223a317d2c2263223a7b2262223a327d7d",
+        "text": "{\"a\":{\"b\":1},\"c\":{\"b\":2}}",
+        "why": "the same name in different objects"
+      },
+      {
+        "hex": "7b226e223a393030373139393235343734303939322c226d223a2d393030373139393235343734303939322c227a223a302c2279223a2d307d",
+        "text": "{\"n\":9007199254740992,\"m\":-9007199254740992,\"z\":0,\"y\":-0}",
+        "why": "integers of magnitude 2^53 and zero"
+      },
+      {
+        "hex": "7b2273223a22f09f988020c3a9205c22205c5c205c2f205c625c665c6e5c725c74205c7530303030227d",
+        "text": "{\"s\":\"😀 é \\\" \\\\ \\/ \\b\\f\\n\\r\\t \\u0000\"}",
+        "why": "escapes, a surrogate pair, an escaped NUL"
+      },
+      {
+        "hex": "5b2261222c2261225d",
+        "text": "[\"a\",\"a\"]",
+        "why": "repeated array items are fine"
+      }
+    ]
+  },
+  "description": "The one reading of protocol JSON (§10.5). Inputs are hex because some aren't UTF-8."
+}

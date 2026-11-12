@@ -1,0 +1,49 @@
+{
+  "cases": {
+    "invalid": [
+      {
+        "input": "uvvuskrkzsai67hm5pkes63ybz4thu7xgmt4hsuqkhfiy3nvgrlvibzw",
+        "why": "checksum doesn't match"
+      },
+      {
+        "input": "uvvuskrkzsyi67hm5pkes63ybz4thu7xgmt4hsuqkhfiy3nvgrlv",
+        "why": "too short"
+      },
+      {
+        "input": "uvvuskrkzsyi67hm5pkes63ybz4thu7xgmt4hsuqkhfiy3nvgrlvibzwaaaa",
+        "why": "too long"
+      },
+      {
+        "input": "uvvuskrkzsyi67hm5pkes63ybz4thu7xgmt4hsuqkhfiy3nvgrlvibz1",
+        "why": "not in the base32 alphabet"
+      },
+      {
+        "input": "uvvuskrkzsyi67hm5pkes63ybz4thu7xgmt4hsuqkhfiy3nvgrlvibzw========",
+        "why": "padding"
+      },
+      {
+        "input": "uvvu-skrk-zsyi-67hm-5pke-s63y-bz4t-hu7x-gmt4-hsuq-khfi-y3nv-grlv-ibzw",
+        "why": "only spaces separate groups"
+      }
+    ],
+    "valid": [
+      {
+        "input": "uvvu skrk zsyi 67hm 5pke s63y bz4t hu7x gmt4 hsuq khfi y3nv grlv ibzw",
+        "secret": "a56b492a2accb08f7cecebd4497b780e7933d3f73327c3ca9051ca8c6db53457"
+      },
+      {
+        "input": "uvvuskrkzsyi67hm5pkes63ybz4thu7xgmt4hsuqkhfiy3nvgrlvibzw",
+        "secret": "a56b492a2accb08f7cecebd4497b780e7933d3f73327c3ca9051ca8c6db53457"
+      },
+      {
+        "input": "UVVU SKRK ZSYI 67HM 5PKE S63Y BZ4T HU7X GMT4 HSUQ KHFI Y3NV GRLV IBZW",
+        "secret": "a56b492a2accb08f7cecebd4497b780e7933d3f73327c3ca9051ca8c6db53457"
+      },
+      {
+        "input": "  uvvu\nskrk\nzsyi\n67hm\n5pke\ns63y\nbz4t\nhu7x\ngmt4\nhsuq\nkhfi\ny3nv\ngrlv\nibzw ",
+        "secret": "a56b492a2accb08f7cecebd4497b780e7933d3f73327c3ca9051ca8c6db53457"
+      }
+    ]
+  },
+  "description": "Backup keys (§6.3). Readers ignore spaces and case; anything else must be rejected."
+}

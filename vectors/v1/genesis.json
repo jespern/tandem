@@ -1,0 +1,18 @@
+{
+  "cases": {
+    "collection_id": "3643acf8498b70706839e09601a54def",
+    "epoch_id": "3643acf8498b70706839e09601a54defa62410c34b5de494806976af1c097edf",
+    "epoch_key": "046a0819e0549618adfd4b6f2a4252c5ff64daa00c6d67237a89292145f533b3",
+    "epoch_tag": "2z3x4sre5kdd5fsd7suoo3m4cghvzpje",
+    "nonce": "f24d4e92c6c28c4f626503a12dcef78a",
+    "note": "Provisional: n and key.n start at 0 (as model/owner_model.py) and the 16 random bytes are \"nonce\"; §7.1 doesn't name the field.",
+    "owner_secret": "b0cff2de5e2e9627032ec7b86875c96f3a53bef5f8a91819720239577baced9e",
+    "payload": "{\"rec\":\"Jn3dQfWhQKiw2u3zhX_E-A\",\"writes\":[{\"f\":\"s\",\"op\":1,\"v\":\"eyJuIjowLCJrZXkiOnsibiI6MCwiY29tbWl0IjoiUDB6a1pVWDFMb2lDMmhXWjkzVTJWMmlmblVfN0xTejM0ZERtNXg1S1d3USJ9LCJtZW1iZXJzIjpbeyJ1aWQiOiJiejRXRGtzQXBhZVdUaUMwV2ZKSC02bnpxWkd6Tzl1Z3luRkRZSU5DX2kwIiwicm9sZSI6Im93bmVyIiwidWthIjoiU2VtQnY3U294bzd2c3ZDVGR4dXBUMzh4bDdrNl9scW5sa25YYVFrV3lFbyIsIm5hbWUiOiJKZXNwZXIifV0sImRlbGV0ZWQiOmZhbHNlLCJub25jZSI6IjhrMU9rc2JDakU5aVpRT2hMYzczaWcifQ\",\"a\":\"bz4WDksApaeWTiC0WfJH-6nzqZGzO9ugynFDYINC_i0\",\"d\":[\"B6dx2DWI0yc\",1731312000000,0],\"c\":[],\"b\":[],\"s\":\"H7Ud-gMFonoIvoXGgUee-TQpFXZRHscr8jVGMyNSJ_qsBFIKBt7zSxDpGIr_1ULMFR0PvrvVn7Nu4NZqVBlrDQ\"}]}",
+    "roster_record_id": "267ddd41f5a140a8b0daedf3857fc4f8",
+    "sig_input": "54414e44454d2d57524954452d563100000000000000000000000000000000267ddd41f5a140a8b0daedf3857fc4f80000000173010000000075ada8f08d20b4d4a85b3e16c7361d71bedce6908855eac60b7fe4a4fb7b80b26f3e160e4b00a5a7964e20b459f247fba9f3a991b33bdba0ca7143608342fe2d07a771d83588d327000001931a3c9c000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "signature": "1fb51dfa0305a27a08be85c681479ef934291576511ec72bf2354633235227faac04520a06def34b10e9188affd542cc151d0fbebbd59fb36ee0d66a54196b0d",
+    "statement": "{\"n\":0,\"key\":{\"n\":0,\"commit\":\"P0zkZUX1LoiC2hWZ93U2V2ifnU_7LSz34dDm5x5KWwQ\"},\"members\":[{\"uid\":\"bz4WDksApaeWTiC0WfJH-6nzqZGzO9ugynFDYINC_i0\",\"role\":\"owner\",\"uka\":\"SemBv7Soxo7vsvCTdxupT38xl7k6_lqnlknXaQkWyEo\",\"name\":\"Jesper\"}],\"deleted\":false,\"nonce\":\"8k1OksbCjE9iZQOhLc73ig\"}",
+    "statement_id": "3643acf8498b70706839e09601a54defa62410c34b5de494806976af1c097edf"
+  },
+  "description": "Collection genesis (§7.1): statement bytes, collection ID, epoch ID and the epoch channel tag."
+}
