@@ -7,6 +7,12 @@ Each run builds a random roster history (valid and invalid statements, rotations
 inventories, conflicting successors, statements signed by others), random writes, messages,
 invites and late writes; delivers a random subset in a random order to an OwnerLog; and asks
 both models the same questions. Any disagreement is printed with the seed that produced it.
+
+Deletes: owner_model.py has no ops; it compares every write by (record, field). Since
+2026-11-12 a delete (empty field, element and value) supersedes any write to its record that
+it includes, and only a delete supersedes a delete. The harness puts that register rule on
+top of the Python model's vector test (`with_delete_registers`), so every supersession-based
+answer (supersedes, dominated, mayDestroy, reissue) is still compared, deletes included.
 """
 import copy
 import json
@@ -18,9 +24,28 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "model"))
 
+import owner_model  # noqa: E402
 from owner_model import (META, OwnerLog, data_write, digest, dominated, inventory_bytes,  # noqa: E402
                          inventory_hash, invite_open, may_destroy, reissue, statement,
-                         supersedes, write_valid)
+                         write_valid)
+
+
+def with_delete_registers(field_sup):
+    """The decided register rule over the Python model's (record, field) supersession: a delete
+    reaches any write to its record (the field test is skipped by lending the delete the other
+    write's field), and a non-delete never reaches a delete. Everything else is unchanged."""
+    def sup(log, w, x):
+        wd, xd = w.get("op") == "delete", x.get("op") == "delete"
+        if xd and not wd:
+            return False
+        if wd and not xd:
+            return field_sup(log, dict(w, field=x["field"]), x)
+        return field_sup(log, w, x)
+    return sup
+
+
+# dominated, may_destroy and reissue look `supersedes` up in owner_model, so they use this too.
+owner_model.supersedes = supersedes = with_delete_registers(owner_model.supersedes)
 
 USERS = ["O", "W", "R", "X"]
 FIELDS = ["v", "é", "é"]          # one field in two Unicode spellings is two fields
@@ -39,8 +64,17 @@ def node(s):
 
 def wjson(w):
     return {"id": w["id"], "author": w["author"], "ref": w["ref"], "record": w["rec"],
-            "field": w["field"], "value": w["value"], "dev": w["dev"], "hlc": w["hlc"],
-            "ctx": w["ctx"], "base": w["base"]}
+            "field": w["field"], "op": w.get("op", "assign"), "value": w["value"],
+            "dev": w["dev"], "hlc": w["hlc"], "ctx": w["ctx"], "base": w["base"]}
+
+
+def delete_write(uid, ref, rec, dev, hlc, ctx, base):
+    """A delete (§9.2): empty field and value, no element. The op is part of the write's ID."""
+    w = data_write(uid, ref, rec, "", dev, hlc, ctx, base, field="")
+    del w["id"]
+    w["op"] = "delete"
+    w["id"] = digest(w)
+    return w
 
 
 def vector(rng):
@@ -107,6 +141,11 @@ def history(rng):
             inventories[s["id"]] = inv
         for _ in range(rng.randint(0, 4)):
             ref = rng.choice(sts)["id"] if rng.random() < 0.9 else "unknown"
+            if rng.random() < 0.2:
+                writes.append(delete_write(rng.choice(USERS), ref, rng.choice(RECORDS[:2]),
+                                           rng.choice("abc"), rng.randint(0, 6), vector(rng),
+                                           vector(rng) if rng.random() < 0.4 else {}))
+                continue
             writes.append(data_write(rng.choice(USERS), ref, rng.choice(RECORDS),
                                      rng.choice("xyz"), rng.choice("abc"), rng.randint(0, 6),
                                      vector(rng), vector(rng) if rng.random() < 0.4 else {},
@@ -175,6 +214,11 @@ def compare(rng, oracle, seed):
 
     seen("dead", log.frozen)
     seen("supersession pairs", len(out["supersedes"]))
+    ops = {w["id"]: w.get("op", "assign") for w in writes}
+    seen("deletes over other writes", sum(1 for a, b in out["supersedes"]
+                                          if ops[a] == "delete" and ops[b] != "delete"))
+    seen("deletes over deletes", sum(1 for a, b in out["supersedes"]
+                                     if ops[a] == ops[b] == "delete"))
     seen("may-destroy pairs", len(out["mayDestroy"]))
     seen("mutual domination", sum(1 for a, b in out["dominated"] if [b, a] in out["dominated"]))
     seen("invites open", sum(out["invites"].values()))
