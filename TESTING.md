@@ -11,7 +11,7 @@ How Tandem is verified, what exists, and what waits. The protocol itself is in `
 | Testbed: a real JMAP + IMAP server with per-device network faults and hostile-hub tools | `testbed/` | Docker; Python standard library for `tb` | Done. 42 binding and real-time probes pass on Stalwart 1.1.0 |
 | Scenarios: 323 cases and families, with a format a harness can execute | `scenarios/` | Markdown | Drafted against an earlier design; refresh pending (`ASSUMPTIONS.md`) |
 | Reference model: the merge and roster rules, executable and proved | `proofs/` | Lean 4 + Mathlib | Project builds; theorems planned in `proofs/README.md` |
-| Reference SDK: the whole protocol, the harness driver, test vectors | `sdk/go/` | Go 1.26 | Primitives done; `vectors/v1` (14 files) generated deterministically |
+| Reference SDK: the whole protocol, the harness driver, test vectors | `sdk/go/` | Go 1.26 | Primitives and both bindings (`sdk/go/store`, IMAP on emersion/go-imap v2) done; `vectors/v1` (14 files); round trips pass on the testbed (`TANDEM_TESTBED=1 go test ./store`) |
 | Production SDK | `sdk/swift/` | Swift 6.4 (CryptoKit) | Primitives done; passes every vector |
 
 ## How they fit
@@ -32,4 +32,5 @@ Swift SDK ──► same scenarios and test vectors as the Go SDK
 | 2026-11-12 | **Go** for the reference SDK and harness. Its standard library covers HPKE, HKDF, X25519 and Ed25519, and ChaCha20-Poly1305 comes from the Go team's `x/crypto`. It is fast enough for thousands of seeded runs, simulates many devices easily, ships as one binary, and is readable for other implementers. Rejected: Python (third-party cryptography, slow for fuzzing); Swift as the reference (ties it to Apple's toolchain and removes the independent second implementation). |
 | 2026-11-12 | The **reference model** that judges scenario outcomes is written in **Lean** and compiled, so the proven model and the test oracle are the same code. |
 | 2026-11-12 | After the redesign added a Python model to the design repository (`model/`), the **Lean model stays the oracle** (Jesper). The Python model is cross-checked against it by a differential test on random inputs (`ASSUMPTIONS.md`). |
+| 2026-11-12 | The Go IMAP binding uses **emersion/go-imap v2** (beta.8) rather than a client of our own: the established Go IMAP client, at the cost of a beta API and two transitive modules (go-message, go-sasl). Its client has no QRESYNC yet, so removals are found by `UID SEARCH ALL`, which §10.3 allows. |
 | 2026-11-12 | Liszto uses a **native Swift SDK**, checked against the Go SDK through shared test vectors and the scenario suite. Two independent implementations are deliberate: where they disagree, the spec is ambiguous. |
