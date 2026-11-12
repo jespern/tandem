@@ -1,0 +1,147 @@
+<p class="tagline">@TAGLINE@</p>
+<a href="#what">What is Tandem?</a>
+<br><a href="#who">Who is it for?</a>
+<br><a href="#why">Why a mailbox?</a>
+<br><a href="#cant">What can't it do?</a>
+<br><a href="#checked">Has anyone checked it?</a>
+<br><a href="#airforce">Why .airforce?</a>
+<hr>
+<a href="spec.html">The specification</a> (draft of @DATE@)
+<br><a href="decisions.html">Decisions, and the designs that didn't survive</a>
+<br><a href="questions.html">Open questions</a>
+<br><a href="prior-art.html">Prior art</a>
+<hr>
+<p>
+Tandem is a protocol for keeping collections of records in sync
+across many devices and many people,
+end-to-end encrypted, in real time.
+It needs no server of its own.
+Its only infrastructure is a mailbox:
+one account on any JMAP or IMAP server.
+</p>
+<p>
+It is for people who trust each other.
+<b>It does not work in an adversarial environment.</b>
+</p>
+
+<h2 id="what">What is Tandem?</h2>
+<p>
+Every piece of data is an encrypted, signed message
+in one folder of a mail account.
+The mail server sees opaque ciphertext, sizes and timing.
+Nothing else.
+</p>
+<p>
+Who can read a collection is decided by who holds its key.
+Who may change what is decided by signatures checked on every device.
+The mail server decides nothing.
+</p>
+<p>
+Records merge without coordination,
+so devices work offline and in any order,
+and every device ends up with the same state.
+</p>
+<p>
+You are one secret, held by all your devices and printable as a backup.
+A collection has one owner,
+who shares it by link or QR code
+and takes it back by changing the key.
+</p>
+<p>
+Tandem was written for <a href="https://liszto.sh">Liszto</a>, a to-do app.
+It doesn't know that.
+</p>
+
+<h2 id="who">Who is it for?</h2>
+<p>
+A household, friends, a small team.
+People who trust each other.
+</p>
+<p>
+Tandem does not work in an adversarial environment.
+Everyone who shares the mailbox holds its credential,
+and anyone who holds it can delete everything in it.
+A member who can write to a collection can vandalise it until the owner removes them.
+A stolen device is you until you start over.
+</p>
+<p>
+The encryption keeps the mail provider, and people on the mailbox who aren't members,
+from reading or forging your data.
+It does not protect you from the people you let in.
+</p>
+
+<h2 id="why">Why a mailbox?</h2>
+<p>
+Two words: <b>no servers</b>.
+</p>
+<p>
+Three more: not ours, anyway.
+Any standards-compliant mail account works.
+There is no relay, no push service and no key server to run,
+and a mailbox you pay for is more predictable
+than infrastructure that shrinks and grows on other people's terms.
+</p>
+<p>
+Keeping things that aren't mail in a mail account is not a new idea.
+Kolab did it. Apple Notes did it.
+See the <a href="prior-art.html">prior art</a>.
+</p>
+
+<h2 id="cant">What can't it do?</h2>
+<p>
+Quite a lot.
+</p>
+<ul>
+<li>
+<b>Stop someone who holds the mailbox credential from deleting your data.</b>
+They can't read it and they can't forge it, but they can delete it.
+Honest devices keep full copies and upload again what was destroyed.
+</li>
+<li>
+<b>Cut off a stolen device.</b>
+Every device of yours holds the same secret.
+If one ends up in the wrong hands, you start over with a new identity.
+</li>
+<li>
+<b>Rescue a collection whose owner has lost their secret.</b>
+Whoever can still read it copies the items into a new one.
+</li>
+<li>
+<b>Choose between two conflicting histories of who a collection is shared with.</b>
+If that ever happens the collection is dead. Same remedy.
+</li>
+<li>
+<b>Hide from the mail server</b> how many messages you write, how big they are, or when.
+</li>
+<li>
+<b>Gmail and Outlook.</b>
+The IMAP binding wants a password or an app password.
+</li>
+</ul>
+<p>
+All of this is on purpose.
+The draft tried being cleverer first, six times;
+see the <a href="decisions.html">decisions</a>.
+</p>
+
+<h2 id="checked">Has anyone checked it?</h2>
+<p>
+Nobody you should trust yet.
+This is a draft for review, not a security sign-off.
+</p>
+<p>
+It has been reviewed, round after round,
+by its author and by language models.
+The reviews kept finding defects,
+nearly all of them in rules for choosing between competing histories
+and for following a user's key changes.
+So those rules were taken out.
+An executable model of the collection rules is kept next to the draft.
+</p>
+
+<h2 id="airforce">Why .airforce?</h2>
+<p>
+A tandem is a bicycle for two.
+It is also how a two-seat jet seats its crew: one behind the other.
+And the domain was available.
+</p>
