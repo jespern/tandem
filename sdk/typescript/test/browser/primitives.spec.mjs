@@ -140,6 +140,15 @@ test('multi-message device actions commit state, clocks and exact bytes atomical
   expect(await page.evaluate(async()=>{const journal=await window.t.BrowserJournal.open('actions');try{return{state:(await journal.state('hub'))[0],pending:(await journal.pending('hub')).length,events:(await journal.readEvents('hub')).length};}finally{journal.close();}})).toEqual({state:2,pending:2,events:2});
 });
 
+test('a no-op journal transaction does not wake the device loop',async({page})=>{
+  expect(await page.evaluate(async()=>{
+    const journal=await window.t.BrowserJournal.open('no-op'),installation=await journal.installation();let woke=false;
+    const changed=journal.eventsChanged();void changed.then(()=>{woke=true;});
+    await journal.commit('hub',installation,12,()=>({messages:[]}));await Promise.resolve();
+    const result=woke;journal.close();return result;
+  })).toBe(false);
+});
+
 test('remembered browser keys survive reload without an extra password', async ({page}) => {
   const keys = () => page.evaluate(async () => { const keychain=await window.t.BrowserKeychain.open('remembered'), keys=await keychain.deviceKeys();
     const pub=window.t.b64u(window.t.publicKey(keys.signing)); keychain.close(); return pub; });
@@ -240,14 +249,23 @@ test('real JMAP and IndexedDB: lost acknowledgement recovers without resending t
 });
 
 
+function nativeDriver(config){
+  const driver=spawn(config.binary,[],{stdio:['pipe','pipe','inherit']}),lines=createInterface({input:driver.stdout})[Symbol.asyncIterator]();
+  return{
+    command:async(op,args={})=>{driver.stdin.write(JSON.stringify({op,...args})+'\n');const line=await lines.next();if(line.done)throw new Error('native driver ended');const result=JSON.parse(line.value);if(!result.ok)throw new Error(`native ${op}: ${result.error}`);return result;},
+    close:async()=>{driver.stdin.end();if(driver.exitCode===null)await once(driver,'exit');}
+  };
+}
+
 test('native Swift approves a browser claim over IMAP; browser reload receives the exact gated release through JMAP push',async({page})=>{
   test.skip(!process.env.TANDEM_NATIVE_FIXTURE,'run sdk/check_browser.py --native');
   test.setTimeout(90_000);
   const native=JSON.parse(process.env.TANDEM_NATIVE_FIXTURE),cfg=JSON.parse(process.env.TANDEM_JMAP_FIXTURE);
-  const driver=spawn(native.binary,[],{stdio:['pipe','pipe','inherit']}),lines=createInterface({input:driver.stdout})[Symbol.asyncIterator]();
-  const command=async(op,args={})=>{driver.stdin.write(JSON.stringify({op,...args})+'\n');const line=await lines.next();if(line.done)throw new Error('native driver ended');const result=JSON.parse(line.value);if(!result.ok)throw new Error(`native ${op}: ${result.error}`);return result;};
+  const driver=nativeDriver(native),command=driver.command;
   try{
     await command('hub',native);await command('found',{label:'Native Mac'});
+    const cid=(await command('createList',{name:'Native notes'})).list,record=node.b64u(node.randomBytes(16));
+    await command('set',{list:cid,record,field:'title',value:node.b64u(Buffer.from('Created on Mac'))});
     const {link}=await command('startPairing',{label:'Browser'});
     const staged=await page.evaluate(async({cfg,link})=>{
       const t=window.t,parsed=t.parsePairingLink(link),keychain=await t.BrowserKeychain.open('native-pair-keys'),keys=await keychain.deviceKeys();
@@ -269,7 +287,7 @@ test('native Swift approves a browser claim over IMAP; browser reload receives t
     await page.evaluate(async cfg=>{
       const t=window.t,keychain=await t.BrowserKeychain.open('native-pair-keys'),keys=await keychain.deviceKeys(),pending=t.parsePendingPairing(await keychain.get('native-pending'));keychain.close();
       const journal=await t.BrowserJournal.open('native-pair'),hub=t.b64u(pending.link.hub),abort=new AbortController(),replica=new t.BrowserReplica(journal,hub);
-      window.nativeJournal=journal;window.nativeAbort=abort;window.nativeRun=replica.run(()=>t.JMAPStore.open(cfg),abort.signal);void window.nativeRun.catch(()=>{});
+      window.nativeJournal=journal;window.nativeAbort=abort;window.nativeReplica=replica;window.nativeRun=replica.run(()=>t.JMAPStore.open(cfg),abort.signal);void window.nativeRun.catch(()=>{});
       window.nativeReleased=(async()=>{
         const messages=[];for await(const event of replica.events(0,abort.signal)){
           if(event.kind==='removed')continue;messages.push(event);
@@ -279,16 +297,77 @@ test('native Swift approves a browser claim over IMAP; browser reload receives t
           const tag=t.homeTag(released.key,pending.link.hub,pending.link.participant,released.epoch);
           for(const message of messages)if(message.channel===tag){try{const opened=t.openEnvelope(released.key,pending.link.hub,tag,message.body);if(opened.kind===3)home.accept(t.controlFromJSON(opened.plaintext,'home-epoch'));}catch{}}
           if(!home.key(released.epoch))continue;
-          return{certificate:t.b64u(released.certificate.id),request:t.b64u(released.certificate.requestID),participant:t.b64u(released.certificate.participant),confirmedHome:home.heads().length>0};
+          const state=new t.DeviceState(registry,pending.link.directoryKey,pending.link.participant,keys);state.ingest(messages);state.offerHomeKey(released.epoch,released.key);window.nativeState=state;window.nativeHub=hub;
+          return{lists:state.lists().map(row=>row.name),certificate:t.b64u(released.certificate.id),request:t.b64u(released.certificate.requestID),participant:t.b64u(released.certificate.participant),confirmedHome:home.heads().length>0};
         }
         throw new Error('browser stopped before release');
       })();void window.nativeReleased.catch(()=>{});
     },cfg);
     await command('sync');const claims=(await command('claims')).claims;expect(claims).toHaveLength(1);expect(claims[0].id).toBe(staged.request);expect(claims[0].label).toBe('Browser');
     await command('approve',{claim:claims[0].id});
-    const release=await page.evaluate(()=>window.nativeReleased);expect(release.request).toBe(staged.request);expect(release.confirmedHome).toBe(true);expect(release.participant).toBe((await command('me')).participant);
+    const release=await page.evaluate(()=>window.nativeReleased);expect(release.request).toBe(staged.request);expect(release.confirmedHome).toBe(true);expect(release.participant).toBe((await command('me')).participant);expect(release.lists).toEqual(['Native notes']);
+    const edit=await page.evaluate(async({cid,record})=>{
+      const t=window.t,journal=window.nativeJournal,hub=window.nativeHub,state=window.nativeState;
+      const installation=await journal.installation(),ids=await journal.commit(hub,installation,Date.now(),tx=>({messages:state.prepareField(t.unb64u(cid),t.unb64u(record),[{field:'title',op:1,value:new TextEncoder().encode('Edited in browser')}],()=>tx.nextDot())}));
+      const pending=new Set(ids);for await(const event of window.nativeReplica.events(0,window.nativeAbort.signal)){if(event.kind!=='removed')state.ingest([event]);if(event.kind==='received')pending.delete(event.id);if(!pending.size)break;}
+      return new TextDecoder().decode(state.record(t.unb64u(cid),t.unb64u(record)).value('title'));
+    },{cid,record});expect(edit).toBe('Edited in browser');
+    await command('sync');expect((await command('items',{list:cid})).items.find(item=>item.record===record).values.title).toBe(node.b64u(Buffer.from('Edited in browser')));
+    await command('set',{list:cid,record,field:'title',value:node.b64u(Buffer.from('Pushed from native'))});
+    const pushed=await page.evaluate(async({cid,record})=>{
+      const t=window.t;for await(const event of window.nativeReplica.events(0,window.nativeAbort.signal)){
+        if(event.kind==='removed')continue;window.nativeState.ingest([event]);const title=window.nativeState.record(t.unb64u(cid),t.unb64u(record))?.value('title');if(title&&new TextDecoder().decode(title)==='Pushed from native')return true;
+      }return false;
+    },{cid,record});expect(pushed).toBe(true);
   }finally{
     await page.evaluate(async()=>{window.nativeAbort?.abort();await window.nativeRun?.catch(()=>{});window.nativeJournal?.close();});
-    driver.stdin.end();if(driver.exitCode===null)await once(driver,'exit');
+    await driver.close();
+  }
+});
+
+
+test('BrowserDevice pairs, restores offline edits, and refuses a revocation arriving between replay and commit',async({page})=>{
+  test.skip(!process.env.TANDEM_NATIVE_FIXTURE,'run sdk/check_browser.py --native');test.setTimeout(90_000);
+  const native=JSON.parse(process.env.TANDEM_NATIVE_FIXTURE),cfg=JSON.parse(process.env.TANDEM_JMAP_FIXTURE),driver=nativeDriver(native),command=driver.command;
+  try{
+    await command('hub',native);await command('found',{label:'Mac controller fixture'});
+    const cid=(await command('createList',{name:'Controller notes'})).list,record=node.b64u(node.randomBytes(16));await command('set',{list:cid,record,field:'title',value:node.b64u(Buffer.from('Native original'))});
+    const {link}=await command('startPairing',{label:'Browser controller'}),hub=node.parsePairingLink(link).hub;
+    const install=async({cfg,link,hub,resume})=>{
+      const t=window.t;window.controllerJournal=await t.BrowserJournal.open('controller');window.controllerKeys=await t.BrowserKeychain.open('controller-keys');
+      window.controllerDevice=resume?await t.BrowserDevice.resume(t.unb64u(hub),window.controllerJournal,window.controllerKeys):await t.BrowserDevice.pair(link,'Browser controller',window.controllerJournal,window.controllerKeys);
+      window.controllerHub=hub;window.controllerAbort=new AbortController();window.controllerRun=window.controllerDevice.run(()=>t.JMAPStore.open(cfg),window.controllerAbort.signal);void window.controllerRun.catch(()=>{});
+      window.controllerReady=(async()=>{for await(const update of window.controllerDevice.updates(window.controllerAbort.signal)){if(update.status==='ready')return true;}return false;})();void window.controllerReady.catch(()=>{});
+      window.waitControllerSends=async()=>{while(true){const changed=window.controllerJournal.eventsChanged();if(!(await window.controllerJournal.pending(hub)).length)return;await changed;}};
+    };
+    await page.evaluate(install,{cfg,link,hub:node.b64u(hub),resume:false});
+    await page.evaluate(async()=>{for await(const update of window.controllerDevice.updates(window.controllerAbort.signal)){if(update.status==='approval')break;}await window.waitControllerSends();});
+    await page.reload();await page.evaluate(async()=>{window.t=await import('/sdk.js');});await page.evaluate(install,{cfg,hub:node.b64u(hub),resume:true});
+    await command('sync');const claims=(await command('claims')).claims;expect(claims).toHaveLength(1);await command('approve',{claim:claims[0].id});
+    expect(await page.evaluate(()=>window.controllerReady)).toBe(true);
+    const certificate=await page.evaluate(()=>window.t.b64u(window.controllerDevice.state.certificate.id));
+    const offline=await page.evaluate(async({cid,record})=>{
+      const t=window.t;window.controllerAbort.abort();await window.controllerRun;
+      await window.controllerDevice.writeFields(t.unb64u(cid),t.unb64u(record),[{field:'title',op:1,value:new TextEncoder().encode('Saved offline')}]);
+      return{value:new TextDecoder().decode(window.controllerDevice.state.record(t.unb64u(cid),t.unb64u(record)).value('title')),pending:(await window.controllerJournal.pending(window.controllerHub)).length};
+    },{cid,record});expect(offline.value).toBe('Saved offline');expect(offline.pending).toBeGreaterThan(0);
+    await page.reload();await page.evaluate(async()=>{window.t=await import('/sdk.js');});await page.evaluate(install,{cfg,hub:node.b64u(hub),resume:true});
+    await page.evaluate(async()=>{await window.controllerReady;await window.waitControllerSends();});await command('sync');
+    expect((await command('items',{list:cid})).items.find(item=>item.record===record).values.title).toBe(node.b64u(Buffer.from('Saved offline')));
+    await page.evaluate(async()=>{window.controllerAbort.abort();await window.controllerRun;});
+    await command('revoke',{certificate});
+    const refusal=await page.evaluate(async({cfg,link,cid,record,certificate})=>{
+      const t=window.t,parsed=t.parsePairingLink(link),store=await t.JMAPStore.open(cfg),abort=new AbortController(),messages=[];let cursor='';
+      try{let batch;do{batch=await store.changes(cursor,abort.signal);cursor=batch.cursor;messages.push(...batch.added);}while(batch.more);}finally{await store.close();}
+      const tag=t.directoryTag(parsed.directoryKey,parsed.hub),key=t.directoryKey(parsed.directoryKey,parsed.hub);
+      const cut=messages.find(message=>{if(message.channel!==tag)return false;try{const o=t.controlFromJSON(t.openEnvelope(key,parsed.hub,tag,message.body).plaintext);return o.kind==='revocation'&&t.b64u(o.fields.target)===certificate;}catch{return false;}});if(!cut)throw new Error('native revocation not found');
+      const journal=window.controllerJournal,original=journal.commit.bind(journal);let injected=false;
+      journal.commit=async(...args)=>{if(!injected){injected=true;await journal.apply(window.controllerHub,{added:[cut],removed:[],cursor:await journal.cursor(window.controllerHub)});}return original(...args);};
+      let error;try{await window.controllerDevice.writeFields(t.unb64u(cid),t.unb64u(record),[{field:'title',op:1,value:new TextEncoder().encode('Must not leave')}]);}catch(failure){error=failure.message;}
+      journal.commit=original;
+      return{injected,refused:!!error,pending:(await journal.pending(window.controllerHub)).length,status:window.controllerDevice.update.status,value:new TextDecoder().decode(window.controllerDevice.state.record(t.unb64u(cid),t.unb64u(record)).value('title'))};
+    },{cfg,link,cid,record,certificate});expect(refusal).toEqual({injected:true,refused:true,pending:0,status:'revoked',value:'Saved offline'});
+  }finally{
+    await page.evaluate(async()=>{window.controllerAbort?.abort();await window.controllerDevice?.close();window.controllerJournal?.close();window.controllerKeys?.close();});await driver.close();
   }
 });

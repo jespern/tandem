@@ -16,7 +16,8 @@ export class HomePolicy {
   readonly #participant:Uint8Array;readonly #registry:Registry;readonly #limits:Required<HomeLimits>;
   readonly #starts=new Map<string,ControlObject[]>();readonly #keys=new Map<string,Uint8Array[]>();
   readonly #inventories=new Map<string,Map<string,Buffer[]>>();
-  readonly #cache=new Map<string,Validity>();#registryRevision=-1;
+  readonly #cache=new Map<string,Validity>();#registryRevision=-1;#revision=0;
+  get revision():number{return this.#revision;}
   constructor(participant:Uint8Array,registry:Registry,limits:HomeLimits={}){
     this.#participant=bytes(participant,32);this.#registry=registry;this.#limits={maxEpochs:limits.maxEpochs??100000,maxWitnesses:limits.maxWitnesses??16,maxKeysPerEpoch:limits.maxKeysPerEpoch??8,maxDepth:limits.maxDepth??1024};
     for(const n of Object.values(this.#limits))if(!Number.isSafeInteger(n)||n<1)throw new Error('invalid home policy limit');
@@ -32,7 +33,7 @@ export class HomePolicy {
         if(!signer||!o.signatures.sig||!verifyControl(o.kind,o.fields,signer.sign,o.signatures.sig))throw new HomeHoldingLimit('home witness holding limit exceeded');this.#starts.set(key,[o]);
       }else this.#starts.set(key,[...old,o]);
     }
-    this.#cache.clear();return bytes(id);
+    this.#cache.clear();this.#revision++;return bytes(id);
   }
   #object(id:Uint8Array):ControlObject|undefined{return this.#starts.get(b64u(id))?.[0];}
   object(id:Uint8Array):ControlObject|undefined{const variants=this.#starts.get(b64u(id)),first=variants?.[0];if(!first)return;const signer=this.#registry.certificate(first.fields.signer as Uint8Array);
@@ -57,9 +58,9 @@ export class HomePolicy {
   offerKey(epoch:Uint8Array,key:Uint8Array):void{
     bytes(epoch,32);bytes(key,32);const id=b64u(epoch),known=this.#keys.get(id)??[];
     if(known.some(value=>eq(value,key)))return;
-    const start=this.#object(epoch);if(start&&this.validity(epoch).kind==='valid'&&eq(start.fields.key as Uint8Array,commit(key))){this.#keys.set(id,[bytes(key)]);return;}
+    const start=this.#object(epoch);if(start&&this.validity(epoch).kind==='valid'&&eq(start.fields.key as Uint8Array,commit(key))){this.#keys.set(id,[bytes(key)]);this.#revision++;return;}
     if(known.length>=this.#limits.maxKeysPerEpoch||!known.length&&this.#keys.size>=this.#limits.maxEpochs)throw new HomeHoldingLimit('home key candidate holding limit exceeded');
-    this.#keys.set(id,[...known,bytes(key)]);
+    this.#keys.set(id,[...known,bytes(key)]);this.#revision++;
   }
   key(epoch:Uint8Array):Uint8Array|undefined{
     const start=this.#object(epoch);if(!start||this.validity(epoch).kind!=='valid')return;
@@ -76,7 +77,7 @@ export class HomePolicy {
     const accepted=this.#accepted(),parents=new Set([...accepted].flatMap(id=>(this.#object(unb64u(id))!.fields.parents as Uint8Array[]).map(b64u)));
     return [...accepted].filter(id=>!parents.has(id)&&!!this.key(unb64u(id))).map(unb64u).sort(Buffer.compare);
   }
-  addInventory(epoch:Uint8Array,data:Uint8Array):void{const start=this.#object(epoch);if(!start||this.validity(epoch).kind!=='valid'||!eq(sha(data),start.fields.snapshot as Uint8Array))throw new Error('home inventory does not match a valid signed start');this.#inventories.set(b64u(epoch),parseInventory(data));}
+  addInventory(epoch:Uint8Array,data:Uint8Array):void{const start=this.#object(epoch);if(!start||this.validity(epoch).kind!=='valid'||!eq(sha(data),start.fields.snapshot as Uint8Array))throw new Error('home inventory does not match a valid signed start');this.#inventories.set(b64u(epoch),parseInventory(data));this.#revision++;}
   listed(epoch:Uint8Array,w:Write):boolean{return this.#inventories.get(b64u(epoch))?.get(Buffer.from(w.record).toString('hex'))?.some(id=>eq(id,writeID(w)))??false;}
   #ancestor(source:Uint8Array,descendant:Uint8Array,seen=new Set<string>()):boolean{if(seen.has(b64u(descendant)))return false;seen.add(b64u(descendant));const start=this.#object(descendant);return !!start&&(start.fields.parents as Uint8Array[]).some(parent=>eq(parent,source)||this.#ancestor(source,parent,seen));}
   dataValidity(w:Write,channel:Uint8Array):Validity{

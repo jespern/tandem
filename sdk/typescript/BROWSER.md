@@ -2,7 +2,9 @@
 
 `@tandem/protocol/browser` runs without Node built-ins or a Tandem backend. It
 talks directly to a JMAP mail server. This is the primitive layer: Liszto's UI
-and a complete browser device controller still need to be built on it.
+still needs to be built on it. The browser controller currently supports pairing,
+verified home/collection reads and durable field/set edits. Management workflows
+and full rotation parity remain acceptance gates.
 
 ## Runtime and storage
 
@@ -10,7 +12,7 @@ The Node and browser builds share write/control encodings, strict JSON/base64url
 Ed25519 acceptance, inventories and record merging. Node keeps native crypto.
 The browser backend uses Noble hashes, curves and ciphers with Web Crypto's
 random source; `buffer` supplies the existing byte API. The SDK bundle costs
-about 55 KB gzip; the Argon2 worker loads separately.
+about 61 KB gzip; the Argon2 worker loads separately.
 
 Private keys now use an opaque SDK `PrivateKey` handle in both runtimes. Construct
 them with `privateKey(seed, algorithm)`; pass that handle to signing/agreement
@@ -91,13 +93,39 @@ hashes, and prepares exact HPKE claim envelopes. Persist its pending secrets in
 `BrowserKeychain` before committing those envelopes to `BrowserJournal`.
 `releasePairing` requires the exact admitted request, recipient keys, certificate,
 delegation and package hash before opening the gated package. Its home key is
-still a candidate for `HomePolicy`. These functions do not yet run enrollment
-as an app workflow or implement admin approval in the browser.
+still a candidate for `HomePolicy`. `BrowserDevice` runs this enrollment flow;
+browser-side admin approval is not implemented yet.
 
 `InventoryAssembler` keeps competing fragment versions separately and accepts
 only canonical bytes matching the signed commitment. Defaults: 4,096 parts,
 16 MiB buffered/assembled bytes and 4,096 alternative assemblies, all configurable.
 `inventoryPayloads` uses the native engine's 48 KiB fragment size by default.
+
+## Device operations
+
+`BrowserDevice.pair(link, label, journal, keychain)` remembers enrollment and
+journals the exact claim before export. `resume(hub, journal, keychain)` restores
+it after reload, including a claim awaiting approval or edits made offline.
+`run(() => JMAPStore.open(config), signal)` owns the push pump and durable replay;
+`updates(signal)` is an async sequence of device changes. `state` exposes the
+verified `DeviceState` view, with `lists`, `records`, `record`, `homeRecord`, `role`
+and `offers`. `writeFields` and `writeHome` commit signed edits locally before
+export. Set adds/removes and record tombstones use the shared merge rules.
+
+The controller owns the journal's opaque per-hub action state. Device Web Locks
+serialize local actions across tabs. A write transaction also checks the last
+durable event sequence: if inbox/authority data arrived after replay, it retries
+replay before signing. A verified revocation in that gap prevents the write.
+No-op transactions emit no wake, so waiting for approval cannot create a busy loop.
+Unknown proof status stays distinct from a verified revocation.
+
+`DeviceState` caches decryptions and signature validation. New batches rebuild
+record merges from retained source writes, including changed epoch eligibility;
+this favors replay correctness over an incremental application cache. Defaults
+hold 100,000 envelopes / 64 MiB and publish toward 64 KiB messages, configurable.
+Individual writes still obey the protocol's 1 MiB maximum. Private application
+storage is separate from this SDK journal. Cancel/await the device and close its
+keychain/journal when finished; no background watcher is needed.
 
 ## Build and checks
 
@@ -129,15 +157,18 @@ and the browser. The second requires Docker and adds direct JMAP/CORS, push,
 pagination, replay, deletion and lost-ack recovery against disposable Stalwart.
 With `--native`, it also builds the Swift driver and proves real browser claim →
 Swift approval over IMAP → browser page reload → gated JMAP push release → signed
-home-key confirmation. All 11 scenarios passed locally. Only that fixture accepts self-signed TLS; production SDK checks stay enabled.
+home-key confirmation. It additionally verifies native/browser edits both ways,
+controller enrollment/reload, offline edit recovery and revocation between replay
+and commit. All 13 scenarios passed locally. Only that fixture accepts self-signed TLS; production SDK checks stay enabled.
 It explicitly enables browser CORS and publishes real loopback URLs, with no proxy.
 
 ## Remaining acceptance gates
 
-1. A browser device controller passing the Swift pairing/release, home, roster
-   fork, grant, inventory and rotation scenarios. Preserve pending dependencies
-   and alternative witnesses through journal replay. Refuse revoked keys,
-   reader writes and stale epochs before app integration.
+1. Finish controller operations for collection creation, accepting/sharing,
+   management and journalled rotation/healing. Pairing/release and bidirectional
+   field edits now pass against Swift; full home/list rotation parity still needs
+   the native crash/late-write scenarios. Reader and stale-epoch validation exist
+   in the authority layer and must remain enforced by every new operation.
 2. Shared Liszto field-value vectors against its native adapter, then the browser
    store/operations layer and workspace with the same completion and keyboard rules.
 3. Validation on the selected real provider. Earlier Fastmail measurements found

@@ -10,6 +10,8 @@ export interface LocalMessage {channel: string; body: Uint8Array}
 export interface LocalTransaction {
   /** Opaque device state, read under the same transaction lock as the outbox. */
   readonly state: Uint8Array | undefined;
+  /** Last durable envelope event in this hub, read under the write lock. */
+  readonly sequence: number;
   nextDot(): Dot;
 }
 export interface LocalPlan {
@@ -85,9 +87,11 @@ export class BrowserJournal {
       if (active && b64u(active) !== clockKey) throw new Error('stale installation; reload its ID before queueing');
       if (!clock && await request(meta.get('installation.committed')) === true) throw new Error('installation clock was lost; obtain a fresh installation ID');
       const state = await request(meta.get(['device', hub])) as Uint8Array | undefined;
+      const latest = await request(tx.objectStore('events').index('hubSequence').openCursor(IDBKeyRange.bound([hub, 0], [hub, Number.MAX_SAFE_INTEGER]), 'prev'));
+      const sequence = latest ? (latest.value as JournalEvent).sequence : 0;
       let reserved = false, preparing = true;
       const plan = (() => {
-        try { return prepare({state: state === undefined ? undefined : Uint8Array.from(state), nextDot: () => {
+        try { return prepare({sequence, state: state === undefined ? undefined : Uint8Array.from(state), nextDot: () => {
           if (!preparing) throw new Error('clock reservation outside preparation');
           clock = clock ? nextClock(clock.millis, clock.counter, now) : {millis: now, counter: 0}; reserved = true;
           return {...clock, device: Uint8Array.from(localID)};
@@ -112,7 +116,7 @@ export class BrowserJournal {
           outbox.put(entry, [hub, entry.id]); events.add({hub, kind: 'queued', id: entry.id, channel: entry.channel, body: entry.body} satisfies EventRow); queued = true;
         }
       }
-      await done; this.#notify(queued); return messages.map(message => message.id);
+      await done; if (queued || reserved || updated !== undefined || !active) this.#notify(queued); return messages.map(message => message.id);
     } catch (error) { try { tx.abort(); } catch {} await done.catch(() => {}); throw error; }
   }
   async cursor(hub: string): Promise<string> { return (await request(this.#db.transaction('cursors').objectStore('cursors').get(hub)) as string | undefined) ?? ''; }

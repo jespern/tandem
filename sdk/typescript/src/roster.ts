@@ -42,7 +42,8 @@ export class CollectionPolicy {
   readonly #limits:Required<CollectionLimits>;
   readonly #rows=new Map<string,Row>();readonly #decisions=new Map<string,Set<string>>();readonly #announced=new Set<string>();
   readonly #keys=new Map<string,Uint8Array>();readonly #candidates=new Map<string,Uint8Array[]>();readonly #inventories=new Map<string,Map<string,Buffer[]>>();
-  #genesis:string|undefined;
+  #genesis:string|undefined;#revision=0;
+  get revision():number{return this.#revision;}
   constructor(id:Uint8Array,registry:Registry,limits:CollectionLimits={}){this.#id=bytes(id,16);this.#registry=registry;this.#limits={maxStatements:limits.maxStatements??100000,maxCandidateEpochs:limits.maxCandidateEpochs??1024,maxKeysPerEpoch:limits.maxKeysPerEpoch??8};for(const n of Object.values(this.#limits))if(!Number.isSafeInteger(n)||n<1)throw new Error('invalid collection policy limit');}
   get id():Uint8Array{return bytes(this.#id);}
   get genesis():Uint8Array|undefined{return this.#genesis?bytes(this.#rows.get(this.#genesis)!.id):undefined;}
@@ -68,7 +69,7 @@ export class CollectionPolicy {
     this.#candidates.set(id,[...candidates,bytes(key)]);this.#confirm(id);
   }
   #confirm(id:string):void{const row=this.#rows.get(id);if(!row||!this.#starts(row))return;const key=this.#candidates.get(id)?.find(key=>eq(commit(key),row.statement.commit));if(key){this.#keys.set(id,key);this.#candidates.delete(id);}}
-  #decision(parent:Uint8Array,id:Uint8Array):void{const key=b64u(parent),ids=this.#decisions.get(key)??new Set<string>();ids.add(b64u(id));this.#decisions.set(key,ids);}
+  #decision(parent:Uint8Array,id:Uint8Array):void{const key=b64u(parent),ids=this.#decisions.get(key)??new Set<string>();if(!ids.has(b64u(id))){ids.add(b64u(id));this.#revision++;}this.#decisions.set(key,ids);}
   accept(input:Write,channel:Uint8Array):Validity {
     if(this.dead)return bad('collection has conflicting owner decisions');
     if(!eq(input.hub,this.#registry.pin.hub)||!eq(input.record,ROSTER_RECORD)||input.field!=='s'||input.op!==1)return bad('not a roster write');
@@ -83,7 +84,7 @@ export class CollectionPolicy {
       const parentEpoch=this.epoch(parent.id);if(parentEpoch&&eq(channel,parentEpoch))this.#decision(parent.id,id);
     }
     const known=this.#rows.get(key);
-    if(known){const parentEpoch=parent?this.epoch(parent.id):undefined;if(this.#starts(known)&&parentEpoch&&eq(parentEpoch,channel))this.#announced.add(key);return valid;}
+    if(known){const parentEpoch=parent?this.epoch(parent.id):undefined;if(this.#starts(known)&&parentEpoch&&eq(parentEpoch,channel)){if(!this.#announced.has(key))this.#revision++;this.#announced.add(key);}return valid;}
     let s:Statement;try{s=parseStatement(w.value);}catch{return bad('invalid roster value');}
     if(w.element!==null||w.context.length||w.base.length)return bad('invalid roster vectors or element');
     const floors:Uint8Array[]=[];
@@ -103,13 +104,13 @@ export class CollectionPolicy {
     const extended=all(floors.map(floor=>this.#registry.extendsFloor(w.authorization,floor)));if(extended.kind!=='valid')return extended;
     const copied=parseKind1(recordPayload(w.record,[w]),w.hub,w.scope);if(!('writes'in copied))return bad('not a roster payload');
     if(this.#rows.size>=this.#limits.maxStatements)throw new CollectionHoldingLimit('roster statement holding limit exceeded');
-    const row:Row={id:bytes(id),write:copied.writes[0]!,statement:s};this.#rows.set(key,row);if(genesis)this.#genesis=key;
+    const row:Row={id:bytes(id),write:copied.writes[0]!,statement:s};this.#rows.set(key,row);this.#revision++;if(genesis)this.#genesis=key;
     const start=this.#starts(row),parentEpoch=parent?this.epoch(parent.id):undefined;
     if(!genesis&&(!start||(parentEpoch&&eq(parentEpoch,channel)))){this.#announced.add(key);this.#decision(w.ref,id);}
     this.#confirm(key);return valid;
   }
-  announce(id:Uint8Array):void{const row=this.#rows.get(b64u(id));if(row){this.#announced.add(b64u(id));if(this.#starts(row)&&b64u(id)!==this.#genesis)this.#decision(row.write.ref,id);}}
-  addInventory(epoch:Uint8Array,data:Uint8Array):void{const row=this.#rows.get(b64u(epoch));if(!row?.statement.snapshot||!eq(sha(data),row.statement.snapshot))throw new Error('inventory does not match the signed commitment');this.#inventories.set(b64u(epoch),parseInventory(data));}
+  announce(id:Uint8Array):void{const row=this.#rows.get(b64u(id));if(row){if(!this.#announced.has(b64u(id)))this.#revision++;this.#announced.add(b64u(id));if(this.#starts(row)&&b64u(id)!==this.#genesis)this.#decision(row.write.ref,id);}}
+  addInventory(epoch:Uint8Array,data:Uint8Array):void{const row=this.#rows.get(b64u(epoch));if(!row?.statement.snapshot||!eq(sha(data),row.statement.snapshot))throw new Error('inventory does not match the signed commitment');this.#inventories.set(b64u(epoch),parseInventory(data));this.#revision++;}
   listed(epoch:Uint8Array,w:Write):boolean{return this.#inventories.get(b64u(epoch))?.get(Buffer.from(w.record).toString('hex'))?.some(id=>eq(id,writeID(w)))??false;}
   #precedes(ancestor:Uint8Array,descendant:Uint8Array):boolean{let row=this.#rows.get(b64u(descendant));const seen=new Set<string>();while(row){if(eq(row.write.ref,ancestor))return true;const key=b64u(row.id);if(seen.has(key))break;seen.add(key);row=this.#rows.get(b64u(row.write.ref));}return false;}
   dataValidity(w:Write,channel:Uint8Array):Validity{
@@ -127,6 +128,24 @@ export class CollectionPolicy {
     }else{if(!this.#precedes(w.ref,channel))return bad('not an ancestor of this epoch');if(!this.#inventories.has(b64u(channel)))return hold(channel);if(!this.listed(channel,w))return bad('not carried into this epoch');}
     const authorized=all(checks);if(authorized.kind!=='valid')return authorized;const cert=this.#registry.certificate(w.certificate);
     return cert&&eq(cert.participant,w.author)&&verifyWrite(w,cert.sign)?valid:bad('bad data signature');
+  }
+  chain(at:Uint8Array):Uint8Array[]{
+    const rows:Uint8Array[]=[],seen=new Set<string>();let row=this.#rows.get(b64u(at));
+    while(row&&!seen.has(b64u(row.id))){seen.add(b64u(row.id));rows.push(bytes(row.id));row=this.#rows.get(b64u(row.write.ref));}
+    return rows.reverse();
+  }
+  admission(participant:Uint8Array,at:Uint8Array):Uint8Array|undefined{
+    let admission:Uint8Array|undefined,listed=false;
+    for(const id of this.chain(at)){const now=this.#rows.get(b64u(id))!.statement.members.some(m=>eq(m.uid,participant));if(now&&!listed)admission=bytes(id);listed=now;}
+    return listed?admission:undefined;
+  }
+  inventoriesReady():boolean{const head=this.head,epoch=head&&this.epoch(head);return !!epoch&&(eq(epoch,this.genesis!)||this.#inventories.has(b64u(epoch)));}
+  eligible(w:Write):boolean{const head=this.head,current=head&&this.epoch(head),source=this.epoch(w.ref);return !!current&&!!source&&(eq(current,source)||this.listed(current,w));}
+  exposed():Uint8Array[]{
+    const head=this.head,s=head&&this.statement(head);if(!s)return [];
+    return s.members.filter(member=>{const floor=this.#registry.snapshot(member.floor);return floor&&this.#registry.revocationIDs.some(id=>{
+      const target=this.#registry.revocationTarget(id);return target&&eq(target.participant,member.uid)&&this.#registry.revocationValidity(id).kind==='valid'&&!floor.revocations.some(known=>eq(known,id));
+    });}).map(member=>bytes(member.uid));
   }
   entry(w:Write):Entry{const epoch=this.epoch(w.ref),row=this.#rows.get(b64u(w.ref));if(!epoch||!row)throw new Error('missing source roster');return new Entry(w,epoch,BigInt(row.statement.keyN));}
 }

@@ -5,3 +5,4 @@ export * from './browser/jmap.js';
 export * from './browser/keychain.js';
 export * from './browser/replica.js';
 export * from './browser/capsule.js';
+export * from './browser/device.js';
