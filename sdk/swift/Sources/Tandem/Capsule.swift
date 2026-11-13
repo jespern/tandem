@@ -17,11 +17,12 @@ extension Control {
         try sealCapsule(password: password, hub: hub, ms: ms, profile: .capsule)
     }
 
-    /// NFC-normalized UTF-8, nothing trimmed. Chosen passwords also need 12 code points.
+    /// NFC-normalized UTF-8, nothing trimmed. A chosen password has 12 code points and at most 1,024 bytes;
+    /// unlocking checks neither and simply tries what was typed (§6.7).
     static func passwordBytes(_ password: String, choosing: Bool) throws -> Bytes {
         let nfc = password.precomposedStringWithCanonicalMapping
         let bytes = Bytes(nfc.utf8)
-        guard bytes.count <= 1024 else { throw refused("a hub password has at most 1,024 bytes") }
+        guard !choosing || bytes.count <= 1024 else { throw refused("a hub password has at most 1,024 bytes") }
         // Code points, not Characters: four 👩‍💻 are 4 Characters and 12 code points.
         guard !choosing || nfc.unicodeScalars.count >= 12 else { throw refused("a hub password has at least 12 characters") }
         return bytes

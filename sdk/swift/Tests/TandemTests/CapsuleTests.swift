@@ -103,9 +103,12 @@ final class CapsuleTests: XCTestCase {
         try seal(String(repeating: "e\u{301}", count: 512))                      // 1,536 bytes typed, 1,024 after NFC
         for long in [String(repeating: "a", count: 1025), String(repeating: "\u{e6}", count: 512) + "a",
                      String(repeating: "e\u{301}", count: 1000)] {
-            XCTAssertThrowsError(try seal(long))
-            XCTAssertThrowsError(try Control.openCapsule(password: long, hub: hub, capsule: capsule, profile: fast)) {
+            XCTAssertThrowsError(try seal(long)) {
                 XCTAssertEqual($0 as? TandemError, .invalid("capsule: a hub password has at most 1,024 bytes"))
+            }
+            // Unlocking checks no length (§6.7): a long password is tried, and simply doesn't open it.
+            XCTAssertThrowsError(try Control.openCapsule(password: long, hub: hub, capsule: capsule, profile: fast)) {
+                XCTAssertEqual($0 as? TandemError, .invalid("capsule: the hub password does not open this capsule"))
             }
         }
     }
