@@ -1,5 +1,6 @@
 import XCTest
 @testable import Tandem
+import TandemArgon2
 
 final class Argon2Tests: XCTestCase {
     func testBLAKE2b() {

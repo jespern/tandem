@@ -1,21 +1,33 @@
 import Foundation
 
-// Argon2id of RFC 9106, version 0x13, in Swift since CryptoKit has none. Where the RFC's prose is loose
+// Argon2id of RFC 9106, version 0x13, in Swift since CryptoKit has none. A target of its own, always built optimized
+// (Package.swift): unoptimized, one 1 GiB stretch takes about 80 s instead of about 1, which made debug builds of apps
+// hang on creating a hub or unlocking management. Where the RFC's prose is loose
 // (the reference set, address-block timing), this follows the reference implementation, as libsodium does.
 
 /// Argon2id costs: memory in KiB, passes, lanes.
-struct Argon2Profile: Sendable, Equatable {
-    let memoryKiB: Int, iterations: Int, lanes: Int
+package typealias Bytes = [UInt8]
+
+package enum Argon2Error: Error, Equatable {
+    /// Parameters out of the range RFC 9106 allows.
+    case parameters
+    /// The memory the profile asks for isn't available.
+    case memory
+}
+
+package struct Argon2Profile: Sendable, Equatable {
+    package let memoryKiB: Int, iterations: Int, lanes: Int
+    package init(memoryKiB: Int, iterations: Int, lanes: Int) { self.memoryKiB = memoryKiB; self.iterations = iterations; self.lanes = lanes }
     /// §6.7: the one profile of the admin capsule.
-    static let capsule = Argon2Profile(memoryKiB: 1 << 20, iterations: 3, lanes: 1)
+    package static let capsule = Argon2Profile(memoryKiB: 1 << 20, iterations: 3, lanes: 1)
 }
 
 /// Throws CancellationError if the task is cancelled; checked between slices.
-func argon2id(password: Bytes, salt: Bytes, profile p: Argon2Profile, count: Int = 32,
+package func argon2id(password: Bytes, salt: Bytes, profile p: Argon2Profile, count: Int = 32,
               secret: Bytes = [], associatedData: Bytes = []) throws -> Bytes {
     guard (1...0xff_ffff).contains(p.lanes), p.iterations >= 1, p.memoryKiB >= 8 * p.lanes, p.memoryKiB <= UInt32.max,
           count >= 4, count <= UInt32.max, salt.count >= 8
-    else { throw TandemError.invalid("Argon2id parameters out of range") }
+    else { throw Argon2Error.parameters }
     func le32(_ v: Int) -> Bytes { (0..<4).map { UInt8(truncatingIfNeeded: v >> (8 * $0)) } }
     var h0 = BLAKE2b(count: 64)
     for v in [p.lanes, count, p.memoryKiB, p.iterations, 0x13, 2] { h0.update(le32(v)) }
@@ -23,7 +35,7 @@ func argon2id(password: Bytes, salt: Bytes, profile p: Argon2Profile, count: Int
     let seed = h0.finalize()
 
     let segment = p.memoryKiB / (4 * p.lanes), laneLength = 4 * segment, blocks = p.lanes * laneLength
-    guard let raw = malloc(blocks * 1024) else { throw TandemError.invalid("no memory for Argon2id") }
+    guard let raw = malloc(blocks * 1024) else { throw Argon2Error.memory }
     defer { free(raw) }
     let memory = raw.bindMemory(to: UInt64.self, capacity: blocks * 128)
     // Scratch: R and the saved X for G, the address-input block, the address block, a zero block.

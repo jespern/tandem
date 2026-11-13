@@ -2,6 +2,7 @@ import XCTest
 import CryptoKit
 import Foundation
 @testable import Tandem
+import TandemArgon2
 
 final class CapsuleTests: XCTestCase {
     /// For everything but the vector; never on the wire.

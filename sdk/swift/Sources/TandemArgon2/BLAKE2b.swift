@@ -1,7 +1,7 @@
 // BLAKE2b of RFC 7693, unkeyed, for Argon2id's H and H' (RFC 9106 §3.2–3.3).
 // CryptoKit has no BLAKE2.
 
-struct BLAKE2b {
+package struct BLAKE2b {
     static let iv: [UInt64] = [0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
                                0x510e527fade682d1, 0x9b05688c2b3e6c1f, 0x1f83d9abfb41bd6b, 0x5be0cd19137e2179]
     static let sigma: [[Int]] = [
@@ -17,20 +17,20 @@ struct BLAKE2b {
     private var length: UInt64 = 0
 
     /// A hash of `count` bytes, 1 to 64.
-    init(count: Int) {
+    package init(count: Int) {
         precondition((1...64).contains(count), "BLAKE2b output is 1 to 64 bytes")
         self.count = count
         h = Self.iv
         h[0] ^= 0x0101_0000 ^ UInt64(count)
     }
 
-    static func hash(_ parts: Bytes..., count: Int = 64) -> Bytes {
+    package static func hash(_ parts: Bytes..., count: Int = 64) -> Bytes {
         var b = BLAKE2b(count: count)
         for p in parts { b.update(p) }
         return b.finalize()
     }
 
-    mutating func update(_ data: Bytes) {
+    package mutating func update(_ data: Bytes) {
         for byte in data {
             // The last block is compressed in finalize, flagged, so a full buffer waits for more input.
             if buffer.count == 128 {
@@ -42,7 +42,7 @@ struct BLAKE2b {
         }
     }
 
-    mutating func finalize() -> Bytes {
+    package mutating func finalize() -> Bytes {
         length &+= UInt64(buffer.count)
         buffer += Bytes(repeating: 0, count: 128 - buffer.count)
         compress(last: true)

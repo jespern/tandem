@@ -10,12 +10,16 @@ let package = Package(
         .library(name: "TandemEngine", targets: ["TandemEngine"]),
     ],
     targets: [
-        .target(name: "Tandem", path: "sdk/swift/Sources/Tandem"),
+        // Argon2id and BLAKE2b are built optimized even in debug builds: unoptimized, the hub password's 1 GiB stretch
+        // takes about 80 s instead of about 1. `unsafeFlags` means a dependent must use this package by branch or
+        // revision, not by version.
+        .target(name: "TandemArgon2", path: "sdk/swift/Sources/TandemArgon2", swiftSettings: [.unsafeFlags(["-O"])]),
+        .target(name: "Tandem", dependencies: ["TandemArgon2"], path: "sdk/swift/Sources/Tandem"),
         .target(name: "TandemIMAP", dependencies: ["Tandem"], path: "sdk/swift/Sources/TandemIMAP"),
         .target(name: "TandemEngine", dependencies: ["Tandem"], path: "sdk/swift/Sources/TandemEngine"),
         .executableTarget(name: "tandem-device", dependencies: ["Tandem", "TandemEngine", "TandemIMAP"],
                           path: "sdk/swift/Sources/tandem-device"),
-        .testTarget(name: "TandemTests", dependencies: ["Tandem"], path: "sdk/swift/Tests/TandemTests"),
+        .testTarget(name: "TandemTests", dependencies: ["Tandem", "TandemArgon2"], path: "sdk/swift/Tests/TandemTests"),
         .testTarget(name: "TandemIMAPTests", dependencies: ["TandemIMAP", "TandemEngine"], path: "sdk/swift/Tests/TandemIMAPTests"),
         .testTarget(name: "TandemEngineTests", dependencies: ["Tandem", "TandemEngine"],
                     path: "sdk/swift/Tests/TandemEngineTests"),
