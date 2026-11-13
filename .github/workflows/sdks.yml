@@ -12,7 +12,8 @@ permissions:
 
 jobs:
   interoperability:
-    runs-on: macos-latest
+    # Swift 6.4 ships with Xcode 27, which GitHub offers as the xcode-27 image (public preview).
+    runs-on: xcode-27
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7.0.1
