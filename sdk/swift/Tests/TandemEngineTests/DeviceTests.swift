@@ -1,4 +1,5 @@
 import XCTest
+import Foundation
 import Tandem
 @testable import TandemEngine
 
@@ -27,6 +28,23 @@ final class DeviceTests: XCTestCase {
         // Nothing new: a second sync applies nothing.
         let again = try await reader.sync()
         XCTAssertEqual(again, 0)
+    }
+
+    /// The hub password unlocks management on a device that never held it (§6.7). Three 1 GiB stretches.
+    func testTheHubPasswordUnlocksManagement() async throws {
+        try XCTSkipIf(ProcessInfo.processInfo.environment["TANDEM_SKIP_ARGON2_GIB"] == "1", "TANDEM_SKIP_ARGON2_GIB=1")
+        let hub = MemoryHub()
+        var f = try Founder.found(account: account, keys: DeviceKeys(), label: "Mac")
+        f.capsule = try Founder.capsule(password: "correct horse battery staple", pin: f.pin, managementSeed: f.managementSeed)
+        let creator = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, store: try Store(path: ":memory:"),
+                                      hub: await hub.connect())
+        try await creator.publish(f)
+        let reader = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, store: try Store(path: ":memory:"),
+                                     hub: await hub.connect())
+        try await reader.sync()
+        let ms = try await reader.unlock(password: "correct horse battery staple")
+        XCTAssertEqual(ms, f.managementSeed)
+        do { _ = try await reader.unlock(password: "wrong horse battery staple"); XCTFail("wrong password") } catch {}
     }
 
     /// A crash after journalling, before or between appends, resumes with the same bytes and no duplicates.

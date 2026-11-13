@@ -10,6 +10,8 @@ public actor Device {
     public private(set) var registry: Registry
     /// Directory notices held: home-recovery boxes and the like, by type.
     public private(set) var notices: [Notice] = []
+    /// Admin capsules held (§6.7), by ID.
+    public private(set) var capsules: [ID: ControlObject] = [:]
 
     var directoryTag: String { Tandem.directoryTag(directoryKey, hub: pin.hub) }
     var directoryChannelKey: Bytes { Tandem.directoryKey(directoryKey, hub: pin.hub) }
@@ -93,6 +95,12 @@ public actor Device {
         case "genesis":
             // Only the pinned genesis is ever accepted; another one is another hub (§6.9).
             return false
+        case "capsule":
+            guard let o = try? ControlObject.parse(json, expect: "capsule"), o.verify("sig", publicKey: pin.hub),
+                  case let .id(g)? = o.fields["genesis"], g == pin.genesis, let id = try? o.id(), capsules[id] == nil
+            else { return false }
+            capsules[id] = o
+            return try store.putObject(o)
         case "home-recovery":
             guard let n = try? Notice.parse(plaintext, type: "home-recovery", fields: ["epoch", "bytes"]),
                   !notices.contains(n) else { return false }
@@ -102,6 +110,27 @@ public actor Device {
             guard let o = try? ControlObject.parse(json), (try? registry.add(o)) != nil else { return false }
             return try store.putObject(o)
         }
+    }
+
+    // MARK: Hub management (§6.7)
+
+    /// The capsules no other capsule names: the ones a password opens.
+    public var currentCapsules: [ControlObject] {
+        let named = Set(capsules.values.flatMap { c -> [ID] in
+            guard case let .set(s)? = c.fields["supersedes"] else { return [] }
+            return s
+        })
+        return capsules.filter { !named.contains($0.key) }.sorted { $0.key.lexicographicallyPrecedes($1.key) }.map(\.value)
+    }
+
+    /// Unlock hub management with the hub password: `MS`, checked to be this hub's. Seconds and 1 GiB.
+    public func unlock(password: String) throws -> Bytes {
+        var last: (any Error)?
+        for c in currentCapsules {
+            guard case let .bytes(sealed)? = c.extras["capsule"] else { continue }
+            do { return try Control.openCapsule(password: password, hub: pin.hub, capsule: sealed) } catch { last = error }
+        }
+        throw last ?? TandemError.invalid("device: no admin capsule on this hub")
     }
 
     // MARK: Journal encoding

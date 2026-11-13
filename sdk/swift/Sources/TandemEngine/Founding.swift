@@ -63,9 +63,15 @@ public struct Founding: Sendable {
     public let homeRecovery: Notice
     public let homeKey: Bytes, directoryKey: Bytes, managementSeed: Bytes
 
+    /// The admin capsule (§6.7), once made with `Founder.capsule`.
+    public var capsule: ControlObject?
+
     /// Directory-channel messages in publication order: each one's dependencies come first.
     public var directoryMessages: [Bytes] {
-        get throws { try [genesis.json(), certificate.json(), snapshot.json(), homeRecovery.json()] }
+        get throws {
+            try [genesis.json()] + (capsule.map { [try $0.json()] } ?? [])
+                + [certificate.json(), snapshot.json(), homeRecovery.json()]
+        }
     }
 }
 
@@ -106,6 +112,16 @@ public enum Founder {
                         homeEpoch: homeEpoch, homeKeyDelivery: delivery,
                         homeRecovery: Notice(type: "home-recovery", [("epoch", epochID), ("bytes", box)]),
                         homeKey: secrets.homeKey, directoryKey: secrets.directoryKey, managementSeed: secrets.managementSeed)
+    }
+
+    /// Seal `MS` under the creator's hub password and sign the capsule (§6.7). Takes about a second and
+    /// 1 GiB; `supersedes` names the capsules a password change replaces.
+    public static func capsule(password: String, pin: HubPin, managementSeed: Bytes, supersedes: [ID] = []) throws -> ControlObject {
+        let sealed = try Control.sealCapsule(password: password, hub: pin.hub, ms: managementSeed)
+        var c = ControlObject(kind: "capsule", fields: ["hub": .id(pin.hub), "genesis": .id(pin.genesis), "sealed": .id(H(sealed)),
+            "supersedes": .set(supersedes.sorted { $0.lexicographicallyPrecedes($1) })], extras: ["capsule": .bytes(sealed)])
+        try c.sign("sig", with: try DeviceKeys.manager(seed: managementSeed).signing)
+        return c
     }
 
     /// A home-epoch start (§10.8), signed by one of the participant's admitted keychains.
