@@ -330,7 +330,7 @@ extension Device {
         let element = Self.keyElement(epoch: statement, key: key)
         if !homeElements(name, field: "keys").contains(element) { try await addHome(name, field: "keys", element: element) }
         if flightNote(cid)?.statement == statement { try await setHome(name, field: "flight", value: FlightNote.none) }
-        if var c = collections[cid] { c.keys[statement] = key; collections[cid] = c }
+        if var c = collections[cid] { c.offer(key: key, epoch: statement); collections[cid] = c }
         if let inventory, self.inventory(statement) == nil { try keepInventory(inventory, epoch: statement) }
         try moveCollection(cid)
     }
@@ -424,7 +424,7 @@ extension Device {
         try await sync()
         guard let note = flightNote(cid), note.statement == seen.statement else { throw ChangeError.noteChanged }
         guard let c = collections[cid], let st = c.statements[note.statement], let old = c.epoch(of: note.parent),
-              let inv = inventory(note.statement) else { throw ChangeError.cantFinish }
+              st.statement.commit == Tandem.commit(note.key), let inv = inventory(note.statement) else { throw ChangeError.cantFinish }
         let j = RotationJournal(cid: cid, parent: note.parent, oldEpoch: old, statement: st.write, id: note.statement, key: note.key,
                                 inventory: try inv.bytes(), what: note.what, step: 3, noteWritten: true)
         // What the inventory lists and the new channel lacks, from this device's replica (§11.7).
@@ -457,7 +457,9 @@ extension Device {
     /// Notes left over from a crash between an announcement and its home update: settled without asking (§11.7).
     func settleAnnouncedNotes() async throws {
         for (cid, c) in collections {
+            // Only a note whose key the announced statement commits to: anyone who can write to home can write a note.
             guard let note = flightNote(cid), c.announced.contains(note.statement),
+                  c.statements[note.statement]?.statement.commit == Tandem.commit(note.key),
                   try store.journal("rotate." + cid.hex) == nil else { continue }
             try await settleHome(cid, statement: note.statement, key: note.key, inventory: inventory(note.statement))
         }

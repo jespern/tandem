@@ -151,6 +151,10 @@ extension Device {
     }
 
     func takeHomeEpoch(_ o: ControlObject, id: ID) throws {
+        // Starts held aside come in with their accepted child, and only then (§10.8).
+        if case let .set(parents)? = o.fields["parents"] {
+            for p in parents where homeEpochs[p] == nil { if let held = heldStarts[p] { try takeHomeEpoch(held, id: p) } }
+        }
         homeEpochs[id] = o
         heldStarts[id] = nil
         try store.putObject(o)
@@ -163,7 +167,7 @@ extension Device {
         try moveHome()
     }
 
-    func homeEpochValidity(_ o: ControlObject, me: Me) -> Validity {
+    func homeEpochValidity(_ o: ControlObject, me: Me, depth: Int = 0) -> Validity {
         guard o.fields["hub"] == .id(pin.hub), o.fields["genesis"] == .id(pin.genesis),
               o.fields["participant"] == .id(me.participant), case let .id(signer)? = o.fields["signer"],
               case let .id(auth)? = o.fields["auth"], case let .set(parents)? = o.fields["parents"],
@@ -173,11 +177,13 @@ extension Device {
         guard let cert = registry.certificate(signer), cert.participant == me.participant, o.verify("sig", publicKey: cert.sign)
         else { return .invalid("not signed by a keychain of this participant") }
         for p in parents {
-            // A parent known only as a start held aside comes in with its child.
-            if homeEpochs[p] == nil, let held = heldStarts[p], homeEpochValidity(held, me: me).isValid {
-                try? takeHomeEpoch(held, id: p)
+            // A parent known only as a start held aside is checked here but taken only with an accepted child.
+            guard let parent = homeEpochs[p] ?? heldStarts[p], case let .id(parentAuth)? = parent.fields["auth"] else { return .pending([p]) }
+            if homeEpochs[p] == nil {
+                guard depth < 64 else { return .invalid("home epoch chain too deep") }
+                let held = homeEpochValidity(parent, me: me, depth: depth + 1)
+                guard held.isValid else { return held }
             }
-            guard case let .id(parentAuth)? = homeEpochs[p]?.fields["auth"] else { return .pending([p]) }
             checks.append(registry.extends(auth, floor: parentAuth))
         }
         checks += recipients.map { registry.authorizes(snapshot: auth, certificate: $0) }

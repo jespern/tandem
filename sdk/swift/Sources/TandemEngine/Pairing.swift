@@ -335,7 +335,7 @@ extension Device {
 
     /// Finish approvals and home rekeys a crash interrupted: lost acknowledgements retry the same bytes (§6.3 step 4).
     func finishJournals() async throws {
-        for step in try store.journalSteps() where step.hasPrefix("approve.") || step.hasPrefix("home.") {
+        for step in try store.journalSteps() where ["approve.", "home.", "revoke."].contains(where: step.hasPrefix) {
             guard let journalled = try store.journal(step) else { continue }
             try await export(try Self.unpack(journalled), step: step)
         }

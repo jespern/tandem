@@ -257,13 +257,15 @@ extension Device {
             guard let name = r.value(Bytes("_name".utf8)), name.starts(with: Bytes("membership:".utf8)),
                   let cid = B64u.decode(String(decoding: name.dropFirst(11), as: UTF8.self)), cid.count == 16 else { continue }
             var c = collections[cid] ?? CollectionState(id: cid)
+            // Keys from home are candidates too: a revoked keychain can still write to home until it is rekeyed, so a key
+            // counts only once the owner-signed statement of its epoch commits to it, and never displaces one.
             for element in r.elements(Bytes("keys".utf8)) {
                 guard let j = try? JSON.parse(element), let e = try? j.bytes("epoch", count: 32), let k = try? j.bytes("k", count: 32)
                 else { continue }
-                c.keys[e] = k
+                c.offer(key: k, epoch: e)
             }
             // The key of a change still in flight, so this device can finish or discard it (§11.7).
-            if let note = r.value(Bytes("flight".utf8)).flatMap(FlightNote.parse) { c.keys[note.statement] = note.key }
+            if let note = r.value(Bytes("flight".utf8)).flatMap(FlightNote.parse) { c.offer(key: note.key, epoch: note.statement) }
             collections[cid] = c
         }
     }
@@ -286,16 +288,19 @@ extension Device {
     /// A collection's keys (from its `membership:` record in home), roster and announcements, without its records.
     static func loadRoster(store: Store, hub: Bytes, cid: Bytes, membership r: Record) throws -> CollectionState {
         var c = CollectionState(id: cid)
-        for element in r.elements(Bytes("keys".utf8)) {
-            if let j = try? JSON.parse(element), let e = try? j.bytes("epoch", count: 32), let k = try? j.bytes("k", count: 32) { c.keys[e] = k }
-        }
-        if let note = r.value(Bytes("flight".utf8)).flatMap(FlightNote.parse) { c.keys[note.statement] = note.key }
         for row in try store.writes(scope: cid, record: Roster.record) {
             guard case let .record(state) = try Kind1.parse(row.payload, hub: hub, scope: cid), var w = state.writes.first,
                   let st = try? Statement.parse(w.value) else { continue }
             if w.ref == Bytes(repeating: 0, count: 32) { w.scope = Roster.zeroScope; c.genesis = try w.id() }
             c.statements[try w.id()] = (w, st)
         }
+        // Keys after statements, so a key is confirmed against its epoch's commitment as it is read (`offer`).
+        for element in r.elements(Bytes("keys".utf8)) {
+            if let j = try? JSON.parse(element), let e = try? j.bytes("epoch", count: 32), let k = try? j.bytes("k", count: 32) {
+                c.offer(key: k, epoch: e)
+            }
+        }
+        if let note = r.value(Bytes("flight".utf8)).flatMap(FlightNote.parse) { c.offer(key: note.key, epoch: note.statement) }
         for (name, _) in try store.values(prefix: "ann." + cid.hex + ".") {
             if let id = Bytes(hex: String(name.dropFirst(4 + 32 + 1))) { c.announced.insert(id) }
         }
