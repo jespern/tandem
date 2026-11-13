@@ -808,7 +808,7 @@ Required extensions: **UIDPLUS** (RFC 4315), **IDLE** (RFC 2177). Strongly recom
 | `changes` | **New messages**, in every case: `UID FETCH <last known UID + 1>:* (UID BODY.PEEK[HEADER.FIELDS (Tandem-Channel)])`, ignoring a returned UID below the start of the range (`n:*` always returns the last message). QRESYNC doesn't report new messages by itself (RFC 7162 §6). **Removed messages**: with QRESYNC, the `VANISHED (EARLIER)` response to `SELECT Tandem (QRESYNC (uidvalidity modseq))`; without it, compare `UID SEARCH ALL` with the local UID set (fine at Tandem's scale). A `UIDVALIDITY` change means a full resync. |
 | `fetch` | `UID FETCH (BODY.PEEK[HEADER.FIELDS (Content-Type Content-Transfer-Encoding)] BODY.PEEK[TEXT])`, then undo the transfer encoding and the charset (§10.4). |
 | `destroy` | `UID STORE +FLAGS.SILENT (\Deleted)` then `UID EXPUNGE` (UIDPLUS, so other messages aren't affected). |
-| `watch` | `IDLE` on the selected `Tandem` folder; `EXISTS`/`EXPUNGE`/`VANISHED` responses trigger `changes`. Re-issue IDLE at least every 29 minutes (RFC 2177). |
+| `watch` | `IDLE` on the selected `Tandem` folder; `EXISTS`/`EXPUNGE`/`VANISHED` responses trigger `changes`. Re-issue IDLE at least every 29 minutes (RFC 2177). Send a `NOOP` in the same write before each `IDLE`: some servers (Stalwart) report a change made between the last command and IDLE only on the next command. |
 
 **Lost answers.** An append whose answer was lost may still have landed, and a device can be told of its own message by IDLE before the `APPEND` has answered. A device therefore knows its own messages by `H(envelope)` (§10.4), not by the UID in an answer, and looks for an envelope on the hub before appending it a second time.
 
