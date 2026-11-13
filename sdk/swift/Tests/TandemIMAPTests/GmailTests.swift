@@ -15,6 +15,11 @@ final class FakeGmail: @unchecked Sendable {
     private let validity = ["Tandem": 11, "[Gmail]/All Mail": 2, "[Gmail]/Trash": 3]
     private var nextGmailID: UInt64 = 5000
     private var selected = ""
+    /// The message count this session was last told about, so NOOP reports only a change.
+    private var reported = 0
+    /// A message another client appends right after the next body fetch is answered. Like
+    /// Stalwart, the server tells a session of it on its next command, not when IDLE starts.
+    var appendAfterNextFetch: Bytes?
     var created = false
     var caps = FakeGmail.caps
 
@@ -62,6 +67,7 @@ final class FakeGmail: @unchecked Sendable {
             let name = unquote(t.dropFirst(7))
             guard boxes[name] != nil, name != "Tandem" || created else { return ["NO [NONEXISTENT] Unknown Mailbox: \(name)"] }
             selected = name
+            reported = boxes[name]!.count
             return ["* FLAGS (\\Answered \\Flagged \\Draft \\Deleted \\Seen)", "* OK [UIDVALIDITY \(validity[name]!)] UIDs valid.",
                     "* \(boxes[name]!.count) EXISTS", "* OK [UIDNEXT \(next[name]!)] Predicted next UID.", "OK [READ-WRITE] \(name) selected. (Success)"]
         }
@@ -70,7 +76,9 @@ final class FakeGmail: @unchecked Sendable {
             nextGmailID += 1
             let uid = add(c.literals[0], to: "Tandem", id: id)
             _ = add(c.literals[0], to: "[Gmail]/All Mail", id: id)   // every message is also in All Mail
-            return (selected == "Tandem" ? ["* \(boxes["Tandem"]!.count) EXISTS"] : []) + ["OK [APPENDUID 11 \(uid)] (Success)"]
+            guard selected == "Tandem" else { return ["OK [APPENDUID 11 \(uid)] (Success)"] }
+            reported = boxes["Tandem"]!.count
+            return ["* \(reported) EXISTS", "OK [APPENDUID 11 \(uid)] (Success)"]
         }
         guard !selected.isEmpty else { return ["BAD No mailbox selected"] }
         if t == "UID SEARCH ALL" { return ["* SEARCH" + boxes[selected]!.keys.sorted().map { " \($0)" }.joined(), "OK SEARCH completed (Success)"] }
@@ -83,6 +91,13 @@ final class FakeGmail: @unchecked Sendable {
             return uids(m.1).map { "* \(seq($0)) FETCH (X-GM-MSGID \(boxes[selected]![$0]!.gmailID) UID \($0))" } + ["OK Success"]
         }
         if let m = t.wholeMatch(of: /UID FETCH (\S+) \(UID RFC822\.SIZE BODY\.PEEK\[HEADER\.FIELDS \(Tandem-Channel Content-Type Content-Transfer-Encoding\)\] BODY\.PEEK\[TEXT\]<0\.\d+>\)/) {
+            defer {
+                if let raw = appendAfterNextFetch {
+                    appendAfterNextFetch = nil
+                    nextGmailID += 1
+                    _ = add(raw, to: "Tandem", id: nextGmailID)
+                }
+            }
             return uids(m.1).map { uid in
                 let raw = boxes[selected]![uid]!.raw
                 let split = (0..<(raw.count - 3)).first { Array(raw[$0..<($0 + 4)]) == Bytes("\r\n\r\n".utf8) }!
@@ -113,6 +128,11 @@ final class FakeGmail: @unchecked Sendable {
             out.append("* OK [COPYUID 3 \(UIDSet(moving)) \(UIDSet(destination))]")
             for uid in moving.reversed() { out.append("* \(seq(uid)) EXPUNGE"); boxes[selected]![uid] = nil }
             return out + ["OK Success"]
+        }
+        if t == "NOOP" {
+            let count = boxes[selected]!.count
+            defer { reported = count }
+            return (count != reported ? ["* \(count) EXISTS"] : []) + ["OK Success"]
         }
         return ["BAD Unknown command \(t)"]
     }
@@ -224,6 +244,45 @@ final class GmailTests: XCTestCase {
         server.push(["* 9 EXISTS"])
         let pushed = await log.first(after: t1, within: .seconds(2))
         XCTAssertNotNil(pushed)
+    }
+
+    /// A message appended after the last command of a reconcile and before IDLE starts.
+    /// Stalwart (measured) and this fake report it only on the next command, so IDLE alone
+    /// would leave it unseen until some later command: IDLE starts with a NOOP before it.
+    func testChangeBetweenCommandAndIdleIsReported() async throws {
+        gmail.caps = "IMAP4rev1 IDLE NAMESPACE UIDPLUS MOVE"   // not Gmail: no IDLE restart to hide the gap
+        let store = IMAPStore(config())
+        try await store.ensureFolder()
+        let session = try Session(store: store, capacity: 8)
+        defer { Task { await session.close() } }
+        let updates = session.updates
+        try await session.start()
+        _ = try await within(.seconds(3)) { try await updates.first { _ in true } }   // the initial batch
+        try await idleSettles()
+        // A push wakes the session; its reconcile ends with the body fetch, right after which
+        // another client appends. Nothing else wakes the session afterwards.
+        gmail.appendAfterNextFetch = try MessageFormat.build(channel: "gap", envelope: [9, 9])
+        server.push(["* 0 EXISTS"])
+        let seen = try await within(.seconds(3)) {
+            var added: [Message] = []
+            for try await batch in updates {
+                added += batch.added
+                if !added.isEmpty { break }
+            }
+            return added
+        }
+        XCTAssertEqual(seen, [Message(id: "11.1", channel: "gap", body: [9, 9])])
+    }
+
+    /// Waits until the client has idled, with nothing else sent, for 200 ms.
+    func idleSettles() async throws {
+        try await within(.seconds(3)) { [server] in
+            while true {
+                let before = server!.log
+                try await Task.sleep(for: .milliseconds(200))
+                if before.last?.hasSuffix(" IDLE") == true, server!.log == before { return }
+            }
+        }
     }
 
     func testReadsRetryOnceAfterTheServerHangsUp() async throws {
