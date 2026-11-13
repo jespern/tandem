@@ -1,0 +1,68 @@
+{
+  "appenduid": true,
+  "bulk_seconds": {
+    "messages": 20,
+    "seconds": 21.95
+  },
+  "capabilities": [
+    "APPENDLIMIT=35651584",
+    "CHILDREN",
+    "COMPRESS=DEFLATE",
+    "CONDSTORE",
+    "ENABLE",
+    "ESEARCH",
+    "ID",
+    "IDLE",
+    "IMAP4REV1",
+    "LIST-EXTENDED",
+    "LIST-STATUS",
+    "LITERAL-",
+    "MOVE",
+    "NAMESPACE",
+    "QUOTA",
+    "SPECIAL-USE",
+    "UIDPLUS",
+    "UNSELECT",
+    "UTF8=ACCEPT",
+    "X-GM-EXT-1",
+    "XLIST"
+  ],
+  "cleanup": "clean",
+  "date": "2026-11-13",
+  "destroyed_message_survives_in": {
+    "\\All": "[Gmail]/All Mail"
+  },
+  "expunge_push": {
+    "pushed": 29.82
+  },
+  "has": {
+    "CONDSTORE": true,
+    "LITERAL+": false,
+    "LITERAL-": true,
+    "MOVE": true,
+    "MULTIAPPEND": false,
+    "NAMESPACE": true,
+    "QRESYNC": false,
+    "SPECIAL-USE": true
+  },
+  "host": "imap.gmail.com",
+  "missing_required": [],
+  "port": 993,
+  "push": [
+    {
+      "pushed": 29.803
+    },
+    {
+      "pushed": 30.042
+    },
+    {
+      "pushed": 30.725
+    }
+  ],
+  "round_trip": true,
+  "run": "e2691b49",
+  "special_folders": {
+    "\\All": "[Gmail]/All Mail",
+    "\\Trash": "[Gmail]/Trash"
+  }
+}

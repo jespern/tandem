@@ -45,7 +45,8 @@ and every device ends up with the same state.
 Live updates use <b>IMAP IDLE</b>: the mail server notifies connected devices
 when messages arrive, without polling.
 Our Fastmail transport tests measured about <b>0.5 seconds</b>
-for an appended message to reach another connected client.
+for an appended message to reach another connected client;
+on Gmail it took about 30 seconds.
 App batching, the network and the provider affect the time an edit takes to appear.
 On mobile, live updates run while the app is active; it catches up when reopened.
 </p>
@@ -135,7 +136,6 @@ If that ever happens the collection is dead. Same remedy.
 <b>Outlook.com.</b>
 Personal Microsoft accounts only accept OAuth sign-ins,
 and the IMAP binding wants a password or an app password.
-Gmail accepts app passwords; whether it suits Tandem is still being checked.
 </li>
 </ul>
 
