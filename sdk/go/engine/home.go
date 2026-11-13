@@ -562,6 +562,12 @@ func (d *Device) clock() (uint64, uint16) {
 
 // writeHome signs one home write on name and publishes it in the current home epoch.
 func (d *Device) writeHome(ctx context.Context, name, field string, op tandem.Op, val, element []byte) error {
+	// A revocation not yet reflected in home: rekey before writing, so nothing new goes into the exposed epoch.
+	if me := d.me; me != nil && d.homeNeedsRotation(me) && d.registry.Activity(me.Certificate).IsValid() {
+		if err := d.rotateHome(ctx); err != nil {
+			return err
+		}
+	}
 	me, scope, epoch := d.me, d.homeScope(), d.currentHomeEpoch()
 	if me == nil || scope == nil || epoch == nil || d.homeKeys[string(epoch)] == nil {
 		return fail("device: no home to write to")

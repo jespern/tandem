@@ -293,3 +293,61 @@ func TestSecondReviewAReplacedInventoryPartIsRestored(t *testing.T) {
 		t.Fatal("Carol moves over through the restored inventory:", got)
 	}
 }
+
+// A home write on a device that knows of a revocation its home doesn't reflect yet rekeys the
+// home first, so nothing new goes into an epoch the revoked keychain reads. (A sync rekeys the
+// home as soon as it learns of a revocation; this is the write that comes first anyway.)
+func TestSecondReviewAHomeWriteFirstRekeysAnExposedHome(t *testing.T) {
+	w := newSecondWorld(t, false)
+	seen := map[string]bool{}
+	for _, m := range w.hub.Messages() {
+		seen[m.ID] = true
+	}
+	must(t, w.bob.Revoke(bg, w.tabletCert, w.f.ManagementSeed))
+	var learned []*tandem.Control
+	for _, m := range w.hub.Messages() {
+		if seen[m.ID] {
+			continue
+		}
+		if _, pt, err := tandem.Open(w.bob.directoryChannelKey(), w.f.Pin.Hub, m.Channel, m.Body); err == nil {
+			for _, typ := range []string{"revocation", "snapshot"} {
+				if o, err := tandem.FromJSON(pt, typ); err == nil {
+					learned = append(learned, o)
+				}
+			}
+		}
+	}
+	func() { // the phone knows of the revocation, and nothing has followed up on it yet
+		defer w.phone.begin()()
+		for _, o := range learned {
+			try(w.phone.registry.Add(o))
+		}
+		if !w.phone.homeNeedsRotation(w.phone.me) {
+			t.Fatal("the test needs a home the revocation isn't reflected in")
+		}
+	}()
+	exposed := map[string][]byte{} // tag → key
+	func() {
+		defer w.tablet.read()()
+		for e, k := range w.tablet.homeKeys {
+			exposed[tandem.HomeTag(k, w.f.Pin.Hub, w.aliceID, []byte(e))] = k
+		}
+	}()
+	count := func() (n int) { // home writes the tablet can read; an announcement of the next epoch is fine
+		for _, m := range w.hub.Messages() {
+			if k := exposed[m.Channel]; k != nil && !seen[m.ID] {
+				if kind, _, err := tandem.Open(k, w.f.Pin.Hub, m.Channel, m.Body); err == nil && kind == tandem.KindRecord {
+					n++
+				}
+			}
+		}
+		return n
+	}
+	must(t, w.phone.SetHome(bg, "settings:liszto", "secret", []byte("for Alice's devices")))
+	if n := count(); n != 0 {
+		t.Fatal("a home write went into an epoch the revoked tablet reads")
+	}
+	if v := homeValue(w.phone, "settings:liszto", "secret"); v == nil {
+		t.Fatal("not written")
+	}
+}
