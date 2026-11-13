@@ -175,7 +175,9 @@ extension Device {
         if record == Self.meta { changed(.lists) }
         flushEvents()
         // A record is published with its whole current state, so this message dominates the ones before it (§10.7).
-        try await publish(cid: cid, epoch: epoch, record: record, writes: r.kept.map(\.write))
+        // Offline, the write stays saved: the next sync's healing publishes what the hub lacks (§12.2).
+        do { try await publish(cid: cid, epoch: epoch, record: record, writes: r.kept.map(\.write)) }
+        catch { changed(.syncFailed("\(error)")); flushEvents() }
     }
 
     private func signRecord(_ c: CollectionState, me: Me, record: Bytes, field: Bytes, op: Op, value: Bytes, element: Bytes?,

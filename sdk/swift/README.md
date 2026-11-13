@@ -70,5 +70,8 @@ TANDEM_IMAP_STALWART=1 swift test --filter StalwartTests
 `TANDEM_IMAP_TRACE=1` prints the protocol lines, without login credentials. Leftover
 containers from a killed run carry the label `tandem-imap-test`.
 
-The platform Keychain integration and complete device engine are not part of this
-core milestone. The app owns those and its local transactions.
+## The device engine
+
+`TandemEngine` is the complete device: hubs, people, devices, lists, sharing, key
+changes, live sync and events, with the keychain integration. Start with
+[INTEGRATING.md](INTEGRATING.md); the engine's design and state are in [ENGINE.md](ENGINE.md).

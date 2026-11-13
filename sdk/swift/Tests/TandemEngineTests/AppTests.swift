@@ -61,4 +61,30 @@ final class AppTests: XCTestCase {
         XCTAssertEqual(hubs[f.pin.hub]?.account, account)
         XCTAssertEqual(hubs[f.pin.hub]?.directoryKey, f.directoryKey)
     }
+
+    /// An edit made offline is saved; the next sync with a working connection sends it (§12.2 healing).
+    func testAnEditMadeOfflineGoesOutOnTheNextSync() async throws {
+        let hub = MemoryHub(), keys = DeviceKeys()
+        let f = try Founder.found(account: account, keys: keys, label: "Bob’s iPhone")
+        let (path, store) = try temporaryStore()
+        let online = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: store, hub: await hub.connect())
+        try await online.publish(f)
+        let list = try await online.createList(name: "Inbox")
+
+        let failing = FailingAppends(await hub.connect())
+        let offline = try XCTUnwrap(try Device.reopen(store: try Store(path: path), keys: keys, hub: failing))
+        let item = offline.newRecordID()
+        try await offline.setField(list: list, record: item, field: "title", value: Bytes("On the train".utf8))
+        let saved = await offline.item(list: list, id: item)?.text("title")
+        XCTAssertEqual(saved, "On the train")
+
+        let working = await hub.connect()
+        let back = try XCTUnwrap(try Device.reopen(store: try Store(path: path), keys: keys, hub: working))
+        try await back.sync()
+        let laptop = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try Store(path: ":memory:"),
+                                     hub: await hub.connect())
+        try await laptop.sync()
+        let there = await laptop.item(list: list, id: item)?.text("title")
+        XCTAssertEqual(there, "On the train")
+    }
 }
