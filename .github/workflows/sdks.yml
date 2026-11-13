@@ -16,6 +16,19 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7.0.1
+      # Package.swift needs Swift tools 6.4; the runner's default Xcode can be older.
+      - name: Select an Xcode with Swift 6.4 or later
+        run: |
+          for x in $(ls -d /Applications/Xcode*.app | sort -rV); do
+            if DEVELOPER_DIR="$x/Contents/Developer" xcrun swift --version 2>/dev/null | grep -Eq 'Swift version 6\.([4-9]|[1-9][0-9])'; then
+              sudo xcode-select -s "$x"
+              swift --version
+              exit 0
+            fi
+          done
+          echo "No Xcode with Swift 6.4 or later on this runner:"
+          ls -d /Applications/Xcode*.app
+          exit 1
       - uses: actions/setup-go@v7.0.0
         with:
           go-version: '1.26.x'
