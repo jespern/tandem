@@ -104,6 +104,36 @@ test('real IndexedDB: failed preparation rolls back clock and bytes; inbox/curso
   expect(result.cursor).toBe('saved'); expect(result.reopened).toBe('saved'); expect(result.kinds).toEqual(['queued','received']);
 });
 
+test('multi-message device actions commit state, clocks and exact bytes atomically', async ({page,context}) => {
+  const second=await context.newPage();await second.goto(origin);await second.evaluate(async()=>{window.t=await import('/sdk.js');});
+  const setup=async()=>{
+    const t=window.t;window.actions=await t.BrowserJournal.open('actions');window.installation=await window.actions.installation();
+    window.hub=new Uint8Array(32).fill(2);window.key=new Uint8Array(32).fill(1);window.tag=t.directoryTag(window.key,window.hub);
+  };
+  await page.evaluate(setup);await second.evaluate(setup);
+  const rollback=await page.evaluate(async()=>{
+    const t=window.t;let failed;try{await window.actions.commit('hub',window.installation,12,tx=>{
+      failed=[tx.nextDot(),tx.nextDot()];throw new Error('preparation failed');
+    });}catch{}
+    const before={pending:(await window.actions.pending('hub')).length,state:await window.actions.state('hub')};
+    let committed,late;await window.actions.commit('hub',window.installation,12,tx=>{
+      committed=[tx.nextDot(),tx.nextDot()];late=tx.nextDot;
+      return{state:new Uint8Array([0]),messages:committed.map(dot=>({channel:window.tag,body:t.seal(window.key,window.hub,window.tag,new TextEncoder().encode(JSON.stringify(dot)),3)}))};
+    });
+    let refused=false;try{late();}catch{refused=true;}
+    const body=t.seal(window.key,window.hub,window.tag,new Uint8Array([9]),3);
+    try{await window.actions.commit('hub',window.installation,12,tx=>{tx.nextDot();return{state:new Uint8Array([99]),messages:[{channel:window.tag,body},{channel:t.collectionTag(window.key,window.hub,new Uint8Array(32)),body}]};});}catch{}
+    const atomic=(await window.actions.state('hub'))[0]===0&&(await window.actions.pending('hub')).length===2;
+    return{empty:before.pending===0&&before.state===undefined,same:failed.every((dot,i)=>dot.counter===committed[i].counter),refused,atomic};
+  });expect(rollback).toEqual({empty:true,same:true,refused:true,atomic:true});
+  const increment=()=>window.actions.commit('hub',window.installation,12,tx=>({state:new Uint8Array([tx.state[0]+1]),messages:[]}));
+  await Promise.all([page.evaluate(increment),second.evaluate(increment)]);
+  expect(await page.evaluate(async()=>{const n=(await window.actions.state('hub'))[0];window.actions.close();return n;})).toBe(2);
+  await second.evaluate(()=>window.actions.close());await second.close();
+  await page.reload();await page.evaluate(async()=>{window.t=await import('/sdk.js');});
+  expect(await page.evaluate(async()=>{const journal=await window.t.BrowserJournal.open('actions');try{return{state:(await journal.state('hub'))[0],pending:(await journal.pending('hub')).length,events:(await journal.readEvents('hub')).length};}finally{journal.close();}})).toEqual({state:2,pending:2,events:2});
+});
+
 test('remembered browser keys survive reload without an extra password', async ({page}) => {
   const keys = () => page.evaluate(async () => { const keychain=await window.t.BrowserKeychain.open('remembered'), keys=await keychain.deviceKeys();
     const pub=window.t.b64u(window.t.publicKey(keys.signing)); keychain.close(); return pub; });

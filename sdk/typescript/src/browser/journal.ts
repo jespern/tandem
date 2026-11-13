@@ -6,6 +6,17 @@ import {Invalidation} from './events.js';
 
 export interface OutboxEntry {id: string; hub: string; channel: string; body: Uint8Array; wire: Uint8Array; remoteId?: string}
 export interface JournalEvent {sequence: number; hub: string; kind: 'queued' | 'received' | 'removed'; id: string; channel: string; body: Uint8Array; remoteId?: string}
+export interface LocalMessage {channel: string; body: Uint8Array}
+export interface LocalTransaction {
+  /** Opaque device state, read under the same transaction lock as the outbox. */
+  readonly state: Uint8Array | undefined;
+  nextDot(): Dot;
+}
+export interface LocalPlan {
+  messages: readonly LocalMessage[];
+  /** Omit to preserve state; null removes it. Secrets must be wrapped before use. */
+  state?: Uint8Array | null;
+}
 interface Delivery {hub: string; remoteId: string; id: string; channel: string; body: Uint8Array; present: boolean}
 type EventRow = Omit<JournalEvent, 'sequence'>;
 const SCHEMA = ['meta', 'clocks', 'outbox', 'received', 'cursors', 'events'] as const;
@@ -52,33 +63,56 @@ export class BrowserJournal {
     if (!saved || lostClock) { store.put(Uint8Array.from(id), 'installation'); store.put(false,'installation.committed'); }
     await done; return Uint8Array.from(id);
   }
-  async queue(hub: string, installation: Uint8Array, now: number, prepare: (dot: Dot) => {channel: string; body: Uint8Array}): Promise<string> {
+  async state(hub: string): Promise<Uint8Array | undefined> {
+    const value = await request(this.#db.transaction('meta').objectStore('meta').get(['device', hub])) as Uint8Array | undefined;
+    return value === undefined ? undefined : Uint8Array.from(value);
+  }
+  async queue(hub: string, installation: Uint8Array, now: number, prepare: (dot: Dot) => LocalMessage): Promise<string> {
+    const ids = await this.commit(hub, installation, now, tx => ({messages: [prepare(tx.nextDot())]}));
+    return ids[0]!;
+  }
+  /** Synchronous preparation under an IndexedDB write lock. All dots, exact MIME
+   * bytes, action state and replay events commit together, or all roll back. */
+  async commit(hub: string, installation: Uint8Array, now: number, prepare: (tx: LocalTransaction) => LocalPlan): Promise<string[]> {
     if (installation.length !== 8 || !Number.isInteger(now) || now < 0 || now >= 2**48 || !hub) throw new Error('invalid installation, clock or hub');
     const localID = Uint8Array.from(installation);
     const tx = this.#db.transaction(['meta', 'clocks', 'outbox', 'events'], 'readwrite', {durability: 'strict'}), done = finished(tx);
-    // Attach immediately, even if synchronous preparation later throws.
     void done.catch(() => {});
     try {
-      const clockKey = b64u(localID), clock = await request(tx.objectStore('clocks').get(clockKey)) as {millis: number; counter: number} | undefined;
-      const meta = tx.objectStore('meta'), active = await request(meta.get('installation')) as Uint8Array | undefined;
+      const clockKey = b64u(localID), clocks = tx.objectStore('clocks'), meta = tx.objectStore('meta');
+      let clock = await request(clocks.get(clockKey)) as {millis: number; counter: number} | undefined;
+      const active = await request(meta.get('installation')) as Uint8Array | undefined;
       if (active && b64u(active) !== clockKey) throw new Error('stale installation; reload its ID before queueing');
       if (!clock && await request(meta.get('installation.committed')) === true) throw new Error('installation clock was lost; obtain a fresh installation ID');
-      if (!active) meta.put(localID,'installation');
-      const next = clock ? nextClock(clock.millis, clock.counter, now) : {millis: now, counter: 0};
-      const prepared = prepare({...next, device: Uint8Array.from(localID)});
-      if (prepared instanceof Promise) throw new Error('queue preparation must be synchronous');
-      checkChannel(prepared.channel); if (!validEnvelope(prepared.body)) throw new Error('invalid envelope');
-      const body = Uint8Array.from(prepared.body), id = b64u(sha(body));
-      const previous = await request(tx.objectStore('outbox').get([hub, id])) as OutboxEntry | undefined;
-      if (previous && previous.channel !== prepared.channel) throw new Error('queued channel changed');
-      tx.objectStore('clocks').put(next, clockKey);
-      tx.objectStore('meta').put(true,'installation.committed');
-      if (!previous) {
-        const entry: OutboxEntry = {id, hub, channel: prepared.channel, body, wire: buildMessage(prepared.channel, body)};
-        tx.objectStore('outbox').put(entry, [hub, id]);
-        tx.objectStore('events').add({hub, kind: 'queued', id, channel: entry.channel, body} satisfies EventRow);
+      const state = await request(meta.get(['device', hub])) as Uint8Array | undefined;
+      let reserved = false, preparing = true;
+      const plan = (() => {
+        try { return prepare({state: state === undefined ? undefined : Uint8Array.from(state), nextDot: () => {
+          if (!preparing) throw new Error('clock reservation outside preparation');
+          clock = clock ? nextClock(clock.millis, clock.counter, now) : {millis: now, counter: 0}; reserved = true;
+          return {...clock, device: Uint8Array.from(localID)};
+        }}); } finally { preparing = false; }
+      })();
+      if (!plan || typeof plan !== 'object' || 'then' in plan || !Array.isArray(plan.messages)) throw new Error('commit preparation must return a synchronous plan');
+      // Snapshot before the first await: caller mutation cannot change a commit.
+      const messages = plan.messages.map(message => {
+        checkChannel(message.channel); if (!validEnvelope(message.body)) throw new Error('invalid envelope');
+        const body = Uint8Array.from(message.body); return {channel: message.channel, body, id: b64u(sha(body))};
+      });
+      const updated = plan.state === undefined ? undefined : plan.state === null ? null : Uint8Array.from(plan.state);
+      if (!active) meta.put(localID, 'installation');
+      if (reserved) { clocks.put(clock, clockKey); meta.put(true, 'installation.committed'); }
+      if (updated === null) meta.delete(['device', hub]); else if (updated !== undefined) meta.put(updated, ['device', hub]);
+      const outbox = tx.objectStore('outbox'), events = tx.objectStore('events'); let queued = false;
+      for (const message of messages) {
+        const previous = await request(outbox.get([hub, message.id])) as OutboxEntry | undefined;
+        if (previous && previous.channel !== message.channel) throw new Error('queued channel changed');
+        if (!previous) {
+          const entry: OutboxEntry = {id: message.id, hub, channel: message.channel, body: message.body, wire: buildMessage(message.channel, message.body)};
+          outbox.put(entry, [hub, entry.id]); events.add({hub, kind: 'queued', id: entry.id, channel: entry.channel, body: entry.body} satisfies EventRow); queued = true;
+        }
       }
-      await done; this.#notify(!previous); return id;
+      await done; this.#notify(queued); return messages.map(message => message.id);
     } catch (error) { try { tx.abort(); } catch {} await done.catch(() => {}); throw error; }
   }
   async cursor(hub: string): Promise<string> { return (await request(this.#db.transaction('cursors').objectStore('cursors').get(hub)) as string | undefined) ?? ''; }

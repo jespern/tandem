@@ -34,7 +34,10 @@ These are authority primitives; they do not yet provide device operations.
 
 `BrowserJournal` owns a separate IndexedDB database. A synchronous signing/sealing
 callback in `queue` reserves the clock and journals exact encrypted/MIME bytes in
-one strict-durability transaction. Inbox, cursor and matching send confirmation
+one strict-durability transaction. `commit` reserves multiple dots and queues multiple envelopes with an opaque
+device action state in that same transaction. Concurrent tabs read/update that
+state under the database write lock. Wrap secrets before putting them in action
+state; the journal does not encrypt it. Inbox, cursor and matching send confirmation
 commit together. Removed deliveries retain cached bytes. Durable envelope events
 can be replayed from the app's last committed projection sequence.
 
