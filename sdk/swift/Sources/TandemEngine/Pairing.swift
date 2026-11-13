@@ -414,6 +414,7 @@ extension Device {
         if homeNeedsRotation(self.me!) { try await rotateHome() }
         try await takeGrantedKeys()
         try await settleAnnouncedNotes()
+        try await settleLateWrites()
         guard let me else { return }
         for (name, cert) in try store.values(prefix: "pairing.done.") {
             guard let token = Bytes(hex: String(name.dropFirst("pairing.done.".count))), currentHomeEpoch != nil else { continue }

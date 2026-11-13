@@ -95,6 +95,34 @@ final class RotationTests: XCTestCase {
         }
     }
 
+    /// Alice was offline during the change and wrote into the old epoch: her device signs that write again into the
+    /// new one. Carol, removed, can't sign hers into an epoch she has no key to; her replica keeps it, read-only, so the
+    /// app can offer to rescue it (§11.6, "Moving over").
+    func testLateWritesAreSignedAgainByTheirAuthor() async throws {
+        let w = try await world()
+        try await w.bob.remove(w.carolID, from: w.house)
+        try await w.alice.setField(list: w.house, record: w.alice.newRecordID(), field: "title", value: Bytes("Late".utf8))
+        try await w.carol.setField(list: w.house, record: w.carol.newRecordID(), field: "title", value: Bytes("Gone".utf8))
+        try await w.bob.sync()
+        let before = await titles(w.bob, w.house)
+        XCTAssertFalse(before.contains("Late"), "refused in the replaced epoch")
+        try await w.alice.sync()
+        let alice = await titles(w.alice, w.house)
+        XCTAssertEqual(alice, ["Milk", "Bread", "Late"])
+        try await w.bob.sync()
+        let after = await titles(w.bob, w.house)
+        XCTAssertEqual(after, ["Milk", "Bread", "Late"], "signed again into the new epoch")
+        XCTAssertFalse(after.contains("Gone"))
+        try await w.carol.sync()
+        let kept = await titles(w.carol, w.house)
+        XCTAssertTrue(kept.contains("Gone"), "Carol's replica keeps her edit")
+        let role = await w.carol.role(list: w.house)
+        XCTAssertNil(role)
+        try await w.alice.sync()
+        let again = await titles(w.alice, w.house)
+        XCTAssertEqual(again, ["Milk", "Bread", "Late"], "signed again once, not on every sync")
+    }
+
     /// The owner's device dies at every crash point; started again, it finishes or tells the user nothing happened.
     func testACrashAtEveryPointResumesOrDrops() async throws {
         for point in ["1:chosen", "2:journal", "2:note", "3:roster", "4:announced", "4:home", "5:grant", "6:cleaned"] {
