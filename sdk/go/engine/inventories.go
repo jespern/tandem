@@ -63,15 +63,19 @@ func (d *Device) receiveFragment(f *tandem.InventoryFragment, epoch, commitment 
 		}
 		candidates[part] = append(candidates[part], v.Value)
 	}
+	// One part (the usual case) tries every version; several parts bound the search. The count
+	// stops growing once past the bound, so it can't overflow and wrap below it.
+	const maxCombos = 4096
 	combos := 1
 	for _, c := range candidates {
 		if len(c) == 0 {
 			return false, nil
 		}
-		combos *= len(c)
+		if combos <= maxCombos {
+			combos *= len(c)
+		}
 	}
-	// One part (the usual case) tries every version; several parts bound the search.
-	if f.Parts > 1 && combos > 4096 {
+	if f.Parts > 1 && combos > maxCombos {
 		return false, nil
 	}
 	var found tandem.Inventory
