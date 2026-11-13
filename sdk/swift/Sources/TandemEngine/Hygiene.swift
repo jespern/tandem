@@ -75,18 +75,22 @@ extension Device {
         try await publish(cid: cid, epoch: epoch, record: Roster.record, writes: line.map { c.statements[$0]!.write })
     }
 
-    /// An epoch's inventory stays on the hub while the epoch is current (§10.7, §12.2): published again if no fragment
-    /// message is left in its channel.
+    /// An epoch's inventory stays on the hub while the epoch is current (§10.7, §12.2): each part that no message in its
+    /// channel carries, because it was destroyed or only a bogus version is left, is published again.
     func healFragments(channel tag: String, epoch: ID, key: Bytes) async throws {
         guard let inv = inventory(epoch) else { return }
-        for m in try store.messages(channel: tag) where try store.value("fragmsg." + m) != nil { return }
-        for fragment in try Self.fragments(inv, epoch: epoch) {
+        var present = Set<Bytes>()
+        for m in try store.messages(channel: tag) {
+            if let v = try store.value("fragmsg." + m), v.count == 64, Array(v.prefix(32)) == epoch { present.insert(Array(v.suffix(32))) }
+        }
+        let slices = try Self.slices(inv), payloads = try Self.fragments(inv, epoch: epoch)
+        for (slice, fragment) in zip(slices, payloads) where !present.contains(H(slice)) {
             let envelope = try Envelope.seal(key: key, hub: pin.hub, kind: 1, tag: tag, plaintext: fragment)
             let id = try await hub.append(channel: tag, body: envelope)
             try store.transaction {
                 try store.noteMessage(id: id, channel: tag, hash: H(envelope))
                 try store.markApplied(id)
-                try store.setValue("fragmsg." + id, epoch)
+                try store.setValue("fragmsg." + id, epoch + H(slice))
             }
         }
     }

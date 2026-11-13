@@ -108,7 +108,7 @@ extension Device {
             guard case let .record(state) = parsed else {
                 guard case let .inventory(f) = parsed else { return .ignored }
                 guard case let .id(commitment)? = homeEpochs[epoch]?.fields["snapshot"] else { return .waiting }
-                try store.setValue("fragmsg." + m.id, epoch)
+                try store.setValue("fragmsg." + m.id, epoch + H(f.bytes))
                 guard try receiveFragment(f, epoch: epoch, commitment: commitment) else { return .ignored }
                 try moveHome()
                 return .applied
@@ -151,6 +151,10 @@ extension Device {
     }
 
     func takeHomeEpoch(_ o: ControlObject, id: ID) throws {
+        // Starts held aside come in with their accepted child, and only then (§10.8).
+        if case let .set(parents)? = o.fields["parents"] {
+            for p in parents where homeEpochs[p] == nil { if let held = heldStarts[p] { try takeHomeEpoch(held, id: p) } }
+        }
         homeEpochs[id] = o
         heldStarts[id] = nil
         try store.putObject(o)
@@ -163,7 +167,7 @@ extension Device {
         try moveHome()
     }
 
-    func homeEpochValidity(_ o: ControlObject, me: Me) -> Validity {
+    func homeEpochValidity(_ o: ControlObject, me: Me, depth: Int = 0) -> Validity {
         guard o.fields["hub"] == .id(pin.hub), o.fields["genesis"] == .id(pin.genesis),
               o.fields["participant"] == .id(me.participant), case let .id(signer)? = o.fields["signer"],
               case let .id(auth)? = o.fields["auth"], case let .set(parents)? = o.fields["parents"],
@@ -173,11 +177,13 @@ extension Device {
         guard let cert = registry.certificate(signer), cert.participant == me.participant, o.verify("sig", publicKey: cert.sign)
         else { return .invalid("not signed by a keychain of this participant") }
         for p in parents {
-            // A parent known only as a start held aside comes in with its child.
-            if homeEpochs[p] == nil, let held = heldStarts[p], homeEpochValidity(held, me: me).isValid {
-                try? takeHomeEpoch(held, id: p)
+            // A parent known only as a start held aside is checked here but taken only with an accepted child.
+            guard let parent = homeEpochs[p] ?? heldStarts[p], case let .id(parentAuth)? = parent.fields["auth"] else { return .pending([p]) }
+            if homeEpochs[p] == nil {
+                guard depth < 64 else { return .invalid("home epoch chain too deep") }
+                let held = homeEpochValidity(parent, me: me, depth: depth + 1)
+                guard held.isValid else { return held }
             }
-            guard case let .id(parentAuth)? = homeEpochs[p]?.fields["auth"] else { return .pending([p]) }
             checks.append(registry.extends(auth, floor: parentAuth))
         }
         checks += recipients.map { registry.authorizes(snapshot: auth, certificate: $0) }
@@ -295,6 +301,8 @@ extension Device {
     /// Sign one home write on `name` and publish it in the current home epoch.
     func writeHome(_ name: String, field: String, op: Op, value: Bytes = [], element: Bytes? = nil) async throws {
         try takeExternalChanges()
+        // A revocation not yet reflected in home: rekey before writing, so nothing new goes into the exposed epoch.
+        if let me, homeNeedsRotation(me), registry.activity(me.certificate).isValid { try await rotateHome() }
         guard let me, let scope = homeScope, let epoch = currentHomeEpoch, let key = homeKeys[epoch]
         else { throw TandemError.invalid("device: no home to write to") }
         let record = Tandem.namedID(Bytes(name.utf8))
