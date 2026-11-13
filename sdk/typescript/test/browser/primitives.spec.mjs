@@ -346,6 +346,9 @@ test('BrowserDevice pairs, restores offline edits, and refuses a revocation arri
     await command('sync');const claims=(await command('claims')).claims;expect(claims).toHaveLength(1);await command('approve',{claim:claims[0].id});
     expect(await page.evaluate(()=>window.controllerReady)).toBe(true);
     const certificate=await page.evaluate(()=>window.t.b64u(window.controllerDevice.state.certificate.id));
+    const created=await page.evaluate(async()=>{const id=await window.controllerDevice.createList('Browser made');await window.waitControllerSends();return window.t.b64u(id);});await command('sync');
+    expect((await command('lists')).lists.find(list=>list.id===created).name).toBe('Browser made');
+
     const offline=await page.evaluate(async({cid,record})=>{
       const t=window.t;window.controllerAbort.abort();await window.controllerRun;
       await window.controllerDevice.writeFields(t.unb64u(cid),t.unb64u(record),[{field:'title',op:1,value:new TextEncoder().encode('Saved offline')}]);
@@ -370,4 +373,45 @@ test('BrowserDevice pairs, restores offline edits, and refuses a revocation arri
   }finally{
     await page.evaluate(async()=>{window.controllerAbort?.abort();await window.controllerDevice?.close();window.controllerJournal?.close();window.controllerKeys?.close();});await driver.close();
   }
+});
+
+
+test('BrowserDevice accepts native grants and enforces reader permissions',async({page})=>{
+  test.skip(!process.env.TANDEM_NATIVE_FIXTURE,'run sdk/check_browser.py --native');test.setTimeout(90_000);
+  const native=JSON.parse(process.env.TANDEM_NATIVE_FIXTURE),cfg=JSON.parse(process.env.TANDEM_JMAP_FIXTURE),owner=nativeDriver(native),phone=nativeDriver(native);
+  try{
+    await owner.command('hub',native);await owner.command('found',{label:'Owner Mac'});await phone.command('hub',native);
+    await phone.command('join',{link:(await owner.command('invite',{label:'Alice'})).link,label:'Alice phone'});
+    const participant=(await phone.command('me')).participant,link=(await phone.command('startPairing',{label:'Alice browser'})).link,hub=node.b64u(node.parsePairingLink(link).hub);
+    await page.evaluate(async({cfg,link,hub})=>{
+      const t=window.t;window.sharingJournal=await t.BrowserJournal.open('sharing');window.sharingKeys=await t.BrowserKeychain.open('sharing-keys');window.sharingDevice=await t.BrowserDevice.pair(link,'Alice browser',window.sharingJournal,window.sharingKeys);
+      window.sharingAbort=new AbortController();window.sharingRun=window.sharingDevice.run(()=>t.JMAPStore.open(cfg),window.sharingAbort.signal);void window.sharingRun.catch(()=>{});
+      window.waitSharing=async predicate=>{for await(const _ of window.sharingDevice.updates(window.sharingAbort.signal)){if(predicate(window.sharingDevice.state))return;}};
+      window.waitSharingSends=async()=>{while(true){const changed=window.sharingJournal.eventsChanged();if(!(await window.sharingJournal.pending(hub)).length)return;await changed;}};
+      for await(const update of window.sharingDevice.updates(window.sharingAbort.signal)){if(update.status==='approval')break;}await window.waitSharingSends();
+    },{cfg,link,hub});
+    await owner.command('sync');const claims=(await owner.command('claims')).claims;expect(claims).toHaveLength(1);await owner.command('approve',{claim:claims[0].id});
+    await page.evaluate(async()=>{for await(const update of window.sharingDevice.updates(window.sharingAbort.signal)){if(update.status==='ready')return;}});
+    for(const role of ['reader','writer']){
+      const cid=(await owner.command('createList',{name:`Shared ${role}`})).list,record=node.b64u(node.randomBytes(16));
+      await owner.command('set',{list:cid,record,field:'title',value:node.b64u(Buffer.from('From owner'))});await owner.command('share',{list:cid,participant,role});
+      const answer=await page.evaluate(async({cid,record})=>{
+        const t=window.t,id=t.unb64u(cid);await window.waitSharing(state=>state?.offers().some(offer=>t.b64u(offer.collection)===cid));
+        const before=window.sharingDevice.state.lists().some(list=>t.b64u(list.id)===cid);await window.sharingDevice.accept(id);await window.waitSharingSends();
+        let refused=false;try{await window.sharingDevice.writeFields(id,t.unb64u(record),[{field:'title',op:1,value:new TextEncoder().encode('From browser')}]);await window.waitSharingSends();}catch{refused=true;}
+        return{before,following:window.sharingDevice.state.lists().some(list=>t.b64u(list.id)===cid),role:window.sharingDevice.state.role(id),refused};
+      },{cid,record});expect(answer).toEqual({before:false,following:true,role,refused:role==='reader'});
+      await phone.command('sync');expect((await phone.command('lists')).lists.some(list=>list.id===cid)).toBe(true);
+      await owner.command('sync');expect((await owner.command('items',{list:cid})).items.find(item=>item.record===record).values.title).toBe(node.b64u(Buffer.from(role==='reader'?'From owner':'From browser')));
+      if(role==='writer'){
+        const previous=await page.evaluate(cid=>window.t.b64u(window.sharingDevice.state.collectionStatus(window.t.unb64u(cid)).epoch),cid);await owner.command('rekey',{list:cid});
+        await page.evaluate(async({cid,record,previous})=>{
+          const t=window.t,id=t.unb64u(cid);await window.waitSharing(state=>{const status=state?.collectionStatus(id);return status?.ready&&t.b64u(status.epoch)!==previous;});
+          await window.sharingDevice.writeFields(id,t.unb64u(record),[{field:'title',op:1,value:new TextEncoder().encode('After native rekey')}]);await window.waitSharingSends();
+        },{cid,record,previous});
+        await owner.command('sync');expect((await owner.command('items',{list:cid})).items.find(item=>item.record===record).values.title).toBe(node.b64u(Buffer.from('After native rekey')));
+      }
+
+    }
+  }finally{await page.evaluate(async()=>{window.sharingAbort?.abort();await window.sharingDevice?.close();window.sharingJournal?.close();window.sharingKeys?.close();});await phone.close();await owner.close();}
 });

@@ -110,5 +110,7 @@ export class BrowserDevice {
   }
   async writeHome(name:string,edits:readonly FieldEdit[]):Promise<void>{const captured=structuredClone(edits);await this.#edit((state,reserve)=>state.prepareHome(name,captured,reserve));}
   async writeFields(collection:Uint8Array,record:Uint8Array,edits:readonly FieldEdit[]):Promise<void>{const cid=bytes(collection,16),id=bytes(record,16),captured=structuredClone(edits);await this.#edit((state,reserve)=>state.prepareField(cid,id,captured,reserve));}
+  async createList(name:string):Promise<Uint8Array>{let collection:Uint8Array|undefined;await this.#edit((state,reserve)=>{const prepared=state.prepareCreateList(name,reserve);collection=prepared.collection;return prepared.messages;});return collection!;}
+  async accept(collection:Uint8Array):Promise<void>{const cid=bytes(collection,16);await this.#edit((state,reserve)=>state.prepareAccept(cid,reserve));}
   async close():Promise<void>{if(this.#closed)return;this.#closed=true;this.#abort?.abort();this.#changes.end();await this.#running?.catch(()=>{});}
 }

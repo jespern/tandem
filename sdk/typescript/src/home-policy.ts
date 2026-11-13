@@ -94,6 +94,12 @@ export class HomePolicy {
     return cert&&eq(cert.participant,this.#participant)&&verifyWrite(w,cert.sign)?valid:bad('bad home signature');
   }
   eligible(w:Write):boolean{return this.heads().some(head=>eq(head,w.ref)||this.listed(head,w));}
+  exposed():Uint8Array[]{
+    const heads=this.heads();return this.#registry.revocationIDs.filter(id=>{
+      const target=this.#registry.revocationTarget(id);if(!target||!eq(target.participant,this.#participant)||this.#registry.revocationValidity(id).kind!=='valid')return false;
+      return heads.some(head=>{const auth=this.#registry.snapshot(this.#object(head)!.fields.auth as Uint8Array);return !auth||!auth.revocations.some(known=>eq(known,id));});
+    });
+  }
   inventoriesReady():boolean{const heads=this.heads();return heads.length>0&&heads.every(id=>(this.#object(id)!.fields.parents as Uint8Array[]).length===0||this.#inventories.has(b64u(id)));}
   entry(w:Write):Entry{const start=this.#object(w.ref);if(!start)throw new Error('missing home source');return new Entry(w,w.ref,BigInt(start.fields.n as number));}
 }

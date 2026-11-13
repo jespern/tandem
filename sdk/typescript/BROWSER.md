@@ -12,7 +12,7 @@ The Node and browser builds share write/control encodings, strict JSON/base64url
 Ed25519 acceptance, inventories and record merging. Node keeps native crypto.
 The browser backend uses Noble hashes, curves and ciphers with Web Crypto's
 random source; `buffer` supplies the existing byte API. The SDK bundle costs
-about 61 KB gzip; the Argon2 worker loads separately.
+about 62 KB gzip; the Argon2 worker loads separately.
 
 Private keys now use an opaque SDK `PrivateKey` handle in both runtimes. Construct
 them with `privateKey(seed, algorithm)`; pass that handle to signing/agreement
@@ -109,7 +109,10 @@ it after reload, including a claim awaiting approval or edits made offline.
 `run(() => JMAPStore.open(config), signal)` owns the push pump and durable replay;
 `updates(signal)` is an async sequence of device changes. `state` exposes the
 verified `DeviceState` view, with `lists`, `records`, `record`, `homeRecord`, `role`
-and `offers`. `writeFields` and `writeHome` commit signed edits locally before
+and `offers`. `createList` commits membership, genesis and metadata together; `accept`
+records the grant answer/key in home and sends the signed answer to the owner.
+Lists received as offers stay out of the workspace until accepted.
+`writeFields` and `writeHome` commit signed edits locally before
 export. Set adds/removes and record tombstones use the shared merge rules.
 
 The controller owns the journal's opaque per-hub action state. Device Web Locks
@@ -123,6 +126,9 @@ Unknown proof status stays distinct from a verified revocation.
 record merges from retained source writes, including changed epoch eligibility;
 this favors replay correctness over an incremental application cache. Defaults
 hold 100,000 envelopes / 64 MiB and publish toward 64 KiB messages, configurable.
+`collectionStatus` reports epoch readiness; reader role and current authority
+still determine whether edits are allowed. Home writes stop when a known device
+cut is absent from the current home epoch: they require a new home epoch key first.
 Individual writes still obey the protocol's 1 MiB maximum. Private application
 storage is separate from this SDK journal. Cancel/await the device and close its
 keychain/journal when finished; no background watcher is needed.
@@ -159,14 +165,18 @@ With `--native`, it also builds the Swift driver and proves real browser claim �
 Swift approval over IMAP → browser page reload → gated JMAP push release → signed
 home-key confirmation. It additionally verifies native/browser edits both ways,
 controller enrollment/reload, offline edit recovery and revocation between replay
-and commit. All 13 scenarios passed locally. Only that fixture accepts self-signed TLS; production SDK checks stay enabled.
+and commit. Native clients also read browser-created lists and acceptance answers;
+reader edits are refused, and browser writer edits survive native list rekeys.
+All 14 scenarios passed locally. Only that fixture accepts self-signed TLS;
+production SDK checks stay enabled.
 It explicitly enables browser CORS and publishes real loopback URLs, with no proxy.
 
 ## Remaining acceptance gates
 
-1. Finish controller operations for collection creation, accepting/sharing,
-   management and journalled rotation/healing. Pairing/release and bidirectional
-   field edits now pass against Swift; full home/list rotation parity still needs
+1. Finish owner sharing, management and journalled rotation/healing operations.
+   Pairing/release and bidirectional
+   field edits, list creation/acceptance and receiving native list rotations now
+   pass against Swift; full home/list rotation parity still needs
    the native crash/late-write scenarios. Reader and stale-epoch validation exist
    in the authority layer and must remain enforced by every new operation.
 2. Shared Liszto field-value vectors against its native adapter, then the browser

@@ -1,11 +1,11 @@
 import {Buffer} from 'buffer';
-import {type PrivateKey,bytes,b64u,unb64u,sha,publicKey,openEnvelope,openInbox,seal,directoryTag,directoryKey,homeTag,homeScope,inboxTag,collectionTag,namedID} from './crypto.js';
-import {type ControlObject,controlFromJSON,controlToJSON,parseControl,objectID} from './control.js';
+import {type PrivateKey,bytes,b64u,unb64u,sha,publicKey,randomBytes,commit,sealInbox,openEnvelope,openInbox,seal,directoryTag,directoryKey,homeTag,homeScope,inboxTag,collectionTag,namedID} from './crypto.js';
+import {type ControlObject,controlFromJSON,controlToJSON,parseControl,objectID,signControl} from './control.js';
 import {parseJSON,validUnicode} from './json.js';
-import {type Dot,type Write,type Op,Entry,RecordState,parseKind1,recordPayload,signWrite} from './core.js';
+import {type Dot,type Write,type Op,Entry,RecordState,parseKind1,recordPayload,signWrite,writeID} from './core.js';
 import {Registry,RegistryHoldingLimit,type Certificate} from './registry.js';
 import {HomePolicy,HomeHoldingLimit} from './home-policy.js';
-import {CollectionPolicy,CollectionHoldingLimit,ROSTER_RECORD,META_RECORD} from './roster.js';
+import {CollectionPolicy,CollectionHoldingLimit,ROSTER_RECORD,META_RECORD,statementJSON} from './roster.js';
 import {InventoryAssembler,InventoryHoldingLimit,type InventoryFragment} from './inventory-assembly.js';
 import {adoptGrant,grantValidity} from './grant.js';
 import type {Message} from './session.js';
@@ -46,7 +46,7 @@ export class DeviceState {
   get revision():number{return this.#revision;}
   get participant():Uint8Array{return bytes(this.#participant);}
   get certificate():Certificate|undefined{return this.#registry.allCertificates.filter(c=>eq(c.participant,this.#participant)&&eq(c.sign,publicKey(this.#keys.signing))&&eq(c.agree,publicKey(this.#keys.agreement))&&this.#registry.activity(c.id).kind==='valid').sort((a,b)=>Buffer.compare(a.id,b.id))[0];}
-  get homeReady():boolean{return this.#home.inventoriesReady();}
+  get homeReady():boolean{return this.#home.inventoriesReady()&&this.#home.exposed().length===0;}
   offerHomeKey(epoch:Uint8Array,key:Uint8Array):void{if(this.#offerHome(epoch,key)){this.#drain();this.#revision++;}}
   #offerHome(epoch:Uint8Array,key:Uint8Array):boolean{const id=`home:${b64u(epoch)}:${b64u(sha(key))}`;if(this.#offered.has(id))return false;this.#home.offerKey(epoch,key);this.#offered.add(id);return true;}
   #collection(cid:Uint8Array):Collection{const id=b64u(cid);let c=this.#collections.get(id);if(!c){c={policy:new CollectionPolicy(cid,this.#registry),payloads:[],records:new Map()};this.#collections.set(id,c);}return c;}
@@ -182,12 +182,42 @@ export class DeviceState {
     }return state.kept.map(entry=>entry.write);
   }
   prepareHome(name:string,edits:readonly FieldEdit[],reserve:()=>Dot):OutgoingMessage[]{
-    validUnicode(name);const identity=this.#identity(),epoch=this.#home.heads()[0];if(!epoch||!this.#home.inventoriesReady())throw new Error('home keys or inventory are not ready');
+    validUnicode(name);const identity=this.#identity(),epoch=this.#home.heads()[0];if(!epoch||!this.#home.inventoriesReady())throw new Error('home keys or inventory are not ready');if(this.#home.exposed().length)throw new Error('home key must rotate before writing after a device revocation');
     const key=this.#home.key(epoch)!,start=this.#home.object(epoch)!,scope=homeScope(this.#registry.pin.hub,this.#participant),record=namedID(name),previous=this.homeRecord(name);
     if(edits.some(e=>e.op===4||e.field==='_name'&&(e.op!==1||!e.value||!eq(e.value,Buffer.from(name)))))throw new Error('home records keep their name and cannot be deleted');
     const changes=[...(!previous?.value('_name')&&!edits.some(e=>e.field==='_name')?[{field:'_name',op:1 as const,value:Buffer.from(name)}]:[]),...edits];
     const writes=this.#edit(scope,record,epoch,epoch,BigInt(start.fields.n as number),previous,changes,reserve,identity);
     return [...identity.messages,...this.#sealRecord(scope,record,writes,key,homeTag(key,this.#registry.pin.hub,this.#participant,epoch))];
+  }
+  collectionStatus(cid:Uint8Array):{epoch:Uint8Array|undefined;ready:boolean;dead:boolean}{
+    const c=this.#collections.get(b64u(cid)),head=c?.policy.head,epoch=head&&c?.policy.epoch(head),statement=head&&c?.policy.statement(head);
+    return{epoch,dead:c?.policy.dead??false,ready:!!c&&!!epoch&&!!c.policy.key(epoch)&&!c.policy.dead&&!!statement&&!statement.deleted&&c.policy.inventoriesReady()&&c.policy.exposed().length===0};
+  }
+  prepareCreateList(name:string,reserve:()=>Dot):{collection:Uint8Array;messages:OutgoingMessage[]}{
+    validUnicode(name);const identity=this.#identity();if(!this.#home.inventoriesReady())throw new Error('home is not ready to create a list');
+    const hub=this.#registry.pin.hub,key=randomBytes(32),statement={n:0,keyN:0,commit:commit(key),nonce:randomBytes(16),members:[{uid:this.#participant,role:'owner' as const,name:'',floor:identity.auth}],deleted:false};
+    const genesis=signWrite({hub,scope:new Uint8Array(16),record:ROSTER_RECORD,field:'s',op:1,author:this.#participant,certificate:identity.certificate.id,authorization:identity.auth,
+      dot:reserve(),value:statementJSON(statement),element:null,ref:new Uint8Array(32),context:[],base:[],signature:new Uint8Array(64)},this.#keys.signing);
+    const epoch=writeID(genesis),collection=epoch.subarray(0,16),tag=collectionTag(key,hub,epoch);
+    const home=this.prepareHome(`membership:${b64u(collection)}`,[{field:'owner',op:1,value:this.#participant},{field:'role',op:1,value:Buffer.from('owner')},
+      {field:'keys',op:2,element:Buffer.from(JSON.stringify({epoch:b64u(epoch),k:b64u(key)}))}],reserve);
+    const meta=this.#edit(collection,META_RECORD,epoch,epoch,0n,undefined,[{field:'_name',op:1,value:Buffer.from('_meta')},{field:'name',op:1,value:Buffer.from(name)}],reserve,identity);
+    return{collection:bytes(collection),messages:[...home,{channel:tag,body:seal(key,hub,tag,recordPayload(ROSTER_RECORD,[genesis]))},...this.#sealRecord(collection,META_RECORD,meta,key,tag)]};
+  }
+  prepareAccept(collection:Uint8Array,reserve:()=>Dot):OutgoingMessage[]{
+    const identity=this.#identity(),c=this.#collections.get(b64u(collection));if(!c)throw new Error('no offer for this collection');
+    const candidates=[...this.#offers.values()].filter(o=>{
+      if(!eq(o.grant.fields.collection as Uint8Array,collection)||this.#answers(collection,o.grant.fields.admission as Uint8Array).size)return false;
+      const target=this.#registry.certificate(o.certificate);return target&&eq(target.sign,publicKey(this.#keys.signing))&&eq(target.agree,publicKey(this.#keys.agreement))&&grantValidity(o.grant,o.key,o.certificate,c.policy,this.#registry).kind==='valid';
+    }).sort((a,b)=>(c.policy.statement(b.grant.fields.epoch as Uint8Array)?.keyN??0)-(c.policy.statement(a.grant.fields.epoch as Uint8Array)?.keyN??0));
+    const offer=candidates[0];if(!offer)throw new Error('no unanswered valid offer for this collection');
+    const f=offer.grant.fields,admission=f.admission as Uint8Array,epoch=f.epoch as Uint8Array,owner=c.policy.owner!,role=c.policy.statement(f.at as Uint8Array)!.members.find(m=>eq(m.uid,this.#participant))!.role;
+    const messages=this.prepareHome(`membership:${b64u(collection)}`,[{field:'answers',op:2,element:Buffer.concat([admission,Buffer.from('a')])},{field:'owner',op:1,value:owner},
+      {field:'role',op:1,value:Buffer.from(role)},{field:'keys',op:2,element:Buffer.from(JSON.stringify({epoch:b64u(epoch),k:b64u(offer.key)}))}],reserve);
+    const fields={hub:this.#registry.pin.hub,collection,participant:this.#participant,admission,answer:'a',event:randomBytes(16),signer:identity.certificate.id,auth:identity.auth};
+    const answer=controlToJSON('answer',fields,{sig:signControl('answer',fields,this.#keys.signing)}),channel=inboxTag(owner,this.#registry.pin.hub);
+    for(const target of this.#registry.allCertificates)if(eq(target.participant,owner)&&this.#registry.activity(target.id).kind==='valid')messages.push({channel,body:sealInbox(this.#registry.pin.hub,owner,target.agree,answer)});
+    return messages;
   }
   prepareField(cid:Uint8Array,record:Uint8Array,edits:readonly FieldEdit[],reserve:()=>Dot):OutgoingMessage[]{
     const identity=this.#identity(),c=this.#collections.get(b64u(cid)),head=c?.policy.head,s=head&&c?.policy.statement(head),epoch=head&&c?.policy.epoch(head);

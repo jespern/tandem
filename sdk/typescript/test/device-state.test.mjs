@@ -53,3 +53,17 @@ test('a verified revocation prevents further writes without losing the cached li
   f.envelope(t.directoryKey(f.directory,f.pin.hub),t.directoryTag(f.directory,f.pin.hub),t.controlToJSON(o.kind,o.fields,o.signatures),3);f.state.ingest(f.messages);
   assert.equal(f.state.certificate,undefined);assert.equal(f.state.lists()[0].name,'Notes');assert.throws(()=>f.state.prepareField(f.cid,t.randomBytes(16),[{field:'title',op:1,value:Buffer.from('Forbidden')}],f.reserve));
 });
+
+test('creating a list journals its membership, signed genesis and metadata as one prepared action',()=>{
+  const f=fixture(),created=f.state.prepareCreateList('New list',f.reserve);assert.equal(f.state.lists().length,1);
+  f.apply(created.messages);assert.equal(f.state.lists().find(row=>t.b64u(row.id)===t.b64u(created.collection)).name,'New list');
+  const replay=new t.DeviceState(new t.Registry(f.pin),f.directory,f.participant,f.keys);replay.offerHomeKey(f.homeID,f.homeKey);replay.ingest([...f.messages].reverse());assert.deepEqual(replay.lists(),f.state.lists());
+});
+
+test('a cut to another device holds home writes even while this device is still admitted',()=>{
+  const f=fixture(),tablet=t.objectID('certificate',objects.get('alice tablet certificate').fields),phone=f.state.certificate.id;
+  const manager=t.managerKeys(Buffer.from(vector.material.management_seed,'hex')),fields={hub:f.pin.hub,genesis:f.pin.genesis,target:tablet,retained:[phone,tablet].sort(Buffer.compare)};
+  const o=t.controlFromJSON(t.controlToJSON('revocation',fields,{sig:t.signControl('revocation',fields,manager.signing)}));
+  f.envelope(t.directoryKey(f.directory,f.pin.hub),t.directoryTag(f.directory,f.pin.hub),t.controlToJSON(o.kind,o.fields,o.signatures),3);f.state.ingest(f.messages);
+  assert.ok(f.state.certificate);assert.equal(f.state.homeReady,false);assert.throws(()=>f.state.prepareHome('settings:liszto',[{field:'theme',op:1,value:Buffer.from('new')}],f.reserve),/home key must rotate/);
+});
