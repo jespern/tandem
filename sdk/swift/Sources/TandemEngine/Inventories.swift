@@ -46,7 +46,8 @@ extension Device {
         }
         guard candidates.allSatisfy({ !$0.isEmpty }) else { return false }
         // Honest epochs have one version of each part; bound the search when someone added others.
-        guard candidates.reduce(1, { $0 * $1.count }) <= 64 else { return false }
+        // One part (the usual case) tries every version; several parts bound the search.
+        guard f.parts == 1 || candidates.reduce(1, { $0 * $1.count }) <= 4096 else { return false }
         var found: Inventory?
         func search(_ i: Int, _ acc: Bytes) {
             guard found == nil else { return }

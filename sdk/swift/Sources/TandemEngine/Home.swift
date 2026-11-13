@@ -38,14 +38,7 @@ extension Device {
         case "home-key":
             guard let n = try? Notice.parse(plaintext, type: "home-key", fields: ["epoch", "k"]),
                   let epoch = n["epoch"], let key = n["k"], key.count == 32 else { return .ignored }
-            if homeKeys[epoch] == key { return .ignored }
-            // The key must be the one the epoch's start commits to; until the start arrives, hold it.
-            if let start = homeEpochs[epoch] {
-                guard start.fields["key"] == .id(Tandem.commit(key)) else { return .ignored }
-            }
-            homeKeys[epoch] = key
-            try store.setValue("home.key." + epoch.hex, key)
-            try moveHome()
+            guard try offerHomeKey(epoch, key) else { return .ignored }
             changed(.home); changed(.lists)
             return .applied
         case "grant":
@@ -75,6 +68,32 @@ extension Device {
         }
     }
 
+    // MARK: Home keys
+
+    /// A home key from anywhere unauthenticated (the inbox, a pairing package, a recovery box). It becomes this home's
+    /// key only once the epoch's signed start commits to it; until then it is a candidate, used only to read the
+    /// channel where that start is. A wrong key never displaces the right one.
+    @discardableResult
+    func offerHomeKey(_ epoch: ID, _ key: Bytes) throws -> Bool {
+        guard homeKeys[epoch] == nil, key.count == 32 else { return false }
+        if let start = homeEpochs[epoch] {
+            guard start.fields["key"] == .id(Tandem.commit(key)) else { return false }
+            try confirmHomeKey(epoch, key)
+            return true
+        }
+        guard homeCandidates[epoch, default: []].insert(key).inserted else { return false }
+        try store.setValue("home.cand.\(epoch.hex).\(H(key).hex)", key)
+        return true
+    }
+
+    func confirmHomeKey(_ epoch: ID, _ key: Bytes) throws {
+        homeKeys[epoch] = key
+        homeCandidates[epoch] = nil
+        try store.setValue("home.key." + epoch.hex, key)
+        for (name, _) in try store.values(prefix: "home.cand.\(epoch.hex).") { try store.removeValue(name) }
+        try moveHome()
+    }
+
     // MARK: Home channels
 
     func applyHome(_ m: Message, epoch: ID, key: Bytes, me: Me) throws -> Outcome {
@@ -89,6 +108,7 @@ extension Device {
             guard case let .record(state) = parsed else {
                 guard case let .inventory(f) = parsed else { return .ignored }
                 guard case let .id(commitment)? = homeEpochs[epoch]?.fields["snapshot"] else { return .waiting }
+                try store.setValue("fragmsg." + m.id, epoch)
                 guard try receiveFragment(f, epoch: epoch, commitment: commitment) else { return .ignored }
                 try moveHome()
                 return .applied
@@ -110,24 +130,58 @@ extension Device {
         }
     }
 
-    /// A home-epoch start for this participant, signed by an admitted keychain of it under its snapshot (§10.8).
+    /// A home-epoch start for this participant (§10.8): signed by one of this participant's own keychains, admitted
+    /// under `auth`, which extends every parent's; every recipient admitted under it. A start whose signer is revoked
+    /// by now is taken only as the parent of an accepted one: before the revocation it was this home, after it it can't
+    /// begin a new branch.
     func acceptHomeEpoch(_ o: ControlObject, me: Me) throws -> Outcome {
-        guard o.fields["hub"] == .id(pin.hub), o.fields["genesis"] == .id(pin.genesis),
-              o.fields["participant"] == .id(me.participant), case let .id(signer)? = o.fields["signer"],
-              case let .id(auth)? = o.fields["auth"] else { return .ignored }
         let id = try o.id()
         if homeEpochs[id] != nil { return .ignored }
-        switch registry.authorizes(snapshot: auth, certificate: signer) {
-        case .pending: return .waiting
+        switch homeEpochValidity(o, me: me) {
+        case .pending: heldStarts[id] = o; return .waiting
         case .invalid: return .ignored
         case .valid: break
         }
-        guard let cert = registry.certificate(signer), o.verify("sig", publicKey: cert.sign) else { return .ignored }
-        if let key = homeKeys[id], o.fields["key"] != .id(Tandem.commit(key)) { return .ignored }
-        homeEpochs[id] = o
-        try store.putObject(o)
-        try moveHome()
+        if case let .id(signer)? = o.fields["signer"], !registry.activity(signer).isValid, homeChildren(id).isEmpty {
+            heldStarts[id] = o   // kept aside: a later start naming it brings it in
+            return .ignored
+        }
+        try takeHomeEpoch(o, id: id)
         return .applied
+    }
+
+    func takeHomeEpoch(_ o: ControlObject, id: ID) throws {
+        homeEpochs[id] = o
+        heldStarts[id] = nil
+        try store.putObject(o)
+        if let key = homeCandidates[id]?.first(where: { o.fields["key"] == .id(Tandem.commit($0)) }) {
+            try confirmHomeKey(id, key)
+        } else if homeCandidates[id] != nil {
+            homeCandidates[id] = nil   // none of them is this epoch's key
+            for (name, _) in try store.values(prefix: "home.cand.\(id.hex).") { try store.removeValue(name) }
+        }
+        try moveHome()
+    }
+
+    func homeEpochValidity(_ o: ControlObject, me: Me) -> Validity {
+        guard o.fields["hub"] == .id(pin.hub), o.fields["genesis"] == .id(pin.genesis),
+              o.fields["participant"] == .id(me.participant), case let .id(signer)? = o.fields["signer"],
+              case let .id(auth)? = o.fields["auth"], case let .set(parents)? = o.fields["parents"],
+              case let .set(recipients)? = o.fields["recipients"] else { return .invalid("malformed home epoch") }
+        var checks = [registry.authorizes(snapshot: auth, certificate: signer)]
+        guard checks[0].isValid else { return checks[0] }
+        guard let cert = registry.certificate(signer), cert.participant == me.participant, o.verify("sig", publicKey: cert.sign)
+        else { return .invalid("not signed by a keychain of this participant") }
+        for p in parents {
+            // A parent known only as a start held aside comes in with its child.
+            if homeEpochs[p] == nil, let held = heldStarts[p], homeEpochValidity(held, me: me).isValid {
+                try? takeHomeEpoch(held, id: p)
+            }
+            guard case let .id(parentAuth)? = homeEpochs[p]?.fields["auth"] else { return .pending([p]) }
+            checks.append(registry.extends(auth, floor: parentAuth))
+        }
+        checks += recipients.map { registry.authorizes(snapshot: auth, certificate: $0) }
+        return Validity.all(checks)
     }
 
     /// Whether `w` is a valid home write in the channel of `epoch` (§6.2, §8.3): by this participant, under an admitted

@@ -112,8 +112,7 @@ extension Device {
         for n in notices where n.type == "home-recovery" {
             guard let epoch = n["epoch"], let box = n["bytes"],
                   let key = try? Control.openHomeRecovery(manager.agreement, hub: pin.hub, epoch: epoch, box: box) else { continue }
-            homeKeys[epoch] = key
-            try store.setValue("home.key." + epoch.hex, key)
+            try offerHomeKey(epoch, key)   // anyone can seal a box to MKa: the epoch's start decides
         }
     }
 }

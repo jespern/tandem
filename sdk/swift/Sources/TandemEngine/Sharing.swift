@@ -15,26 +15,36 @@ extension Device {
 
     /// Add `participant` to a list this participant owns, as a writer or reader, in the current epoch, and send them a grant.
     public func share(list cid: Bytes, with participant: ID, role: Statement.Role, name: String = "") async throws {
-        guard role != .owner, let me, var c = collections[cid], !c.dead, c.owner == me.participant, let head = c.head,
-              let current = c.statements[head], let epoch = c.epoch(of: head), let key = c.keys[epoch], !current.statement.deleted
-        else { throw TandemError.invalid("share: not a list this participant owns, or it was deleted") }
-        if let note = flightNote(cid) { throw ChangeError.pending(note) }
-        guard !current.statement.members.contains(where: { $0.uid == participant }) else { return }
+        guard role != .owner else { throw TandemError.invalid("share: a list has one owner") }
+        try await sync()
+        guard let me, let c = collections[cid], c.owner == me.participant, let head = c.head, !c.dead,
+              c.statements[head]?.statement.deleted == false else {
+            throw TandemError.invalid("share: not a list this participant owns, or it was deleted")
+        }
+        guard c.statements[head]?.statement.members.contains(where: { $0.uid == participant }) == false else { return }
         let floor = try await publishedSnapshot(of: participant)
-        var next = current.statement
-        next.n += 1
-        next.nonce = nil   // only a genesis has one (§10.8)
-        next.members.append(.init(uid: participant, role: role, name: Bytes(name.utf8), floor: floor))
-        next.members.sort { $0.uid.lexicographicallyPrecedes($1.uid) }
-        var w = Write(hub: pin.hub, certificate: me.certificate, authorization: me.auth, scope: cid, record: Roster.record,
-                      field: Roster.field, op: .assign, value: next.json(), author: me.participant, dot: try nextDot(me), ref: head)
-        try w.sign(with: me.keys.signing)
-        let sid = try w.id()
-        c.statements[sid] = (w, next)
-        collections[cid] = c
-        try store.putWrite(id: sid, scope: cid, record: Roster.record, epoch: epoch, payload: try recordPayload(record: Roster.record, writes: [w]))
-        try await publish(cid: cid, epoch: epoch, record: Roster.record, writes: [w])
+        // Until the grant is out, a crash leaves this mark for the next sync to finish (§11.4).
+        let pending = "pendinggrant.\(cid.hex).\(participant.hex)"
+        try store.setValue(pending, [1])
+        let (sid, epoch, key) = try await sameEpoch(cid) { s in
+            s.members.append(.init(uid: participant, role: role, name: Bytes(name.utf8), floor: floor))
+        }
         try await sendGrant(cid: cid, to: participant, admission: sid, at: sid, epoch: epoch, key: key, me: me)
+        try store.removeValue(pending)
+    }
+
+    /// Grants a crash kept from going out after their member was added.
+    func finishPendingGrants() async throws {
+        guard let me else { return }
+        for (name, _) in try store.values(prefix: "pendinggrant.") {
+            let parts = name.split(separator: ".").map(String.init)
+            guard parts.count == 3, let cid = Bytes(hex: parts[1]), let uid = Bytes(hex: parts[2]), let c = collections[cid],
+                  let head = c.head, let epoch = c.epoch(of: head), let key = c.keys[epoch] else { continue }
+            if let admission = admission(of: uid, in: c, at: head) {
+                try await sendGrant(cid: cid, to: uid, admission: admission, at: head, epoch: epoch, key: key, me: me)
+            }
+            try store.removeValue(name)
+        }
     }
 
     /// A snapshot of `participant` that the directory holds, publishing the current one if none does (§6.9).
@@ -95,7 +105,7 @@ extension Device {
         offers[id] = offer
         try store.setValue("offer." + id.hex, plaintext)
         var c = collections[offer.collection] ?? CollectionState(id: offer.collection)
-        c.keys[offer.epoch] = key
+        c.offer(key: key, epoch: offer.epoch)
         collections[offer.collection] = c
         return .applied
     }
@@ -113,6 +123,30 @@ extension Device {
         guard let cert = registry.certificate(signer), cert.participant == owner, o.grant.verify("sig", publicKey: cert.sign)
         else { return .invalid("not granted by the owner") }
         return .valid
+    }
+
+    /// A verified grant shows that its epoch was announced: the owner grants only after announcing (§11.6, "a device
+    /// learns of the change … from a verified grant and the roster in the new channel"). Every epoch start on the line to
+    /// its `at` counts from then on, for a member added after a key change and for one whose announcement was deleted.
+    func adoptGrantedChains() throws -> Bool {
+        guard let me else { return false }
+        var any = false
+        for o in offers.values where answer(to: o) != UInt8(ascii: "n") {
+            guard case let .id(at)? = o.grant.fields["at"], var c = collections[o.collection], c.statements[at] != nil,
+                  offerValidity(o, me: me).isValid else { continue }
+            var changedHere = false
+            for id in chain(c, to: at) where c.startsEpoch(id) && !c.announced.contains(id) {
+                c.announced.insert(id)
+                try store.setValue("ann." + o.collection.hex + "." + id.hex, [1])
+                changedHere = true
+            }
+            guard changedHere else { continue }
+            collections[o.collection] = c
+            try moveCollection(o.collection)
+            changed(.lists); changed(.members(list: o.collection))
+            any = true
+        }
+        return any
     }
 
     /// Lists shared with this participant that it hasn't answered (§11.2): ID, name and owner.

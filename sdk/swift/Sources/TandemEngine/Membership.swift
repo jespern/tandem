@@ -27,6 +27,8 @@ extension Device {
         if let head = c.head, c.statements[head]?.statement.deleted == true { return false }
         if c.owner == me.participant || homeValue(membershipName(cid), field: "owner") == me.participant { return true }
         let admissions = Set(homeElements(membershipName(cid), field: "answers").filter { $0.count == 33 }.map { Array($0.prefix(32)) })
+        // Listed no more: removed. The replica stays, read-only (`removedLists`).
+        if let head = c.head, c.statements[head] != nil, admission(of: me.participant, in: c, at: head) == nil { return false }
         let current = c.head.flatMap { admission(of: me.participant, in: c, at: $0) }
         // Before the roster is here, the latest answered admission stands in for the current one.
         let candidates = current.map { [$0] } ?? Array(admissions)
@@ -34,6 +36,17 @@ extension Device {
             let letters = answers(cid, admission: a)
             return letters.contains(UInt8(ascii: "a")) && !letters.contains(UInt8(ascii: "l")) && !letters.contains(UInt8(ascii: "n"))
         }
+    }
+
+    /// Lists this participant accepted and has since been removed from: their replicas stay, read-only, so the app can
+    /// offer to keep what's in them (Liszto's rescue into the Inbox).
+    public func removedLists() -> [Bytes] {
+        guard let me else { return [] }
+        return collections.values.filter { c in
+            guard c.owner != me.participant, let head = c.head, c.statements[head]?.statement.deleted == false,
+                  admission(of: me.participant, in: c, at: head) == nil else { return false }
+            return homeElements(membershipName(c.id), field: "answers").contains { $0.count == 33 && $0[32] == UInt8(ascii: "a") }
+        }.map(\.id).sorted { $0.lexicographicallyPrecedes($1) }
     }
 
     /// Say no to a list shared with this participant (§11.2): nothing appears, and the owner is told.

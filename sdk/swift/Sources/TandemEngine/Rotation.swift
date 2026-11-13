@@ -146,24 +146,32 @@ extension Device {
     }
 
     /// A same-epoch roster statement (§8.2): only adds access or deletes the list, keeps every floor.
-    func sameEpoch(_ cid: Bytes, edit: (inout Statement) -> Void) async throws {
-        guard let me, var c = collections[cid], !c.dead, c.owner == me.participant, let head = c.head,
-              let current = c.statements[head], let epoch = c.epoch(of: head), !current.statement.deleted
-        else { throw TandemError.invalid("roster: not a list this participant owns") }
+    /// Before signing it syncs; between signing and publishing it syncs again and checks that the parent is still the
+    /// head and that no note has appeared, so a stale device can't put a second successor on one statement.
+    @discardableResult
+    func sameEpoch(_ cid: Bytes, edit: (inout Statement) -> Void) async throws -> (statement: ID, epoch: ID, key: Bytes) {
+        try await sync()
+        guard let me, let c = collections[cid], !c.dead, c.owner == me.participant, let head = c.head,
+              let current = c.statements[head], let epoch = c.epoch(of: head), let key = c.keys[epoch], !current.statement.deleted
+        else { throw TandemError.invalid("roster: not a list this participant owns, or it was deleted") }
         if let note = flightNote(cid) { throw ChangeError.pending(note) }
         var next = current.statement
         next.n += 1
-        next.nonce = nil
+        next.nonce = nil   // only a genesis has one (§10.8)
         edit(&next)
         next.members.sort { $0.uid.lexicographicallyPrecedes($1.uid) }
         var w = Write(hub: pin.hub, certificate: me.certificate, authorization: me.auth, scope: cid, record: Roster.record,
                       field: Roster.field, op: .assign, value: next.json(), author: me.participant, dot: try nextDot(me), ref: head)
         try w.sign(with: me.keys.signing)
         let id = try w.id()
-        c.statements[id] = (w, next)
-        collections[cid] = c
+        try await sync()
+        guard var now = collections[cid], now.head == head, !now.dead else { throw ChangeError.superseded }
+        if let note = flightNote(cid) { throw ChangeError.pending(note) }
+        now.statements[id] = (w, next)
+        collections[cid] = now
         try store.putWrite(id: id, scope: cid, record: Roster.record, epoch: epoch, payload: try recordPayload(record: Roster.record, writes: [w]))
         try await publish(cid: cid, epoch: epoch, record: Roster.record, writes: [w])
+        return (id, epoch, key)
     }
 
     /// The counted roster line from the genesis to `id`.
@@ -189,7 +197,9 @@ extension Device {
 
     /// One journalled key change (§11.6 steps 1–2), then the rest of the steps.
     func change(_ cid: Bytes, what: String, edit: ([Statement.Member]) -> [Statement.Member]) async throws {
-        guard try store.journal("rotate." + cid.hex) == nil else { throw TandemError.invalid("rotate: a change of this list is in progress here") }
+        guard try store.journal("rotate." + cid.hex) == nil, changing.insert(cid).inserted
+        else { throw TandemError.invalid("rotate: a change of this list is in progress here") }
+        defer { changing.remove(cid) }
         try await sync()
         guard let me, let c = collections[cid], !c.dead, c.owner == me.participant, let head = c.head, let epoch = c.epoch(of: head),
               let current = c.statements[head]?.statement, c.keys[epoch] != nil
@@ -279,6 +289,7 @@ extension Device {
                     // The last check before the change happens: the note is still ours and the parent still the head.
                     guard flightNote(cid)?.statement == j.id, collections[cid]?.head == j.parent else {
                         try await destroyChannel(newTag)
+                        try await clearOwnNote(cid, statement: j.id)
                         try dropRotation(cid)
                         throw ChangeError.superseded
                     }
@@ -324,6 +335,11 @@ extension Device {
         try moveCollection(cid)
     }
 
+    /// A dropped change takes its note with it, if the note is still its own; otherwise it would block the list.
+    func clearOwnNote(_ cid: Bytes, statement: ID) async throws {
+        if flightNote(cid)?.statement == statement { try await setHome(membershipName(cid), field: "flight", value: FlightNote.none) }
+    }
+
     func dropRotation(_ cid: Bytes) throws {
         try store.transaction {
             try store.clearJournal("rotate." + cid.hex)
@@ -343,6 +359,7 @@ extension Device {
         guard let c = collections[j.cid], let oldKey = c.keys[j.oldEpoch] else { return }
         let oldTag = Tandem.collectionTag(key: oldKey, hub: pin.hub, epoch: j.oldEpoch)
         let newTag = Tandem.collectionTag(key: j.key, hub: pin.hub, epoch: j.id)
+        try await healFragments(channel: newTag, epoch: j.id, key: j.key)   // the inventory first, then the old data
         let listed = Set(inventory.entries.values.flatMap { $0 })
         var inNew = Set<Bytes>()
         for m in try store.messages(channel: newTag) { inNew.formUnion(try store.contents(message: m).map(\.write)) }
@@ -381,10 +398,14 @@ extension Device {
                 if !j.noteWritten { j.noteWritten = true; j.step = max(j.step, 3) }
             } else if !j.noteWritten {
                 // Nothing but the journal left the device; usable only if nothing moved meanwhile.
-                if c == nil || note != nil || !headIsParent { try dropRotation(j.cid); failure = failure ?? ChangeError.superseded; continue }
+                if c == nil || note != nil || !headIsParent {
+                    try await clearOwnNote(j.cid, statement: j.id)
+                    try dropRotation(j.cid); failure = failure ?? ChangeError.superseded; continue
+                }
             } else {
                 // Discarded or overtaken: a draft may always be dropped.
                 try await destroyChannel(Tandem.collectionTag(key: j.key, hub: pin.hub, epoch: j.id))
+                try await clearOwnNote(j.cid, statement: j.id)
                 try dropRotation(j.cid)
                 failure = failure ?? ChangeError.superseded
                 continue

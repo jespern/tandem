@@ -93,8 +93,8 @@ extension Device {
             case .invalid: continue
             case .valid: break
             }
-            guard let cert = registry.certificate(w.certificate), cert.participant == w.author,
-                  (try? w.verify(publicKey: cert.sign)) != nil else { continue }
+            guard let cert = registry.certificate(w.certificate), cert.participant == w.author, registry.activity(cert.id).isValid,
+                  (try? w.verify(publicKey: cert.sign)) != nil else { continue }   // a revoked keychain renames nobody
             if w.field == Bytes("name".utf8), w.value.count > 256 { continue }
             entries.append(try Entry(w, epoch: pin.genesis, epochNumber: 0))
         }

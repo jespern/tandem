@@ -9,7 +9,23 @@ struct CollectionState: Sendable {
     /// Epoch starts seen in their parent epoch's channel (§11.6 step 4). Until then a start is a draft (§9.4).
     var announced: Set<ID> = []
     var keys: [ID: Bytes] = [:]                     // epoch-start statement ID → epoch key
+    /// Keys from grants not yet confirmed by the owner-signed statement that starts their epoch: used only to read.
+    var readKeys: [ID: Set<Bytes>] = [:]
     var records: [Bytes: Record] = [:]
+
+    /// A key from a grant, unauthenticated until checked (§11.4): it never displaces a key, and becomes the epoch's key
+    /// only once the statement starting the epoch, signed by the owner, commits to it.
+    mutating func offer(key: Bytes, epoch: ID) {
+        guard keys[epoch] == nil else { return }
+        readKeys[epoch, default: []].insert(key)
+        confirmKey(epoch)
+    }
+
+    mutating func confirmKey(_ epoch: ID) {
+        guard keys[epoch] == nil, let s = statements[epoch], let candidates = readKeys[epoch] else { return }
+        if let k = candidates.first(where: { Tandem.commit($0) == s.statement.commit }) { keys[epoch] = k }
+        readKeys[epoch] = nil
+    }
 
     var owner: ID? { genesis.flatMap { statements[$0]?.statement.owner?.uid } }
 
@@ -305,6 +321,9 @@ extension Device {
     func collectionChannel(_ tag: String) -> (cid: Bytes, epoch: ID, key: Bytes)? {
         for (cid, c) in collections {
             for (e, k) in c.keys where Tandem.collectionTag(key: k, hub: pin.hub, epoch: e) == tag { return (cid, e, k) }
+            for (e, ks) in c.readKeys {
+                for k in ks where Tandem.collectionTag(key: k, hub: pin.hub, epoch: e) == tag { return (cid, e, k) }
+            }
         }
         return nil
     }
@@ -323,6 +342,7 @@ extension Device {
         guard case let .record(state) = parsed else {
             guard case let .inventory(f) = parsed else { return .ignored }
             guard let s = collections[cid]?.statements[epoch]?.statement, let commitment = s.snapshot else { return .waiting }
+            try store.setValue("fragmsg." + m.id, epoch)   // which messages carry fragments, for healing (§12.2)
             guard try receiveFragment(f, epoch: epoch, commitment: commitment) else { return .ignored }
             try moveCollection(cid)
             return .applied
@@ -387,8 +407,10 @@ extension Device {
             guard s.n == p.n + 1, !p.deleted, w.author == c.owner, s.owner?.uid == c.owner, s.nonce == nil else { return .ignored }
             let before = Dictionary(uniqueKeysWithValues: p.members.map { ($0.uid, $0) })
             if s.commit == p.commit {
-                // Same epoch (§8.2): key, snapshot and every kept floor unchanged; nobody removed or lowered.
+                // Same epoch (§8.2): key, snapshot and every kept floor unchanged; nobody removed or lowered; signed under
+                // a snapshot that extends the epoch's owner floor, so a revoked owner keychain can't extend it.
                 guard s.keyN == p.keyN, s.prev == p.prev, s.snapshot == p.snapshot else { return .ignored }
+                if let ownerFloor = p.owner?.floor { floorsToCheck.append((w.authorization, ownerFloor)) }
                 for m in p.members {
                     guard let now = s.members.first(where: { $0.uid == m.uid }), now.floor == m.floor,
                           rank(now.role) >= rank(m.role) else { return .ignored }
@@ -413,6 +435,7 @@ extension Device {
         else { return .ignored }
         c.statements[id] = (w, s)
         if w.ref == Bytes(repeating: 0, count: 32) { c.genesis = id }
+        c.confirmKey(id)
         let starts = c.startsEpoch(id)
         if starts, c.epoch(of: w.ref) == channel { c.announced.insert(id) }
         collections[cid] = c
@@ -433,7 +456,8 @@ extension Device {
         guard let c = collections[cid] else { return .pending([]) }
         guard let s = c.statements[w.ref] else { return .pending([w.ref]) }
         guard w.hub == pin.hub, let source = c.epoch(of: w.ref) else { return .invalid("another hub") }
-        guard c.counts(w.ref), c.counts(source) else { return .invalid("a draft authorizes nothing") }
+        // A draft authorizes nothing (§9.4); held, not dropped, until its announcement or a grant shows it counts.
+        guard c.counts(w.ref), c.counts(source) else { return .pending([source]) }
         guard let member = s.statement.members.first(where: { $0.uid == w.author }), member.role != .reader,
               w.record != Self.meta || member.role == .owner else { return .invalid("not a writer here") }
         var checks = [registry.authorizes(snapshot: w.authorization, certificate: w.certificate)]

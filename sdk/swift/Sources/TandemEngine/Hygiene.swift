@@ -15,6 +15,8 @@ extension Device {
                   epoch == c.genesis || inventory(epoch) != nil, c.statements[head]?.statement.deleted == false else { continue }
             let tag = Tandem.collectionTag(key: key, hub: pin.hub, epoch: epoch)
             try await healRoster(cid, c: c, head: head, epoch: epoch, tag: tag)
+            if epoch != c.genesis { try await healFragments(channel: tag, epoch: epoch, key: key) }
+            try await healAnnouncements(cid, c: c)
             try await tidy(channel: tag, scope: cid, records: c.records, entry: { w in
                 guard let s = c.statements[w.ref], let source = c.epoch(of: w.ref) else { return nil }
                 return try? Entry(w, epoch: source, epochNumber: s.statement.keyN)
@@ -23,9 +25,11 @@ extension Device {
             })
         }
         try await healGrants()
+        try await finishPendingGrants()
         for epoch in homeHeads {
             guard let key = homeKeys[epoch], let scope = homeScope else { continue }
             let tag = Tandem.homeTag(key: key, hub: pin.hub, uid: me.participant, epoch: epoch)
+            if homeEpochs[epoch]?.fields["parents"] != .set([]) { try await healFragments(channel: tag, epoch: epoch, key: key) }
             let epochs = homeEpochs
             try await tidy(channel: tag, scope: scope, records: home, entry: { w in
                 try? Entry(w, epoch: w.ref, epochNumber: Self.number(w.ref, in: epochs))
@@ -69,6 +73,36 @@ extension Device {
         let line = chain(c, to: head)
         guard !line.allSatisfy(present.contains) else { return }
         try await publish(cid: cid, epoch: epoch, record: Roster.record, writes: line.map { c.statements[$0]!.write })
+    }
+
+    /// An epoch's inventory stays on the hub while the epoch is current (§10.7, §12.2): published again if no fragment
+    /// message is left in its channel.
+    func healFragments(channel tag: String, epoch: ID, key: Bytes) async throws {
+        guard let inv = inventory(epoch) else { return }
+        for m in try store.messages(channel: tag) where try store.value("fragmsg." + m) != nil { return }
+        for fragment in try Self.fragments(inv, epoch: epoch) {
+            let envelope = try Envelope.seal(key: key, hub: pin.hub, kind: 1, tag: tag, plaintext: fragment)
+            let id = try await hub.append(channel: tag, body: envelope)
+            try store.transaction {
+                try store.noteMessage(id: id, channel: tag, hash: H(envelope))
+                try store.markApplied(id)
+                try store.setValue("fragmsg." + id, epoch)
+            }
+        }
+    }
+
+    /// Every earlier epoch's channel keeps the announcement of the epoch after it (§11.6 step 6, §12.2): it is how a
+    /// device that was away finds out where the list went. Restored if it was destroyed.
+    func healAnnouncements(_ cid: Bytes, c: CollectionState) async throws {
+        for start in c.announced where c.startsEpoch(start) {
+            guard let s = c.statements[start], let old = c.epoch(of: s.write.ref), let key = c.keys[old] else { continue }
+            let tag = Tandem.collectionTag(key: key, hub: pin.hub, epoch: old)
+            var present = false
+            for (id, _) in try store.merged(channel: tag) where try store.contents(message: id).contains(where: { $0.write == start }) {
+                present = true
+            }
+            if !present { try await publish(cid: cid, epoch: old, record: Roster.record, writes: [s.write]) }
+        }
     }
 
     /// Collect and heal one channel. `records` is this device's state of the scope; `entry` places a stored write.

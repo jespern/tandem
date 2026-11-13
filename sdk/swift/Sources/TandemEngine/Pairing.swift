@@ -366,7 +366,8 @@ extension Device {
         case Control.rejected, Control.inviteCancelled:
             return signer == nil && r.verify("sig", publicKey: pin.hub)
         case Control.pairingCancelled, Control.paired:
-            guard let signer, let cert = registry.certificate(signer), registry.certificateValidity(signer).isValid,
+            guard let signer, let cert = registry.certificate(signer),
+                  (outcome == Control.paired ? registry.certificateValidity(signer) : registry.activity(signer)).isValid,
                   r.verify("sig", publicKey: cert.sign) else { return false }
             let participant = outcome == Control.paired ? registry.certificate(subject)?.participant
                                                         : registry.delegations[subject]?.participant
@@ -395,9 +396,8 @@ extension Device {
               let j = try? JSON.parse(contents), let epoch = try? j.bytes("home", count: 32), let key = try? j.bytes("k", count: 32)
         else { return .ignored }
         if let start = homeEpochs[epoch], start.fields["key"] != .id(Tandem.commit(key)) { return .ignored }
-        homeKeys[epoch] = key
+        try offerHomeKey(epoch, key)
         try store.transaction {
-            try store.setValue("home.key." + epoch.hex, key)
             try store.removeValue("pairing.pending")
             try store.setValue("pairing.done." + pending.token.hex, me.certificate)
         }

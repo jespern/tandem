@@ -74,12 +74,15 @@ extension Device {
     func resign(_ cid: Bytes, me: Me) async throws {
         guard let (current, _, inv) = currentEpoch(cid), let c = collections[cid] else { return }
         let all = try storedWrites(c)
-        var touched: [Bytes: [Write]] = [:]
-        for (record, x) in all where x.write.author == me.participant && x.epoch != current {
+        var touched: [Bytes: [Write]] = [:], resigned: [String] = []
+        // Only this installation's own writes on this keychain: another device's, a revoked one's above all, is not ours
+        // to sign again (§11.6, "the same still-admitted authoring device").
+        for (record, x) in all where x.write.certificate == me.certificate && x.write.dot.device == me.installation
+            && x.epoch != current {
             let done = "resigned." + x.id.hex
             guard try store.value(done) == nil else { continue }
-            try store.setValue(done, [1])
-            if inv.entries[record]?.contains(x.id) == true { continue }   // carried over as it is
+            // Decided without signing: marked now. A write signed again is marked when it is stored, below.
+            if inv.entries[record]?.contains(x.id) == true { try store.setValue(done, [1]); continue }   // carried over
             // Every write seen of the record counts, kept or since superseded. A claim about this installation beyond
             // what it issued is forged, unless the superseding write is this installation's own later one.
             var genuine = false
@@ -89,6 +92,7 @@ extension Device {
                 if try x.write.dot.device != me.installation || ownLater || !forged(o.write, me: me) { genuine = true }
             }
             if genuine {
+                try store.setValue(done, [1])
                 // Replaced by a write that plausibly saw it. If it was kept when the epoch changed, the new state's
                 // claim can't be checked: keep it for the app.
                 var old = try Record(hub: pin.hub, scope: cid, id: record)
@@ -98,6 +102,7 @@ extension Device {
             }
             let base = joined(x.write.base, x.write.context, [x.write.dot])
             guard let ref = firstWriterStatement(c, epoch: current, me: me), base.count <= maxVector else {
+                try store.setValue(done, [1])
                 try store.setValue("unshared." + cid.hex + "." + x.id.hex, record)   // no statement allows it, or it can't be carried
                 continue
             }
@@ -106,6 +111,7 @@ extension Device {
                           author: me.participant, dot: x.write.dot, ref: ref, context: [], base: base)
             try w.sign(with: me.keys.signing)
             touched[record, default: []].append(w)
+            resigned.append(done)
         }
         guard var c2 = collections[cid], let n = c2.statements[current]?.statement.keyN else { return }
         for (record, writes) in touched {
@@ -119,6 +125,7 @@ extension Device {
                 }
             }
         }
+        try store.transaction { for done in resigned { try store.setValue(done, [1]) } }
         collections[cid] = c2
         for (record, writes) in touched.sorted(by: { $0.key.lexicographicallyPrecedes($1.key) }) {
             try await publish(cid: cid, epoch: current, record: record, writes: writes)

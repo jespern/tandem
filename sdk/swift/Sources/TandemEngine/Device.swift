@@ -26,6 +26,9 @@ public actor Device {
     public internal(set) var capsules: [ID: ControlObject] = [:]
     /// Home epochs this device holds the key of, by epoch ID (§6.2, §10.8).
     var homeKeys: [ID: Bytes] = [:]
+    /// Home keys not yet confirmed by their epoch's start, and starts held aside (`offerHomeKey`, `acceptHomeEpoch`).
+    var homeCandidates: [ID: Set<Bytes>] = [:]
+    var heldStarts: [ID: ControlObject] = [:]
     var homeEpochs: [ID: ControlObject] = [:]
     /// Assembled snapshot inventories, by epoch ID, for home and collections (§8.3).
     var inventories: [ID: Inventory] = [:]
@@ -49,6 +52,8 @@ public actor Device {
     /// Key requests (§11.4): the wait before asking, and the one timer that waits for it.
     var keyRequestDelay: Duration = .seconds(600)
     var keyRequestTimer: Task<Void, Never>?
+    /// Lists with a key change running on this device.
+    var changing: Set<Bytes> = []
     /// Tests stop a key change here (§11.6's crash points).
     var crashPoint: String?
 
@@ -72,6 +77,9 @@ public actor Device {
             me = Me(keys: keys, participant: p, certificate: c, auth: a, installation: i)
         }
         for e in homeEpochs.keys { if let k = try store.value("home.key." + e.hex) { homeKeys[e] = k } }
+        for (name, key) in try store.values(prefix: "home.cand.") {
+            if let e = Bytes(hex: String(name.split(separator: ".")[2])) { homeCandidates[e, default: []].insert(key) }
+        }
         for (name, bytes) in try store.values(prefix: "inv.") {
             if let e = Bytes(hex: String(name.dropFirst(4))), let inv = try? Inventory.parse(bytes) { inventories[e] = inv }
         }
@@ -105,7 +113,7 @@ public actor Device {
             let o = Offer(grant: grant, key: key)
             offers[try grant.id()] = o
             var c = collections[o.collection] ?? CollectionState(id: o.collection)
-            c.keys[o.epoch] = key
+            c.offer(key: key, epoch: o.epoch)
             collections[o.collection] = c
         }
     }
@@ -220,6 +228,7 @@ public actor Device {
         while progress {
             progress = false
             if me == nil, try discoverIdentity() { progress = true }
+            if try adoptGrantedChains() { progress = true }
             for m in try store.held() {
                 switch try apply(m) {
                 case .applied: applied += 1; progress = true; try store.release(m.id); try store.markApplied(m.id)
@@ -264,7 +273,8 @@ public actor Device {
         }
         guard let me else { return .waiting }
         if m.channel == Tandem.inboxTag(uid: me.participant, hub: pin.hub) { return try applyInbox(m, me) }
-        for (epoch, key) in homeKeys where m.channel == Tandem.homeTag(key: key, hub: pin.hub, uid: me.participant, epoch: epoch) {
+        let readable = homeKeys.map { ($0.key, $0.value) } + homeCandidates.flatMap { e, ks in ks.map { (e, $0) } }
+        for (epoch, key) in readable where m.channel == Tandem.homeTag(key: key, hub: pin.hub, uid: me.participant, epoch: epoch) {
             let outcome = try applyHome(m, epoch: epoch, key: key, me: me)
             if outcome == .applied { refreshMemberships(); changed(.home); changed(.lists) }
             return outcome

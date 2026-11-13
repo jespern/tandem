@@ -155,7 +155,7 @@ final class RotationTests: XCTestCase {
         let note = try XCTUnwrap(pending)
         XCTAssertEqual(note.what, "remove a member")
         XCTAssertEqual(note.device, "Bob’s iPhone")
-        do { try await mac.share(list: w.house, with: w.carolID, role: .reader); XCTFail("blocked by the note") } catch ChangeError.pending {}
+        do { try await mac.delete(list: w.house); XCTFail("blocked by the note") } catch ChangeError.pending {}
         try await mac.finish(list: w.house, seen: note)
         try await checkRemoved(w, bob: mac)
         // The iPhone comes back: its change was made, by the Mac; it carries on without asking.
