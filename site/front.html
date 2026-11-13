@@ -3,7 +3,7 @@
 <br><a href="#who">Who is it for?</a>
 <br><a href="#why">Why a mailbox?</a>
 <br><a href="#cant">What can't it do?</a>
-<br><a href="#checked">Has anyone checked it?</a>
+<br><a href="#checked">Not <code>sorry</code></a>
 <br><a href="#airforce">Why .airforce?</a>
 <hr>
 <a href="spec.html">The specification</a> (draft of @DATE@)
@@ -136,22 +136,27 @@ The IMAP binding wants a password or an app password.
 </li>
 </ul>
 
-<h2 id="checked">Has anyone checked it?</h2>
+<h2 id="checked">Not <code>sorry</code></h2>
+<p>
+In <a href="https://lean-lang.org">Lean</a>, <code>sorry</code> means
+“the proof goes here.” Our proofs have none.
+</p>
 <p>
 This is a draft for review, not a security sign-off.
 </p>
 <p>
 The mechanics are <b>formally checked</b>.
-Machine-checked proofs in <a href="https://lean-lang.org">Lean</a> cover
+Machine-checked proofs cover
 how edits merge,
 who may change who a list is shared with and what happens when two changes collide,
 cleaning up the mailbox without losing a write,
 sharing and answering,
 admitting, pairing and revoking devices,
+hub invitations and rejection receipts,
+keeping revoked devices out of the next home epoch,
 the directory,
 the hub password,
 and the byte encodings that get signed.
-Nothing is left unproved.
 The same definitions run as a test oracle,
 compared against an independent model on thousands of random histories.
 </p>
