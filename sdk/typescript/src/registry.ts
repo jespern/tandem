@@ -16,7 +16,13 @@ const all = (values: Validity[]): Validity => {
   const missing = values.flatMap(v => v.kind === 'pending' ? v.missing : []); return missing.length ? pending(...missing) : valid;
 };
 const idOf = (o: ControlObject): Uint8Array => objectID(o.kind, o.fields);
-const proof = (o: ControlObject, name: string, key: Uint8Array): boolean => !!o.signatures[name] && verifyControl(o.kind, o.fields, key, o.signatures[name]!);
+// Only privately cloned, never exposed objects reach this helper. Weak keys keep
+// cached cryptographic checks tied to the lifetime of their immutable witness.
+const proofCache=new WeakMap<ControlObject,Map<string,boolean>>();
+const proof = (o: ControlObject, name: string, key: Uint8Array): boolean => {
+  const selector=name+':'+b64u(key),cache=proofCache.get(o)??new Map<string,boolean>();if(cache.has(selector))return cache.get(selector)!;
+  const ok=!!o.signatures[name]&&verifyControl(o.kind,o.fields,key,o.signatures[name]!);cache.set(selector,ok);proofCache.set(o,cache);return ok;
+};
 const copyObject = (o: ControlObject): ControlObject => controlFromJSON(controlToJSON(o.kind, o.fields, o.signatures, o.extras));
 export interface HubPin {hub: Uint8Array; agree: Uint8Array; genesis: Uint8Array; creator: Uint8Array}
 export function pinGenesis(genesis: ControlObject): HubPin {
@@ -29,7 +35,8 @@ export interface Certificate {
   how: number; authority: Uint8Array | null; enrollment: Uint8Array; issued: Uint8Array[]; object: ControlObject; request: ControlObject;
 }
 interface Revocation {id: Uint8Array; target: Uint8Array; retained: Uint8Array[]}
-interface Snapshot {id: Uint8Array; participant: Uint8Array; certs: Uint8Array[]; revocations: Uint8Array[]}
+export interface PolicySnapshot {id: Uint8Array; participant: Uint8Array; certs: Uint8Array[]; revocations: Uint8Array[]}
+type Snapshot = PolicySnapshot;
 const certificate = (o: ControlObject): Certificate => {
   const request = o.extras.body as ControlObject;
   if (!request || request.kind !== 'request' || !equal(idOf(request), o.fields.request as Uint8Array)) throw new Error('certificate lacks its exact request');
@@ -46,6 +53,7 @@ export class Registry {
   readonly #certWitnesses = new Map<string, Certificate[]>();
   readonly #snapshots = new Map<string, Snapshot>(); readonly #delegations = new Map<string, ControlObject[]>();
   readonly #capabilities = new Map<string, ControlObject>();
+  readonly #certCache=new Map<string,Validity>();#revision=0;
   constructor(pin: HubPin, maxDepth = 64, maxWitnesses = 16) {
     if (!Number.isSafeInteger(maxDepth) || maxDepth < 1 || !Number.isSafeInteger(maxWitnesses) || maxWitnesses < 1) throw new Error('invalid registry limits'); this.#maxDepth = maxDepth; this.#maxWitnesses = maxWitnesses;
     this.#pin = {hub: bytes(pin.hub,32), agree: bytes(pin.agree,32), genesis: bytes(pin.genesis,32), creator: bytes(pin.creator,32)};
@@ -88,25 +96,34 @@ export class Registry {
       case 'snapshot': this.#snapshots.set(key,{id,participant:f.participant as Uint8Array,certs:f.certs as Uint8Array[],revocations:f.revocations as Uint8Array[]}); break;
       default: throw new Error('not a registry object');
     }
-    return Uint8Array.from(id);
+    this.#revision++;this.#certCache.clear();return Uint8Array.from(id);
   }
+  get revision():number{return this.#revision;}
   certificate(id: Uint8Array): Certificate | undefined { const witnesses=this.#certWitnesses.get(b64u(id)); const c=witnesses?.find(w=>this.#oneCertOK(w,0).kind==='valid')??witnesses?.[0]; return c ? certificate(copyObject(c.object)) : undefined; }
   get allCertificates(): Certificate[] { return [...this.#certs.values()].map(c => this.certificate(c.id)!); }
+  snapshot(id:Uint8Array):PolicySnapshot|undefined{const s=this.#snapshots.get(b64u(id));return s?{id:bytes(s.id),participant:bytes(s.participant),certs:s.certs.map(x=>bytes(x)),revocations:s.revocations.map(x=>bytes(x))}:undefined;}
+  get allSnapshots():PolicySnapshot[]{return [...this.#snapshots.values()].map(s=>this.snapshot(s.id)!);}
+  get revocationIDs():Uint8Array[]{return [...this.#revs.values()].map(r=>bytes(r.id));}
+  revocationTarget(id:Uint8Array):Certificate|undefined{const r=this.#revs.get(b64u(id));return r?this.certificate(r.target):undefined;}
   #survives(revs: Revocation[], candidate: Certificate): boolean {
     return revs.every(r => {
       const target = this.#certs.get(b64u(r.target)); if (!target || !equal(target.participant,candidate.participant)) return true;
       return !(equal(target.sign,candidate.sign) && equal(target.agree,candidate.agree)) && (has(r.retained,candidate.id) || has(candidate.issued,r.id));
     });
   }
-  certificateValidity(id: Uint8Array): Validity { return this.#certOK(id,0); }
+  certificateValidity(id: Uint8Array): Validity { const v=this.#certOK(id,0);return v.kind==='pending'?pending(...v.missing):{...v}; }
   #certOK(id: Uint8Array, depth: number): Validity {
+    const key=b64u(id)+':'+depth,cached=this.#certCache.get(key);if(cached)return cached;
+    const outcome=this.#uncachedCertOK(id,depth);this.#certCache.set(key,outcome);return outcome;
+  }
+  #uncachedCertOK(id:Uint8Array,depth:number):Validity{
     const witnesses=this.#certWitnesses.get(b64u(id)); if(!witnesses)return pending(id);
     let missing:Uint8Array[]=[], bad:Validity=invalid('no valid certificate proof');
     for(const c of witnesses){const outcome=this.#oneCertOK(c,depth);if(outcome.kind==='valid')return outcome;if(outcome.kind==='pending')missing.push(...outcome.missing);else bad=outcome;}
     return missing.length?pending(...missing):bad;
   }
   #oneCertOK(c: Certificate, depth: number): Validity {
-    if (depth >= this.#maxDepth) return invalid('approval chain too deep');
+    if (depth >= this.#maxDepth) throw new RegistryHoldingLimit(bytes(c.id));
     if (!proof(c.request,'self',c.sign)) return invalid('request not signed by its own keys');
     const missingRevs = c.issued.filter(id => !this.#revs.has(b64u(id))); if (missingRevs.length) return pending(...missingRevs);
     const issued = c.issued.map(id => this.#revs.get(b64u(id))!);

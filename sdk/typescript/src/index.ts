@@ -4,3 +4,5 @@ export * from './core.js';
 export * from './session.js';
 export * from './control.js';
 export * from './registry.js';
+export * from './roster.js';
+export * from './home-policy.js';

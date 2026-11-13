@@ -10,7 +10,7 @@ The Node and browser builds share write/control encodings, strict JSON/base64url
 Ed25519 acceptance, inventories and record merging. Node keeps native crypto.
 The browser backend uses Noble hashes, curves and ciphers with Web Crypto's
 random source; `buffer` supplies the existing byte API. The SDK bundle costs
-about 49 KB gzip; the Argon2 worker loads separately.
+about 53 KB gzip; the Argon2 worker loads separately.
 
 Private keys now use an opaque SDK `PrivateKey` handle in both runtimes. Construct
 them with `privateKey(seed, algorithm)`; pass that handle to signing/agreement
@@ -21,6 +21,16 @@ valid, invalid and pending results. Missing proofs are not rejected. Alternative
 signature witnesses stay separate from content IDs: a bad variant must not
 replace a valid witness. Defaults are 64 approval links and 16 witnesses per ID,
 configurable in the constructor. A holding-limit error does not revoke an ID.
+
+`HomePolicy` binds home starts to the participant, checks parent authorization
+floors, and keeps concurrent rekeys as separate heads. `CollectionPolicy` pins the
+owner from signed genesis and checks roster succession, reader permissions,
+announced epochs, owner forks and fixed inventories. Keys received from inboxes
+remain candidates until signed commitments confirm them. Defaults hold 100,000
+home epochs/roster statements, eight candidate keys per epoch, 16 home witnesses,
+1,024 home ancestry links and 1,024 candidate collection epochs. Constructor limits
+are configurable; exhaustion raises a holding error rather than invalidating proof.
+These are authority primitives; they do not yet provide device operations.
 
 `BrowserJournal` owns a separate IndexedDB database. A synchronous signing/sealing
 callback in `queue` reserves the clock and journals exact encrypted/MIME bytes in
@@ -60,7 +70,7 @@ automatically to a discovered JMAP host. Native pairing links currently describe
 IMAP credentials: browser setup still needs a JMAP endpoint/credential mapping.
 
 Defaults: 128 objects/page, 16 MiB response/message budget, 1,000,000 known IDs,
-30s command deadline and failed-connection backoff from 1s to 30s. Constructor
+128 KiB SSE event budget, 30s command deadline and failed-connection backoff from 1s to 30s. Constructor
 options configure these. Format/limit errors do not advance the cursor. A closed
 or suspended browser cannot guarantee a live connection; reopening catches up.
 

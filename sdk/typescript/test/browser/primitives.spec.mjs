@@ -61,6 +61,27 @@ test('real browser: every control vector and strict Ed25519 case, and Node inter
   }
 });
 
+test('browser home and collection policies verify commitments and reject late data', async ({page}) => {
+  const result=await page.evaluate(async()=>{
+    const t=window.t,rows=(await(await fetch('/control.json')).json()).objects;
+    const objects=new Map(rows.map(row=>[row.name,t.controlFromJSON(new TextEncoder().encode(row.json))]));
+    const registry=new t.Registry(t.pinGenesis(objects.get('genesis')));
+    for(const name of ['creator certificate','invitation','alice phone certificate','delegation','alice tablet certificate','tablet revoked','alice snapshot'])registry.add(objects.get(name));
+    const start=objects.get('alice home epoch'),epoch=t.objectID(start.kind,start.fields),home=new t.HomePolicy(start.fields.participant,registry);
+    const signing=t.privateKey(t.sha(new TextEncoder().encode('Tandem v2 public control vector: alice phone signing')),'ed25519');
+    home.offerKey(epoch,t.sha(new TextEncoder().encode('Tandem v2 public control vector: alice home key')));const before=home.key(epoch)===undefined;
+    home.accept(start);const after=home.key(epoch)!==undefined;
+    const key=t.randomBytes(32),statement={n:0,keyN:0,commit:t.commit(key),nonce:t.randomBytes(16),members:[{uid:start.fields.participant,role:'owner',name:'Alice',floor:start.fields.auth}],deleted:false};
+    const w=t.signWrite({hub:registry.pin.hub,scope:new Uint8Array(16),record:t.ROSTER_RECORD,field:'s',op:1,author:start.fields.participant,certificate:start.fields.signer,authorization:start.fields.auth,
+      dot:{device:new Uint8Array(8),millis:12,counter:0},value:t.statementJSON(statement),element:null,ref:new Uint8Array(32),context:[],base:[],signature:new Uint8Array(64)},signing);
+    const id=t.writeID(w),collection=new t.CollectionPolicy(id.subarray(0,16),registry);collection.offerKey(id,key);
+    const accepted=collection.accept(w,id).kind;const {nonce,...base}=statement;
+    const next=n=>t.signWrite({...w,scope:id.subarray(0,16),ref:id,dot:{...w.dot,counter:n},value:t.statementJSON({...base,n})},signing);
+    collection.accept(next(1),id);collection.accept(next(3),id);
+    return{before,after,accepted,fork:collection.dead};
+  });expect(result).toEqual({before:true,after:true,accepted:'valid',fork:true});
+});
+
 test('real IndexedDB: failed preparation rolls back clock and bytes; inbox/cursor/outbox commit together', async ({page}) => {
   const result = await page.evaluate(async () => {
     const t = window.t, journal = await t.BrowserJournal.open('atomic'), installation = await journal.installation();

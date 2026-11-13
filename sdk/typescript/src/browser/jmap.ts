@@ -11,7 +11,7 @@ export interface JMAPConfig {
   sessionUrl: string; authorization: string; accountId?: string;
   /** Additional provider origins explicitly trusted with this credential. */
   trustedOrigins?: readonly string[];
-  pageSize?: number; maxResponseBytes?: number; maxKnownMessages?: number;
+  pageSize?: number; maxResponseBytes?: number; maxKnownMessages?: number; maxEventBytes?: number;
   commandTimeout?: number; retryMin?: number; retryMax?: number;
   onStatus?: (status: {connected: boolean; error?: unknown}) => void;
 }
@@ -24,15 +24,15 @@ const state = (v: unknown): string => { if (typeof v !== 'string' || !v) throw n
 
 /** HTTPS JMAP + one authenticated streaming-fetch SSE subscription. Never polls. */
 export class JMAPStore implements PushStore {
-  readonly #cfg: Required<Pick<JMAPConfig, 'pageSize' | 'maxResponseBytes' | 'maxKnownMessages' | 'commandTimeout' | 'retryMin' | 'retryMax'>> & JMAPConfig;
+  readonly #cfg: Required<Pick<JMAPConfig, 'pageSize' | 'maxResponseBytes' | 'maxKnownMessages' | 'maxEventBytes' | 'commandTimeout' | 'retryMin' | 'retryMax'>> & JMAPConfig;
   readonly #origins: Set<string>; readonly #abort = new AbortController(); readonly #wakes = new Invalidation();
   #api = ''; #upload = ''; #events = ''; #account = ''; #folder = ''; #watching = false; #running: Promise<void> | undefined;
   #streamAbort: AbortController | undefined;
   private constructor(cfg: JMAPConfig) {
     this.#cfg = {...cfg, pageSize: cfg.pageSize ?? 128, maxResponseBytes: cfg.maxResponseBytes ?? 16 * 1024 * 1024,
-      maxKnownMessages: cfg.maxKnownMessages ?? 1_000_000, commandTimeout: cfg.commandTimeout ?? 30_000, retryMin: cfg.retryMin ?? 1000, retryMax: cfg.retryMax ?? 30_000};
+      maxKnownMessages: cfg.maxKnownMessages ?? 1_000_000, maxEventBytes: cfg.maxEventBytes ?? 131072, commandTimeout: cfg.commandTimeout ?? 30_000, retryMin: cfg.retryMin ?? 1000, retryMax: cfg.retryMax ?? 30_000};
     this.#origins = new Set([new URL(cfg.sessionUrl).origin, ...(cfg.trustedOrigins ?? []).map(x => new URL(x).origin)]);
-    for (const n of [this.#cfg.pageSize, this.#cfg.maxResponseBytes, this.#cfg.maxKnownMessages, this.#cfg.commandTimeout, this.#cfg.retryMin, this.#cfg.retryMax]) if (!Number.isSafeInteger(n) || n < 1) throw new Error('invalid JMAP limit');
+    for (const n of [this.#cfg.pageSize, this.#cfg.maxResponseBytes, this.#cfg.maxKnownMessages, this.#cfg.maxEventBytes, this.#cfg.commandTimeout, this.#cfg.retryMin, this.#cfg.retryMax]) if (!Number.isSafeInteger(n) || n < 1) throw new Error('invalid JMAP limit');
     if (this.#cfg.retryMax < this.#cfg.retryMin || !/^(?:Basic|Bearer) [^\r\n]+$/.test(cfg.authorization)) throw new Error('invalid JMAP configuration');
     this.#url(cfg.sessionUrl);
   }
@@ -140,12 +140,12 @@ export class JMAPStore implements PushStore {
       try { next = await reader.read(); } catch (error) { signal.throwIfAborted(); throw new NetworkFailure(error); }
       if (next.done) return;
       pending += decoder.decode(next.value, {stream: true});
-      if (pending.length > 131072) throw new Error('push line exceeds configured stream limit');
+      if (new TextEncoder().encode(pending).length > this.#cfg.maxEventBytes) throw new Error('push line exceeds configured stream limit');
       while (true) {
         const end = pending.search(/[\r\n]/); if (end < 0) break;
         if (pending[end] === '\r' && end === pending.length - 1) break;
         const line = pending.slice(0, end); pending = pending.slice(end + (pending[end] === '\r' && pending[end + 1] === '\n' ? 2 : 1));
-        eventBytes += line.length; if (eventBytes > 131072) throw new Error('push event exceeds stream limit');
+        eventBytes += new TextEncoder().encode(line).length + 1; if (eventBytes > this.#cfg.maxEventBytes) throw new Error('push event exceeds stream limit');
         if (!line) {
           if (event === 'state' && data.length) { const payload = object(JSON.parse(data.join('\n')));
             const changed = object(payload.changed ?? {}); if (changed[this.#account]?.Email !== undefined) this.#wakes.signal(); }
