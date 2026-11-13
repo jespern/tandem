@@ -1,9 +1,12 @@
 # Publishing tandem.airforce
 
-`site/build.sh` builds five static pages from `DESIGN.md`, using Pandoc 3.13.
+`site/build.sh` builds four static pages from `DESIGN.md`, using Pandoc 3.13.
 The `Site` GitHub Actions workflow publishes `site/out/` to GitHub Pages when
 the draft, site source, or Pages workflow changes on `main`. It can also be
 started manually. The repository can remain private; the website is public.
+
+The public pages describe the current design and its open questions. The design's
+history is retained in Git rather than published as a separate decision log.
 
 GitHub Pages settings for `jespern/tandem`:
 

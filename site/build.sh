@@ -49,18 +49,18 @@ sed -e "s/@DATE@/$date/g" -e "s/@TAGLINE@/$tagline/g" front.html > "$tmp/front.h
 { sections 0 15; sections 17 17; } > "$tmp/spec.md"
 sections 16 16 | sed 1d > "$tmp/prior-art.md"
 sections 18 18 | sed 1d > "$tmp/questions.md"
-sections 19 19 | sed 1d > "$tmp/decisions.md"
-for cut in spec prior-art questions decisions; do
+for cut in spec prior-art questions; do
   [ -s "$tmp/$cut.md" ] || die "nothing in $src for the $cut page"
 done
 
 mkdir -p out
+# Remove the retired public history page from an earlier local build.
+rm -f out/decisions.html
 page index "Tandem" -V front=1 -M pagetitle="Tandem: $(printf %s "$tagline" | sed 's/^A /a /; s/\.$//')" -M description="$tagline" \
   --include-before-body="$tmp/front.html" < /dev/null
 page spec "$title" --toc --toc-depth=3 --include-before-body="$tmp/status.html" < "$tmp/spec.md"
 page prior-art "Prior art" -M pagetitle="Tandem: prior art" < "$tmp/prior-art.md"
 page questions "Open questions" -M pagetitle="Tandem: open questions" < "$tmp/questions.md"
-page decisions "Decisions" -M pagetitle="Tandem: decisions" < "$tmp/decisions.md"
 
 # Every section link must land on a heading.
 grep -oh 'href="[a-z-]*\.html#s[0-9.]*"' out/*.html | sort -u |

@@ -7,7 +7,6 @@
 <br><a href="#airforce">Why .airforce?</a>
 <hr>
 <a href="spec.html">The specification</a> (draft of @DATE@)
-<br><a href="decisions.html">Decisions, and the designs that didn't survive</a>
 <br><a href="questions.html">Open questions</a>
 <br><a href="prior-art.html">Prior art</a>
 <hr>
@@ -17,7 +16,7 @@ across many devices and many people,
 end-to-end encrypted, in real time.
 It needs no server of its own.
 Its only infrastructure is a mailbox:
-one account on any JMAP or IMAP server.
+one account on any IMAP server.
 </p>
 <p>
 It is for people who trust each other.
@@ -42,10 +41,21 @@ so devices work offline and in any order,
 and every device ends up with the same state.
 </p>
 <p>
-You are one secret, held by all your devices and printable as a backup.
-A collection has one owner,
-who shares it by link or QR code
-and takes it back by changing the key.
+Live updates use <b>IMAP IDLE</b>: the mail server notifies connected devices
+when messages arrive, without polling.
+Our Fastmail transport tests measured about <b>0.5 seconds</b>
+for an appended message to reach another connected client.
+App batching, the network and the provider affect the time an edit takes to appear.
+On mobile, live updates run while the app is active; it catches up when reopened.
+</p>
+<p>
+Tandem adds its own identity and key management above IMAP.
+Each person has a participant record within a hub, with independent signing and
+encryption keys for each approved device. Those devices share an encrypted home,
+so new lists and settings sync automatically.
+A password-protected hub management key approves new devices;
+each collection's owner controls sharing and its encryption keys.
+The mailbox credential alone gives no access to private contents.
 </p>
 <p>
 Tandem was written for <a href="https://liszto.sh">Liszto</a>, a to-do app.
@@ -66,7 +76,8 @@ Tandem does not work in an adversarial environment.
 Everyone who shares the mailbox holds its credential,
 and anyone who holds it can delete everything in it.
 A member who can write to a collection can vandalise it until the owner removes them.
-A stolen device is you until you start over.
+A stolen device can act for you until it is revoked;
+cutting off future access also requires fresh home and collection keys.
 </p>
 <p>
 The encryption keeps the mail provider, and people on the mailbox who aren't members,
@@ -102,13 +113,15 @@ They can't read it and they can't forge it, but they can delete it.
 Honest devices keep full copies and upload again what was destroyed.
 </li>
 <li>
-<b>Cut off a stolen device.</b>
-Every device of yours holds the same secret.
-If one ends up in the wrong hands, you start over with a new identity.
+<b>Erase what a stolen device already downloaded.</b>
+Its device keys can be revoked, and fresh keys protect future data after rekeying.
+Previously downloaded data remains readable.
 </li>
 <li>
-<b>Rescue a collection whose owner has lost their secret.</b>
-Whoever can still read it copies the items into a new one.
+<b>Recover everyone's private data through the hub admin.</b>
+An ordinary member who loses every device must rejoin and have lists shared again.
+Private data with no readable replica is lost.
+The hub recovery key can recover the creator's own access, not another member's home.
 </li>
 <li>
 <b>Choose between two conflicting histories of who a collection is shared with.</b>
@@ -122,25 +135,16 @@ If that ever happens the collection is dead. Same remedy.
 The IMAP binding wants a password or an app password.
 </li>
 </ul>
-<p>
-All of this is on purpose.
-The draft tried being cleverer first, six times;
-see the <a href="decisions.html">decisions</a>.
-</p>
 
 <h2 id="checked">Has anyone checked it?</h2>
 <p>
-Nobody you should trust yet.
 This is a draft for review, not a security sign-off.
 </p>
 <p>
-It has been reviewed, round after round,
-by its author and by language models.
-The reviews kept finding defects,
-nearly all of them in rules for choosing between competing histories
-and for following a user's key changes.
-So those rules were taken out.
-An executable model of the collection rules is kept next to the draft.
+Executable models, cryptographic conformance tests and mail-transport probes
+are kept alongside the draft.
+The participant/device design has selected model and crypto tests;
+its complete wire format, implementation and independent security review remain unfinished.
 </p>
 
 <h2 id="airforce">Why .airforce?</h2>
