@@ -262,3 +262,34 @@ func TestSecondReviewAPairingClaimThatDidntGoOutIsSentAgain(t *testing.T) {
 		t.Fatal(claims)
 	}
 }
+
+// 11. A part of the current inventory is deleted and a bogus version put in its place: the
+// owner's device publishes the real one again, so a member who hadn't moved over yet still can.
+func TestSecondReviewAReplacedInventoryPartIsRestored(t *testing.T) {
+	w := newBobAndCarol(t)
+	must(t, w.bob.SetField(bg, w.list, NewRecordID(), "title", []byte("Kept")))
+	must(t, w.bob.Rekey(bg, w.list))
+	epoch, key := epochKey(w.bob, w.list)
+	tag := tandem.CollectionTag(key, w.f.Pin.Hub, epoch)
+	var fragments []string
+	for _, m := range w.hub.Messages() {
+		if m.Channel != tag {
+			continue
+		}
+		_, pt := try2(tandem.Open(key, w.f.Pin.Hub, tag, m.Body))
+		if _, frag, err := tandem.ParseKind1(pt, w.f.Pin.Hub, w.list); err == nil && frag != nil {
+			fragments = append(fragments, m.ID)
+		}
+	}
+	if len(fragments) == 0 {
+		t.Fatal("no fragments")
+	}
+	w.hub.Drop(fragments)
+	bogus := tandem.NewJSONObject().Raw("inventory", tandem.NewJSONObject().B64u("epoch", epoch).Int("part", 0).Int("parts", 1).
+		B64u("bytes", []byte{0, 0, 0, 0}).Bytes()).Bytes()
+	rawAppend(t, w.hub, tag, try(tandem.Seal(key, w.f.Pin.Hub, tandem.KindRecord, tag, bogus)))
+	syncAll(t, w.bob, w.carol)
+	if got := titles(w.carol, w.list); !sameSet(got, set("Kept")) {
+		t.Fatal("Carol moves over through the restored inventory:", got)
+	}
+}

@@ -187,7 +187,8 @@ func (d *Device) healRoster(ctx context.Context, cid []byte, c *collection, head
 }
 
 // healFragments keeps an epoch's inventory on the hub while the epoch is current (§10.7,
-// §12.2): published again if no fragment message is left in its channel.
+// §12.2): each part that no message in its channel carries, because it was destroyed or only a
+// bogus version is left, is published again.
 func (d *Device) healFragments(ctx context.Context, tag string, epoch, key []byte) error {
 	inv, ok := d.inventories[string(epoch)]
 	if !ok {
@@ -197,16 +198,25 @@ func (d *Device) healFragments(ctx context.Context, tag string, epoch, key []byt
 	if err != nil {
 		return err
 	}
+	present := map[string]bool{} // H(part bytes)
 	for _, m := range ms {
-		if _, ok := d.store.Value("fragmsg." + m); ok {
-			return nil
+		if v, ok := d.store.Value("fragmsg." + m); ok && len(v) == 64 && bytes.Equal(v[:32], epoch) {
+			present[string(v[32:])] = true
 		}
+	}
+	parts, err := inventoryParts(inv)
+	if err != nil {
+		return err
 	}
 	frags, err := fragments(inv, epoch)
 	if err != nil {
 		return err
 	}
-	for _, f := range frags {
+	for i, f := range frags {
+		h := tandem.H(parts[i])
+		if present[string(h)] {
+			continue
+		}
 		env, err := tandem.Seal(key, d.pin.Hub, tandem.KindRecord, tag, f)
 		if err != nil {
 			return err
@@ -215,7 +225,7 @@ func (d *Device) healFragments(ctx context.Context, tag string, epoch, key []byt
 		if err != nil {
 			return err
 		}
-		if err := d.store.SetValue("fragmsg."+id, epoch); err != nil {
+		if err := d.store.SetValue("fragmsg."+id, append(bytes.Clone(epoch), h...)); err != nil {
 			return err
 		}
 	}

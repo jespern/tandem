@@ -14,8 +14,8 @@ import (
 // fragmentSize keeps fragments under the 64 KiB a message should keep to.
 const fragmentSize = 48 * 1024
 
-// fragments is the kind-1 payloads that carry inventory for the epoch.
-func fragments(inv tandem.Inventory, epoch []byte) ([][]byte, error) {
+// inventoryParts is the inventory's bytes cut into fragment-sized parts.
+func inventoryParts(inv tandem.Inventory) ([][]byte, error) {
 	b, err := inv.Bytes()
 	if err != nil {
 		return nil, err
@@ -23,8 +23,20 @@ func fragments(inv tandem.Inventory, epoch []byte) ([][]byte, error) {
 	parts := max(1, (len(b)+fragmentSize-1)/fragmentSize)
 	var out [][]byte
 	for part := 0; part < parts; part++ {
-		slice := b[min(len(b), part*fragmentSize):min(len(b), (part+1)*fragmentSize)]
-		f := tandem.NewJSONObject().B64u("epoch", epoch).Int("part", uint64(part)).Int("parts", uint64(parts)).B64u("bytes", slice).Bytes()
+		out = append(out, b[min(len(b), part*fragmentSize):min(len(b), (part+1)*fragmentSize)])
+	}
+	return out, nil
+}
+
+// fragments is the kind-1 payloads that carry inventory for the epoch.
+func fragments(inv tandem.Inventory, epoch []byte) ([][]byte, error) {
+	all, err := inventoryParts(inv)
+	if err != nil {
+		return nil, err
+	}
+	var out [][]byte
+	for part, slice := range all {
+		f := tandem.NewJSONObject().B64u("epoch", epoch).Int("part", uint64(part)).Int("parts", uint64(len(all))).B64u("bytes", slice).Bytes()
 		out = append(out, tandem.NewJSONObject().Raw("inventory", f).Bytes())
 	}
 	return out, nil
