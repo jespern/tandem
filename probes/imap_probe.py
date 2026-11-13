@@ -280,8 +280,13 @@ def main():
     if not hasattr(imaplib.IMAP4, 'idle'):
         sys.exit('needs Python 3.14 or later for IMAP IDLE')
     if args.keychain:
-        password = subprocess.run(['security', 'find-generic-password', '-s', args.keychain, '-a', args.user, '-w'],
-                                  capture_output=True, text=True, check=True).stdout.rstrip('\n')
+        found = subprocess.run(['security', 'find-generic-password', '-s', args.keychain, '-a', args.user, '-w'],
+                               capture_output=True, text=True)
+        if found.returncode:
+            sys.exit(f'could not read keychain item {args.keychain}/{args.user}: {found.stderr.strip() or found.returncode}'
+                     + ('\n(36: the keychain is locked or needs a prompt this session cannot show,'
+                        ' e.g. over SSH; leave out --keychain to be asked instead)' if found.returncode == 36 else ''))
+        password = found.stdout.rstrip('\n')
     else:
         password = getpass.getpass(f'Password for {args.user} at {args.host}: ')
     report = probe(args.host, args.port, args.user, password, args.connections)
