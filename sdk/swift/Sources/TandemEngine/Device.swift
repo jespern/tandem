@@ -17,8 +17,8 @@ public actor Device {
     let hub: any PushStore
     let directoryKey: Bytes
     let keys: DeviceKeys?
-    public private(set) var registry: Registry
-    public private(set) var me: Me?
+    public internal(set) var registry: Registry
+    public internal(set) var me: Me?
     /// Directory notices held: home-recovery boxes and the like.
     public private(set) var notices: [Notice] = []
     /// Admin capsules held (§6.7), by ID.
@@ -28,6 +28,7 @@ public actor Device {
     var homeEpochs: [ID: ControlObject] = [:]
     var home: [ID: Record] = [:]
     var collections: [Bytes: CollectionState] = [:]
+    var offers: [Bytes: Offer] = [:]
 
     var directoryTag: String { Tandem.directoryTag(directoryKey, hub: pin.hub) }
     var directoryChannelKey: Bytes { Tandem.directoryKey(directoryKey, hub: pin.hub) }
@@ -55,6 +56,15 @@ public actor Device {
             }
         }
         collections = try Self.loadCollections(store: store, hub: pin.hub, home: home)
+        for (_, data) in try store.values(prefix: "offer.") {
+            guard let j = try? JSON.parse(data), let g = j["grant"], let grant = try? ControlObject.parse(g, expect: "grant"),
+                  let key = try? j.bytes("k", count: 32) else { continue }
+            let o = Offer(grant: grant, key: key)
+            offers[o.collection] = o
+            var c = collections[o.collection] ?? CollectionState(id: o.collection)
+            c.keys[o.epoch] = key
+            collections[o.collection] = c
+        }
     }
 
     /// Open a hub this device has the details of: its genesis (pinned at setup, invitation or pairing) and

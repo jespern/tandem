@@ -45,6 +45,8 @@ extension Device {
             homeKeys[epoch] = key
             try store.setValue("home.key." + epoch.hex, key)
             return .applied
+        case "grant":
+            return try receiveGrant(plaintext, json, me: me)
         default:
             return .ignored
         }

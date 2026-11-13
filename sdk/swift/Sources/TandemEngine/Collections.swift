@@ -95,9 +95,9 @@ extension Device {
             .sorted { $0.lexicographicallyPrecedes($1) }
     }
 
-    /// The lists this participant is a member of, with their names where known.
+    /// The lists this participant is a member of, with their names where known: those its home records (§6.2).
     public func lists() -> [(id: Bytes, name: String?)] {
-        collections.values.map { c in
+        collections.values.filter { homeValue("membership:" + B64u.encode($0.id), field: "owner") != nil }.map { c in
             (c.id, c.records[Self.meta]?.value(Bytes("name".utf8)).map { String(decoding: $0, as: UTF8.self) })
         }.sorted { $0.id.lexicographicallyPrecedes($1.id) }
     }

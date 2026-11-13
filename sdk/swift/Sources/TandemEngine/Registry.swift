@@ -136,6 +136,7 @@ public struct Registry: Sendable {
 
     public func certificate(_ id: ID) -> Certificate? { certs[id] }
     public var allCertificates: [Certificate] { Array(certs.values) }
+    public var revocationIDs: [ID] { Array(revs.keys) }
 
     // MARK: §6.9 rules
 

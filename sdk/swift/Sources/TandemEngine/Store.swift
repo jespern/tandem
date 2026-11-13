@@ -108,6 +108,15 @@ public final class Store: @unchecked Sendable {
                 [.text(name), .blob(value)])
     }
 
+    /// Every named value whose name starts with `prefix`.
+    public func values(prefix: String) throws -> [(name: String, value: Bytes)] {
+        var out: [(String, Bytes)] = []
+        try run("SELECT name, value FROM values_ WHERE substr(name, 1, ?) = ? ORDER BY name", [.int(Int64(prefix.utf8.count)), .text(prefix)]) {
+            out.append((Self.text($0, 0), Self.blob($0, 1)))
+        }
+        return out
+    }
+
     // MARK: Control objects
 
     /// Keep a control object's exact JSON; returns false if it was already held.
