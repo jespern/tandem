@@ -46,6 +46,9 @@ public actor Device {
     var pendingEvents: [DeviceEvent] = []
     /// The sync in progress: syncs run one at a time.
     var syncing: Task<Int, any Error>?
+    /// Key requests (§11.4): the wait before asking, and the one timer that waits for it.
+    var keyRequestDelay: Duration = .seconds(600)
+    var keyRequestTimer: Task<Void, Never>?
     /// Tests stop a key change here (§11.6's crash points).
     var crashPoint: String?
 

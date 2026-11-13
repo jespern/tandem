@@ -36,7 +36,7 @@ One `Device` per installation per hub, an actor. Everything it knows is in a `St
 6. ~~Rotation with the journal and crash points~~; ~~late writes signed again~~; ~~garbage collection; healing~~.
 7. The IMAP binding in place of `MemoryHub`: ~~the invite → join → share → accept → edit path on Stalwart~~ (`EngineOverStalwartTests`, with `TANDEM_IMAP_STALWART=1`); then Fastmail and Gmail.
 8. ~~The app API Liszto uses~~ (`INTEGRATING.md`).
-9. Key requests (§11.4); restoring a wiped hub (§12.4); engine runs on Fastmail and Gmail.
+9. ~~Kept grants and key requests (§11.4)~~; restoring a wiped hub (§12.4); engine runs on Fastmail and Gmail (`EngineOverProviderTests`).
 
 ## Checking
 

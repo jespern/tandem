@@ -52,6 +52,10 @@ extension Device {
             let outcome = try receiveGrant(plaintext, json, me: me)
             if outcome == .applied { changed(.offers); changed(.lists) }
             return outcome
+        case "key-request":
+            return try receiveKeyRequest(json)
+        case "roster":
+            return try receiveRosterReply(json)
         case "answer":
             let outcome = try receiveAnswer(json)
             if outcome == .applied, case let .id(cid)? = (try? ControlObject.parse(json, expect: "answer"))?.fields["collection"] {

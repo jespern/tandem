@@ -315,6 +315,7 @@ extension Device {
             guard let j = try? JSON.parse(plaintext), case let .string(type)? = j["type"] else { return .ignored }
             switch String(decoding: type, as: UTF8.self) {
             case "leave": return try receiveLeave(j, cid: cid)
+            case "key-request": return try receiveKeyRequest(j)
             default: return .ignored
             }
         }

@@ -416,6 +416,7 @@ extension Device {
         try await takeGrantedKeys()
         try await settleAnnouncedNotes()
         try await settleLateWrites()
+        try await keyRequestFollowUp()
         try await hygiene()
         guard let me else { return }
         for (name, cert) in try store.values(prefix: "pairing.done.") {
