@@ -158,7 +158,7 @@ def connections(host, port, user, password, limit):
     return {'opened': len(open_), 'asked': limit, 'refusal': error}
 
 
-def probe(host, port, user, password, want_connections, samples=3, wait=120):
+def probe(host, port, user, password, want_connections, samples=3, wait=120, compare=False):
     run = os.urandom(4).hex()
     folder = f'Tandem-probe-{run}'
     r = {'host': host, 'port': port, 'date': time.strftime('%Y-%m-%d'), 'run': run}
@@ -189,6 +189,10 @@ def probe(host, port, user, password, want_connections, samples=3, wait=120):
         return uid
 
     try:
+        if compare:
+            r['compare'] = compare_pushes(a, b, folder, special, run, samples, wait, append)
+            return r
+
         # Live updates: how long an append takes to reach an idling connection.
         r['push'] = []
         for n in range(samples):
@@ -249,6 +253,41 @@ def probe(host, port, user, password, want_connections, samples=3, wait=120):
     return r
 
 
+def compare_pushes(a, b, folder, special, run, samples, wait, append):
+    """Push latency for the same kind of change made in different ways, to
+    find one a provider passes on promptly: the Tandem folder itself, the
+    inbox, the folder watched through All Mail, and a flag change."""
+    out = {}
+
+    def to_inbox(n):
+        raw, _ = message(run, n)
+        a.append('INBOX', '(\\Seen)', None, raw)
+
+    first = append(1000)  # a message to flag
+    variants = [('folder', folder, {'EXISTS'}, lambda n: append(n)),
+                ('inbox', 'INBOX', {'EXISTS'}, to_inbox)]
+    if special.get('\\All'):
+        variants.append(('all-mail', special['\\All'], {'EXISTS'}, lambda n: append(n)))
+
+    flagged = [False]
+
+    def flag(n):
+        a.select(quote(folder))
+        a.uid('STORE', first, ('-' if flagged[0] else '+') + 'FLAGS', '(\\Flagged)')
+        flagged[0] = not flagged[0]
+    variants.append(('flag', folder, {'FETCH'}, flag))
+
+    n = 1001
+    for name, watched, kinds, change in variants:
+        watcher = Watcher(b, watched, wait)
+        out[name] = []
+        for _ in range(samples):
+            out[name].append(watcher.wait_for(kinds, lambda n=n: change(n)))
+            log(f'{name}:', out[name][-1])
+            n += 1
+    return out
+
+
 def cleanup(a, folder, special, run):
     """Delete every probe message wherever it ended up, then the folder."""
     notes = []
@@ -259,6 +298,9 @@ def cleanup(a, folder, special, run):
         a.close()
         if a.delete(quote(folder))[0] != 'OK':
             notes.append('folder not deleted')
+        uids = search(a, 'INBOX', run)
+        if uids:
+            purge(a, 'INBOX', uids)
         time.sleep(3)
         trash = special.get('\\Trash')
         everywhere = special.get('\\All')
@@ -291,6 +333,8 @@ def main():
     p.add_argument('--connections', type=int, default=0, metavar='N', help='also open up to N logins at once')
     p.add_argument('--samples', type=int, default=3, help='appends timed for live updates (default 3)')
     p.add_argument('--wait', type=int, default=120, metavar='SECONDS', help='how long to wait for each push (default 120)')
+    p.add_argument('--compare', action='store_true',
+                   help='only compare push latency for the folder, the inbox, All Mail and a flag change')
     p.add_argument('--out', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results'))
     args = p.parse_args()
     if not hasattr(imaplib.IMAP4, 'idle'):
@@ -305,7 +349,7 @@ def main():
         password = found.stdout.rstrip('\n')
     else:
         password = getpass.getpass(f'Password for {args.user} at {args.host}: ')
-    report = probe(args.host, args.port, args.user, password, args.connections, args.samples, args.wait)
+    report = probe(args.host, args.port, args.user, password, args.connections, args.samples, args.wait, args.compare)
     os.makedirs(args.out, exist_ok=True)
     path = os.path.join(args.out, f"{args.host}-{report['date']}-{report['run']}.json")
     with open(path, 'w') as f:
