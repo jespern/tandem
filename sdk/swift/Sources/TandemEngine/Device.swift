@@ -27,6 +27,7 @@ public actor Device {
     var homeKeys: [ID: Bytes] = [:]
     var homeEpochs: [ID: ControlObject] = [:]
     var home: [ID: Record] = [:]
+    var collections: [Bytes: CollectionState] = [:]
 
     var directoryTag: String { Tandem.directoryTag(directoryKey, hub: pin.hub) }
     var directoryChannelKey: Bytes { Tandem.directoryKey(directoryKey, hub: pin.hub) }
@@ -53,6 +54,7 @@ public actor Device {
                 home[r] = try Self.loadRecord(store: store, hub: pin.hub, scope: scope, record: r, epochs: homeEpochs)
             }
         }
+        collections = try Self.loadCollections(store: store, hub: pin.hub, home: home)
     }
 
     /// Open a hub this device has the details of: its genesis (pinned at setup, invitation or pairing) and
@@ -176,8 +178,11 @@ public actor Device {
         guard let me else { return .waiting }
         if m.channel == Tandem.inboxTag(uid: me.participant, hub: pin.hub) { return try applyInbox(m, me) }
         for (epoch, key) in homeKeys where m.channel == Tandem.homeTag(key: key, hub: pin.hub, uid: me.participant, epoch: epoch) {
-            return try applyHome(m, epoch: epoch, key: key, me: me)
+            let outcome = try applyHome(m, epoch: epoch, key: key, me: me)
+            if outcome == .applied { refreshMemberships() }
+            return outcome
         }
+        if let (cid, epoch, key) = collectionChannel(m.channel) { return try applyCollection(m, cid: cid, epoch: epoch, key: key) }
         // A channel this device can't read yet may become readable once a key arrives.
         return .waiting
     }

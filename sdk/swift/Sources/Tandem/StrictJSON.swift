@@ -202,18 +202,18 @@ private struct Parser {
 
 // Typed accessors for payload readers. Unknown members are ignored (§10.5).
 extension JSON {
-    func bytes(_ name: String, count: Int? = nil) throws -> Bytes {
+    public func bytes(_ name: String, count: Int? = nil) throws -> Bytes {
         guard case let .string(s)? = self[name], let b = B64u.decode(s), count == nil || b.count == count
         else { throw TandemError.invalid("\(name): missing, not b64u, or the wrong length") }
         return b
     }
 
-    func text(_ name: String) throws -> Bytes {
+    public func text(_ name: String) throws -> Bytes {
         guard case let .string(s)? = self[name] else { throw TandemError.invalid("\(name): missing or not a string") }
         return s
     }
 
-    func int(_ name: String) throws -> Int64 {
+    public func int(_ name: String) throws -> Int64 {
         guard case let .int(n)? = self[name] else { throw TandemError.invalid("\(name): missing or not an integer") }
         return n
     }
