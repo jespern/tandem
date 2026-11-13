@@ -479,6 +479,53 @@ func TestCancellingTheWatchEndsIdle(t *testing.T) {
 	}
 }
 
+// An app stops watching (engine.Device.Run returns) and starts again: the second Watch
+// works, a change after it arrives, and nothing is left running at Close.
+func TestWatchStartsAgainAfterItsContextEnds(t *testing.T) {
+	for _, separate := range []bool{false, true} {
+		t.Run(fmt.Sprintf("separate=%v", separate), func(t *testing.T) {
+			f := newGmailFixture(t)
+			ctx := testContext(t)
+			baseline := runtime.NumGoroutine()
+			cfg := f.config("pass word", IdleRestartNever)
+			cfg.SeparateWatchConnection = separate
+			store, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first, cancel := context.WithCancel(ctx)
+			if _, err := store.Watch(first); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Watch(ctx); err == nil {
+				t.Fatal("two watches at once")
+			}
+			cancel()
+			wakes, err := store.Watch(ctx)
+			if err != nil {
+				t.Fatal("watching again:", err)
+			}
+			time.Sleep(100 * time.Millisecond)
+			drain(wakes)
+			f.server.push("* 9 EXISTS")
+			if !wake(t, wakes, 2*time.Second) {
+				t.Fatal("no push after watching again")
+			}
+			store.Close()
+			for range wakes {
+			}
+			deadline := time.Now().Add(2 * time.Second)
+			for runtime.NumGoroutine() > baseline && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if n := runtime.NumGoroutine(); n > baseline {
+				buf := make([]byte, 1<<16)
+				t.Fatalf("%d goroutines, %d before:\n%s", n, baseline, buf[:runtime.Stack(buf, true)])
+			}
+		})
+	}
+}
+
 func TestReconnectsAfterTheServerHangsUp(t *testing.T) {
 	f := newGmailFixture(t)
 	store := f.store(t, "pass word", IdleRestartNever)

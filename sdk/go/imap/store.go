@@ -81,8 +81,14 @@ type Store struct {
 
 	mu      sync.Mutex
 	watcher *link
-	watched bool
+	watch   *watch // the current Watch, until its context ends and it is let go
 	closed  bool
+}
+
+// watch is one Watch call: released closes once its context has ended and IDLE has stopped.
+type watch struct {
+	ctx      context.Context
+	released chan struct{}
 }
 
 var _ tandem.PushStore = (*Store)(nil)
@@ -130,18 +136,29 @@ func (s *Store) EnsureFolder(ctx context.Context) error {
 // Watch returns once IDLE runs. The channel receives a wake on EXISTS, EXPUNGE and
 // VANISHED, and after every reconnect; wakes are coalesced while unread. It carries an
 // error and closes only when reconnecting can't help (credentials, server); it closes at
-// Close. Cancelling ctx ends IDLE.
+// Close. Cancelling ctx ends IDLE; Watch may then be called again, and returns the same channel.
 func (s *Store) Watch(ctx context.Context) (<-chan tandem.Wake, error) {
 	s.mu.Lock()
+	for s.watch != nil {
+		previous := s.watch
+		if previous.ctx.Err() == nil {
+			s.mu.Unlock()
+			return nil, errors.New("imap: already watching")
+		}
+		s.mu.Unlock()
+		select { // the previous watch's context has ended: wait for it to let go
+		case <-previous.released:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		s.mu.Lock()
+	}
 	if s.closed {
 		s.mu.Unlock()
 		return nil, ErrClosed
 	}
-	if s.watched {
-		s.mu.Unlock()
-		return nil, errors.New("imap: already watching")
-	}
-	s.watched = true
+	w := &watch{ctx, make(chan struct{})}
+	s.watch = w
 	target := s.link
 	if s.cfg.SeparateWatchConnection {
 		target = newLink(&s.cfg, true, s.sink)
@@ -150,20 +167,31 @@ func (s *Store) Watch(ctx context.Context) (<-chan tandem.Wake, error) {
 	s.mu.Unlock()
 	s.sink.attach(true)
 	if err := target.startWatching(ctx); err != nil {
-		s.sink.attach(false)
-		s.mu.Lock()
-		s.watched = false
-		if target != s.link {
-			s.watcher = nil
-		}
-		s.mu.Unlock()
-		if target != s.link {
-			target.close()
-		}
+		s.release(w, target)
 		return nil, err
 	}
-	context.AfterFunc(ctx, target.stopWatching)
+	context.AfterFunc(ctx, func() {
+		target.stopWatching()
+		s.release(w, target)
+	})
 	return s.sink.ch, nil
+}
+
+// release lets go of a watch, so another can start; a separate watch connection is closed.
+func (s *Store) release(w *watch, target *link) {
+	s.sink.attach(false)
+	s.mu.Lock()
+	if s.watch == w {
+		s.watch = nil
+	}
+	if target != s.link && s.watcher == target {
+		s.watcher = nil
+	}
+	s.mu.Unlock()
+	if target != s.link {
+		target.close()
+	}
+	close(w.released)
 }
 
 // Changes reconciles from a cursor ("" for the start).
