@@ -36,8 +36,11 @@ def password_bytes(password):
 
 def check_new_password(password):
     """§6.7: checked when a password is chosen, never when one is entered to unlock."""
-    if len(unicodedata.normalize("NFC", password)) < 12:                       # code points
+    text = unicodedata.normalize("NFC", password)
+    if len(text) < 12:                                                         # code points
         raise ValueError("a hub password has at least 12 characters")
+    if len(text.encode("utf-8")) > 1024:
+        raise ValueError("a hub password has at most 1,024 bytes")
 
 
 def stretch(password, salt, profile):
@@ -61,13 +64,18 @@ def unlock(password, hub_id, capsule, profile=FAST):
     return ms
 
 
+SODIUM_PATHS = ("/opt/homebrew/lib/libsodium.dylib", "/usr/local/lib/libsodium.dylib")
+
+
 def libsodium():
-    for name in (ctypes.util.find_library("sodium"), "/opt/homebrew/lib/libsodium.dylib", "/usr/local/lib/libsodium.dylib"):
+    for name in (ctypes.util.find_library("sodium"), *SODIUM_PATHS):
+        if not name:                                                           # CDLL(None) is this process
+            continue
         try:
             so = ctypes.CDLL(name)
-        except (OSError, TypeError):
-            continue
-        if so.sodium_init() < 0:
+            if so.sodium_init() < 0:
+                continue
+        except (OSError, AttributeError):                                      # missing, or not libsodium
             continue
         so.crypto_pwhash.argtypes = [ctypes.c_char_p, ctypes.c_ulonglong, ctypes.c_char_p, ctypes.c_ulonglong,
                                      ctypes.c_char_p, ctypes.c_ulonglong, ctypes.c_size_t, ctypes.c_int]
@@ -115,6 +123,15 @@ class AdminCapsule(unittest.TestCase):
         with self.assertRaises(ValueError):
             seal("é" * 6, self.hub_id, self.ms)                           # 12 code points as typed, 6 after NFC
 
+    def test_the_maximum_is_1024_bytes_after_nfc(self):
+        # Sol, 2026-11-13: the writer checked the minimum only.
+        seal("a" * 1024, self.hub_id, self.ms)
+        seal("\u00e6" * 512, self.hub_id, self.ms)                               # 2 bytes each
+        for long in ("a" * 1025, "\u00e6" * 512 + "a", "e\u0301" * 1000):       # the last is 3,000 bytes as typed, 2,000 after NFC
+            with self.assertRaises(ValueError):
+                seal(long, self.hub_id, self.ms)
+        seal("e\u0301" * 512, self.hub_id, self.ms)                              # 1,536 bytes as typed, 1,024 after NFC
+
     def test_a_capsule_is_bound_to_its_hub_and_its_salt(self):
         other_hub = pub(manager(os.urandom(32)))
         with self.assertRaises(InvalidTag):
@@ -137,6 +154,19 @@ class AdminCapsule(unittest.TestCase):
         capsule = seal(self.password, self.hub_id, self.ms, profile=PROFILE)
         self.assertGreater(time.perf_counter() - start, 0.3)                      # about 1.2 s on an Apple M5
         self.assertEqual(unlock(self.password, self.hub_id, capsule, profile=PROFILE), self.ms)
+
+
+class Discovery(unittest.TestCase):
+    def test_a_missing_libsodium_is_none_not_a_crash(self):
+        # Sol, 2026-11-13: find_library returned None and CDLL(None) loaded this process.
+        global SODIUM_PATHS
+        saved, find = SODIUM_PATHS, ctypes.util.find_library
+        try:
+            SODIUM_PATHS = ("/nonexistent/libsodium.dylib", ctypes.util.find_library("c") or "libc.so.6")
+            ctypes.util.find_library = lambda name: None
+            self.assertIsNone(libsodium())                                     # nothing found; libc isn't libsodium
+        finally:
+            SODIUM_PATHS, ctypes.util.find_library = saved, find
 
 
 class Vector(unittest.TestCase):
