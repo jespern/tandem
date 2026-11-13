@@ -70,4 +70,34 @@ final class HygieneTests: XCTestCase {
         let name = await laptop.name(list: list)
         XCTAssertEqual(name, "House")
     }
+
+    /// §11.4: a grant deleted before it was read comes back; one to someone removed goes.
+    func testGrantsAreKept() async throws {
+        let hub = MemoryHub(), keys = DeviceKeys()
+        let f = try Founder.found(account: account, keys: keys, label: "Bob’s iPhone")
+        let bob = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try Store(path: ":memory:"),
+                                  hub: await hub.connect())
+        try await bob.publish(f)
+        let alice = try await Device.join(link: try await bob.invite(label: "Alice", account: account, ms: f.managementSeed),
+                                          keys: DeviceKeys(), label: "Alice’s iPhone", store: try Store(path: ":memory:"),
+                                          hub: await hub.connect())
+        let aliceMe = await alice.me
+        let aliceID = try XCTUnwrap(aliceMe?.participant)
+        try await bob.sync()
+        let list = try await bob.createList(name: "House")
+        try await bob.share(list: list, with: aliceID, role: .writer)
+        let inbox = Tandem.inboxTag(uid: aliceID, hub: f.pin.hub)
+        let before = await hub.messages.filter { $0.channel == inbox }.map(\.id)
+        await hub.drop(before)                    // someone with the mailbox password deletes Alice's inbox
+        try await bob.sync()                      // Bob's device puts the grant back
+        try await alice.sync()
+        let offers = await alice.pendingOffers()
+        XCTAssertEqual(offers.map(\.list), [list])
+        try await alice.accept(list: list)
+
+        try await bob.remove(aliceID, from: list)
+        try await bob.sync()
+        let kept = try await bob.store.values(prefix: "kept.grant.")
+        XCTAssertTrue(kept.isEmpty, "a grant to someone no longer listed is forgotten")
+    }
 }

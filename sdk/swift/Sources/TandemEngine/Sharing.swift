@@ -70,6 +70,14 @@ extension Device {
             let id = try await hub.append(channel: inbox, body: envelope)
             try store.noteMessage(id: id, channel: inbox, hash: H(envelope))
             try store.markApplied(id)
+            // Grants are kept (§11.4): this one is healed if it goes missing, and replaces the last one to that keychain.
+            let kept = "kept.grant.\(cid.hex).\(participant.hex).\(cert.id.hex)"
+            let earlier = try store.value(kept)
+            try store.setValue(kept, envelope)
+            if let earlier, earlier != envelope {
+                let old = try store.messages(withHash: H(earlier))
+                if !old.isEmpty { try await hub.destroy(ids: old); try store.forgetMessages(old) }
+            }
         }
     }
 

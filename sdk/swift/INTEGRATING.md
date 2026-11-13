@@ -197,6 +197,6 @@ Any IMAP server with IDLE works. Measured: Fastmail (Cyrus) about 0.5 s from one
 
 ## Not done yet
 
-- Key requests (§11.4): a device that missed its grant waits for the owner's devices to send it again. Healing covers the usual cases.
+- Key requests (§11.4). The owner's devices keep the last grant to each member's keychain and put it back if it is deleted, which covers a grant lost before it was read; a device that misses one otherwise waits for the owner's next key change.
 - A hub that was wiped completely (§12.4): the devices re-publish what they hold only through healing, record by record.
 - Runs on Fastmail and Gmail with the full engine; the IMAP binding itself has been measured there.

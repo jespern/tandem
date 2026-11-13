@@ -22,6 +22,7 @@ extension Device {
                 try await self.publish(cid: cid, epoch: epoch, record: record, writes: writes)
             })
         }
+        try await healGrants()
         for epoch in homeHeads {
             guard let key = homeKeys[epoch], let scope = homeScope else { continue }
             let tag = Tandem.homeTag(key: key, hub: pin.hub, uid: me.participant, epoch: epoch)
@@ -31,6 +32,30 @@ extension Device {
             }, republish: { record, writes in
                 try await self.publishHome(record, epoch: epoch, writes: writes)
             })
+        }
+    }
+
+    /// The last grant this device sent to each keychain of each current member is restored if the hub lost it; one
+    /// to someone no longer listed, or to a revoked keychain, is destroyed and forgotten (§11.4).
+    func healGrants() async throws {
+        let prefix = "kept.grant."
+        for (name, envelope) in try store.values(prefix: prefix) {
+            let parts = name.dropFirst(prefix.count).split(separator: ".").map(String.init)
+            guard parts.count == 3, let cid = Bytes(hex: parts[0]), let participant = Bytes(hex: parts[1]),
+                  let cert = Bytes(hex: parts[2]) else { continue }
+            let listed = collections[cid].flatMap { c in c.head.flatMap { c.statements[$0]?.statement } }
+                .map { $0.members.contains { $0.uid == participant } && !$0.deleted } ?? false
+            let on = try store.messages(withHash: H(envelope))
+            guard listed, registry.activity(cert).isValid else {
+                if !on.isEmpty { try await hub.destroy(ids: on); try store.forgetMessages(on) }
+                try store.removeValue(name)
+                continue
+            }
+            guard on.isEmpty else { continue }
+            let inbox = Tandem.inboxTag(uid: participant, hub: pin.hub)
+            let id = try await hub.append(channel: inbox, body: envelope)
+            try store.noteMessage(id: id, channel: inbox, hash: H(envelope))
+            try store.markApplied(id)
         }
     }
 
