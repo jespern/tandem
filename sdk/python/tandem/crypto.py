@@ -54,6 +54,16 @@ def manager_keys(seed: bytes):
             x25519.X25519PrivateKey.from_private_bytes(kdf(seed, b"", "tandem/v2/manager-agree")))
 
 
+def device_keys():
+    """Create once per keychain; reuse existing keys when the platform syncs them."""
+    return ed25519.Ed25519PrivateKey.generate(), x25519.X25519PrivateKey.generate()
+
+
+def new_installation_id() -> bytes:
+    """Keep with this installation's durable clock; never sync it with the keys."""
+    return os.urandom(8)
+
+
 def home_scope(hub: bytes, uid: bytes) -> bytes:
     return sha(b"tandem/v2/home", hub, uid)[:16]
 

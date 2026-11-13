@@ -1,6 +1,7 @@
 import CryptoKit
 
-/// Keys belong to an admitted device, not to a participant-wide secret.
+/// One admitted keychain's keys. Installations sharing that synced keychain
+/// reuse these keys and their certificate, but keep separate IDs and clocks.
 public struct DeviceKeys: Sendable {
     public let signing: Curve25519.Signing.PrivateKey
     public let agreement: Curve25519.KeyAgreement.PrivateKey
@@ -17,6 +18,10 @@ public struct DeviceKeys: Sendable {
 }
 
 public enum Tandem {
+    /// Never sync this installation ID or its durable HLC with keychain keys.
+    public static func newInstallationID() -> Bytes {
+        SymmetricKey(size: .bits128).withUnsafeBytes { Array($0.prefix(8)) }
+    }
     public static func homeScope(hub: Bytes, uid: Bytes) -> Bytes { Array(H(Bytes("tandem/v2/home".utf8), hub, uid).prefix(16)) }
     public static func namedID(_ name: Bytes) -> Bytes { Array(H(Bytes("tandem/v2/named".utf8), name).prefix(16)) }
     public static func keyID(hub: Bytes, agreement: Bytes) -> Bytes { H(Bytes("tandem/v2/kid".utf8), hub, agreement) }

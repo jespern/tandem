@@ -18,12 +18,17 @@ func KDF(ikm, salt []byte, info string, n int) []byte {
 	return k
 }
 
-// DeviceKeys are independent signing and agreement keys. Participant IDs come
-// from registrations, never from these public keys.
+// DeviceKeys are the signing/agreement pair for one keychain. Installations
+// sharing a synced keychain reuse the pair and its admission certificate.
+// Participant IDs come from registrations, never from these public keys.
 type DeviceKeys struct {
 	Signing   ed25519.PrivateKey
 	Agreement *ecdh.PrivateKey
 }
+
+// NewInstallationID is this-installation-only state: never sync it with keys.
+// If its durable clock is lost, replace this ID while retaining the keychain keys.
+func NewInstallationID() [8]byte { var id [8]byte; rand.Read(id[:]); return id }
 
 func NewDeviceKeys() (*DeviceKeys, error) {
 	_, s, err := ed25519.GenerateKey(rand.Reader)

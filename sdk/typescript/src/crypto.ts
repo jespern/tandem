@@ -39,6 +39,8 @@ export const sign = (key: KeyObject, input: Uint8Array): Buffer => nativeSign(nu
 export function deviceKeys(): {signing: KeyObject; agreement: KeyObject} {
   return {signing: privateKey(randomBytes(32), 'ed25519'), agreement: privateKey(randomBytes(32), 'x25519')};
 }
+/** Keep this ID and its durable clock per installation; never sync them with keys. */
+export const newInstallationID = (): Buffer => randomBytes(8);
 export function managerKeys(seed: Uint8Array) {
   const s = bytes(seed, 32); return {signing: privateKey(kdf(s, Buffer.alloc(0), 'tandem/v2/manager-sign'), 'ed25519'),
     agreement: privateKey(kdf(s, Buffer.alloc(0), 'tandem/v2/manager-agree'), 'x25519')};

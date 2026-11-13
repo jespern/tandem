@@ -11,6 +11,31 @@ IMAP adapter; the v1 implementations on `testbed` are separate.
 | [TypeScript](typescript/README.md) | Node.js 26+ | An async iterator, with `AbortSignal` cancellation | None; TypeScript and Node types are build dependencies |
 | [Swift](swift/README.md) | Swift 6.4, iOS/macOS 27+ | A bounded `AsyncSequence`, with task cancellation | None; CryptoKit supplies the native primitives |
 
+## Device and recovery policy
+
+Jesper selected the hub-password design for these SDKs: one signing/agreement pair
+per keychain, reused by installations that share that synced keychain, and one
+admission certificate for that pair. Each installation has its own random 8-byte
+ID and durable HLC. Neither is synced. Losing that clock requires a fresh
+installation ID, while the keychain keys remain usable.
+
+Use `NewDeviceKeys`, `device_keys`, `deviceKeys` or `DeviceKeys.init` only for a
+new keychain; load existing synced keys when available. Each SDK provides a
+separate installation-ID generator. Revoking shared keys cuts off every device
+that uses them, so remove a stolen device from the platform account before
+creating and syncing replacement keys.
+
+There is no separate offline recovery key. The hub password recovers the creator's
+home and its list keys, never another member's private home. If the management key
+is compromised, create a new hub and migrate readable data. If the password is
+forgotten, a device retaining the management seed can set a new one; without such
+a device, management recovery also requires a new hub. These workflows are the
+target of the forthcoming controller, not operations implemented by this core.
+
+The selected password profile is Argon2id v0x13 with 1 GiB, three passes and one
+lane (§6.7), as checked by the [v2 capsule vector](../conformance/fixtures/tandem-v2-capsule.json).
+The older recovery-key branch's 64 MiB/four-lane profile is not this protocol.
+
 ## What is implemented
 
 All four implement the same hub-bound derivations, device/management key creation,

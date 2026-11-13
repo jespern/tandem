@@ -63,7 +63,7 @@ The trade-off, accepted on purpose: anyone holding the hub credential can **dele
 | **User / participant / member record** | A person's stable record within one hub. Its content hash is the participant ID (`uid`); it groups the approved keychain keypairs of their devices. It has no personal identity secret (§6.1). “Member” also means a participant listed in a collection roster. |
 | **Hub admin** | Someone able to unlock the hub management seed using its password. Approves device enrollment/revocation; gains no access to other participants' private homes or list-owner powers. |
 | **Hub password** | Chosen by whoever creates a hub. Entered on any device, it opens the admin capsule on the hub and with it the hub's management (§6.7). It can be changed, but a leaked one means a new hub (§6.8). |
-| **Device** | One installation with its own Ed25519 and X25519 keypairs, random dot namespace and manager-signed admission certificate. Private device keys are never copied. |
+| **Device** | One installation with its own random dot namespace and durable HLC. Its Ed25519/X25519 pair and admission certificate belong to its keychain and may be shared with other installations through platform keychain sync (§5.3). |
 | **Home** | A participant's private, epoch-keyed channel on one hub, shared continuously by all their approved devices. Holds memberships, list keys, settings and private activity. |
 | **Inbox** | A stable per-participant channel. Each HPKE envelope addresses one specific admitted device agreement key; there is no shared private inbox key. |
 | **Collection** | A set of records shared by a group of members (Liszto: a list). Has a stable **collection ID** and a sequence of **epochs**. |
@@ -254,7 +254,7 @@ vv(x)    = u16(n) || n × ( deviceID (8) || u64(millis) || u16(counter) )   # so
 
 **Identity.** A write is identified by its write ID, and a roster statement by the write ID of its write. Ed25519 signing may be randomized (Apple's CryptoKit is), so one `sigInput` can carry different valid signatures from repeated signing of one device's exact input. Two writes with one write ID are one write, whichever signature arrived first. Devices deduplicate by write ID and never compare signatures to decide whether two writes are the same. A device that retries a publish reuses the signed message it stored. Hub messages are a different matter: they are identified by `H(envelope)` (§10.4).
 
-**Who signs.** Data, home/profile writes, roster statements and grants carry a signature by the acting device's **DKs**. Look up the exact referenced certificate; verify the device public key, hub, participant, certified dot namespace and immutable source snapshot. A signature alone proves device possession, not current permission. Missing proofs hold the object; arrival order never selects a key. Manager/root controls have their distinct authorities (§6.7–6.9).
+**Who signs.** Data, home/profile writes, roster statements and grants carry a signature by the acting device's **DKs**. Look up the exact referenced certificate; verify the device public key, hub, participant and immutable source snapshot. The write signature binds the installation’s dot namespace; the certificate does not (§5.3). A signature alone proves device possession, not current permission. Missing proofs hold the object; arrival order never selects a key. Manager/root controls have their distinct authorities (§6.7–6.9).
 
 The signature covers the statement a write was made under, not the epoch it is stored in, so a write can be re-encrypted into later epochs during rotation (§11.6) without losing its author's signature.
 
@@ -509,7 +509,7 @@ The hub password is asked for to create hub invitations, approve enrollments, re
 
 ### 6.8 If the hub password leaks or is forgotten, and the creator's recovery
 
-**Leaked password.** Whoever knows the hub password and has read the capsule can admit devices, revoke keys and invite people. They can't read anyone's home or lists, act for an existing member, or change who owns a list (§6.9): admitting a device to an existing participant needs that participant's own authorization. Still, the hub's management can't be trusted any more, and changing the password doesn't take the management key back. The creator makes a **new hub** and copies the lists across, and people join it, as with a dead list (§11.8).
+**Leaked password.** Whoever knows the hub password and has read the capsule can admit devices, revoke keys and invite people. They can recover the creator’s home and the list keys it contains (§6.8). They cannot read another member’s private home or act for that existing member: admitting keys to a non-creator participant needs that participant’s own authorization (§6.9). Collection ownership remains fixed. Still, the hub's management can't be trusted any more, and changing the password doesn't take the management key back. The creator makes a **new hub** and copies the lists across, and people join it, as with a dead list (§11.8).
 
 **Forgotten password.** A device that keeps `MS` in its keychain can set a new password without the old one, even if the password was changed elsewhere since it stored it. With no such device, the hub's management is lost: lists keep syncing and members keep working, but nobody can admit, revoke or invite. The way back is a new hub and a copy.
 
@@ -540,8 +540,8 @@ verify its immutable registration, invitation/direct-admission authority and
 proof of both device keys. For an existing participant, require authorization
 by an admitted device of that same participant: either its signature over the
 exact enrollment request or a valid signed pairing delegation and bearer-signed
-target claim (§6.3). Bind the full target keys and dot namespace, participant,
-hub, genesis and issuance cut. Validate the source against those immutable
+target claim (§6.3). Bind the full target keys, participant, hub, genesis and issuance cut. Installation
+dot namespaces are bound by individual write signatures, not by the shared certificate (§5.3). Validate the source against those immutable
 issuance dependencies; a later source revocation does not invalidate an already
 retained child. Creator recovery is the only exception, restricted to the
 creator that the genesis fixes, and needs the hub password (§6.8). An admin
@@ -657,7 +657,7 @@ The roster does not merge. Two different successors of one statement, both signe
 
 ### 8.3 Valid data writes and snapshots
 
-A data write names a valid roster statement in a valid chain from genesis (§8.2), and is signed by the exact device certificate/snapshot bound in its input. The certificate must bind its participant author, device public keys, hub and dot namespace; that roster must list the participant as owner or writer. Its immutable source authorization is checked against the certificate/root chain and revocation sets referenced by that snapshot (§6.9), not whatever registry facts happened to arrive first. A missing ancestor holds the write; an invalid one rejects it. A draft authorizes nothing (§9.4). Its source epoch is the first statement, going back from the one it names, that carries the same epoch commitment. In a channel identified by epoch-start ID `E`, it is eligible iff:
+A data write names a valid roster statement in a valid chain from genesis (§8.2), and is signed by the exact device certificate/snapshot bound in its input. The certificate must bind its participant author, device public keys and hub; the write signature also binds the installation’s dot namespace. That roster must list the participant as owner or writer. Its immutable source authorization is checked against the certificate/root chain and revocation sets referenced by that snapshot (§6.9), not whatever registry facts happened to arrive first. A missing ancestor holds the write; an invalid one rejects it. A draft authorizes nothing (§9.4). Its source epoch is the first statement, going back from the one it names, that carries the same epoch commitment. In a channel identified by epoch-start ID `E`, it is eligible iff:
 
 1. its source epoch ID is **exactly `E`**, and its source authorization snapshot extends that epoch's pinned floor for its participant (including the retained-certificate rule of §6.9); or
 2. its write ID and record ID occur in the snapshot inventory committed by `E`, and the roster statement it names is an ancestor of `E`.
@@ -696,9 +696,9 @@ A write is the tuple:
 
 **HLC:** each device keeps a hybrid logical clock `(millis u48, counter u16)`. A new write's HLC is `(max(now, last.millis), counter)`, with `counter` incremented if `millis` didn't advance; if the counter would pass 65 535, `millis` advances by one and the counter restarts at 0. A device's HLCs are strictly increasing. Devices do **not** adopt other devices' clock values: causality is tracked by `context` and `base`, not by timestamps, so a device with a wrong clock can't make its writes win over writes that saw them.
 
-A write whose `millis` is 2^48 or more is invalid, although the signed slot is wider. The HLC is stored durably with the device ID: a device reserves each new clock value, and stores the write, before it shows the edit as made or lets the write leave the device, an app extension included (§17). A restart must never issue a dot again. A device that can't recover its last clock value generates fresh device keys/namespace and enrolls again (§5.3); it does not guess from vectors other devices claim. This adds an admin approval after unrecoverable local key/clock state loss.
+A write whose `millis` is 2^48 or more is invalid, although the signed slot is wider. The HLC is stored durably with the device ID: a device reserves each new clock value, and stores the write, before it shows the edit as made or lets the write leave the device, an app extension included (§17). A restart must never issue a dot again. An installation that cannot recover its last clock value generates a fresh device ID and starts a new dot namespace (§5.3); its keychain keys and certificate stay usable. It does not guess from vectors other devices claim. Losing the keychain keys themselves still requires pairing or new-participant admission (§6.3–6.4).
 
-The signature's exact certificate binds the acting device and its dot namespace. A vector entry remains an untrusted causal claim, not a signature by the device it names. A namespace collision never selects a public key or changes deduplication by write ID.
+The signature’s exact certificate binds the acting keychain keys and participant; the signature itself binds the installation’s dot namespace. A vector entry remains an untrusted causal claim, not a signature by the device it names. A namespace collision never selects a public key or changes deduplication by write ID.
 
 ### 9.2 Field semantics (data records)
 
@@ -1028,7 +1028,7 @@ A device learns of the change from the announcement in the old channel, or from 
 
 **Signing again by the original device.** Keep the record, field, operation, element, value and original dot. Set the new context empty and base to the join of the old base and `reach(oldWrite)`. Use the first authorized statement of the new epoch listing the participant as owner/writer and the device's exact valid certificate/source snapshot extending its floor. The resulting input/write ID is deterministic for that device and those references; reuse persisted signed bytes on retry. If no authorization exists or the vector would exceed the limit, keep the work for the app.
 
-**Recovery by another device of the same participant.** The laptop cannot sign as the lost phone or reuse its certified dot namespace. It may preserve the old signed write through a fixed owner inventory; otherwise importing its content creates a **new write**, with the laptop's own dot/certificate/source snapshot. Show it as recovered work, retain the old provenance privately, and do not silently claim to be the original authoring device. Use new-epoch contexts/base under §9.2 rather than transporting the old device's causal claims as current authority.
+**Recovery by another device of the same participant.** The laptop uses its own installation dot namespace, even if it shares the lost phone's keychain keys and certificate. It may preserve the old signed write through a fixed owner inventory; otherwise importing its content creates a **new write**, with the laptop's own dot and the certificate/source snapshot valid for its keys. Show it as recovered work, retain the old provenance privately, and do not silently claim to be the original authoring installation. Use new-epoch contexts/base under §9.2 rather than transporting the old installation's causal claims as current authority.
 
 Signing again starts from an empty context, so the order between two writes that both missed the inventory is lost. If one had replaced the other, the replaced value returns as a conflict, and a removed set element returns, until the next write settles it. Keeping the old context instead would let a removed member's malformed context outlive its epoch (§9.3).
 
