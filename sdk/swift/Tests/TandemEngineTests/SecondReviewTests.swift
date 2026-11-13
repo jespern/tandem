@@ -166,6 +166,7 @@ final class SecondReviewTests: XCTestCase {
         try await b.rotateHome()
         try await a.setHome("settings:a", field: "v", value: [1])
         try await b.setHome("settings:b", field: "v", value: [2])
+        try await a.setHome("settings:x", field: "v", value: [3])   // a record both heads carry, changed after the fork
         for _ in 0..<3 { try await a.sync(); try await b.sync() }
         let heads = await a.homeHeads
         XCTAssertEqual(heads.count, 2)
@@ -173,6 +174,10 @@ final class SecondReviewTests: XCTestCase {
         for _ in 0..<3 { try await a.sync(); try await b.sync() }
         let after = Set(await hub.messages.map(\.id))
         XCTAssertEqual(after, before, "nothing destroyed or published any more")
+        for d in [a, b] {
+            let x = await d.homeValue("settings:x", field: "v"), va = await d.homeValue("settings:a", field: "v")
+            XCTAssertEqual(x, [3]); XCTAssertEqual(va, [1])
+        }
     }
 
     /// 7. A same-epoch change whose publish fails leaves nothing behind locally, so a later change doesn't fork the roster.

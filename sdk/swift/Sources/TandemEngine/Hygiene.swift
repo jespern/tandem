@@ -30,10 +30,14 @@ extension Device {
             guard let key = homeKeys[epoch], let scope = homeScope else { continue }
             let tag = Tandem.homeTag(key: key, hub: pin.hub, uid: me.participant, epoch: epoch)
             if homeEpochs[epoch]?.fields["parents"] != .set([]) { try await healFragments(channel: tag, epoch: epoch, key: key) }
-            let epochs = homeEpochs
+            let epochs = homeEpochs, inv = inventory(epoch)
+            // With several heads, a record's state can hold writes made in another head, which don't count in this one's
+            // channel (§10.8). Only the writes that belong here are kept here; republishing the others would have every
+            // other device drop them, see the message as dominated and destroy it, again and again.
+            let belongs: (Entry) -> Bool = { e in e.write.ref == epoch || inv?.entries[e.write.record]?.contains(e.id) == true }
             try await tidy(channel: tag, scope: scope, records: home, entry: { w in
                 try? Entry(w, epoch: w.ref, epochNumber: Self.number(w.ref, in: epochs))
-            }, republish: { record, writes in
+            }, belongs: belongs, republish: { record, writes in
                 try await self.publishHome(record, epoch: epoch, writes: writes)
             })
         }
@@ -111,7 +115,8 @@ extension Device {
 
     /// Collect and heal one channel. `records` is this device's state of the scope; `entry` places a stored write.
     func tidy(channel tag: String, scope: Bytes, records: [Bytes: Record], entry: (Write) -> Entry?,
-              republish: (Bytes, [Write]) async throws -> Void) async throws {
+              belongs: ((Entry) -> Bool)? = nil, republish: (Bytes, [Write]) async throws -> Void) async throws {
+        func keptHere(_ r: Record) -> [Entry] { r.kept.filter { belongs?($0) ?? true } }
         var byRecord: [Bytes: [(id: String, hash: Bytes, writes: Set<Bytes>)]] = [:]
         for (id, hash) in try store.merged(channel: tag) {
             let contents = try store.contents(message: id)
@@ -120,7 +125,7 @@ extension Device {
         }
         var doomed: [String] = []
         // A record with no message left at all is healed too.
-        for record in records.keys where record != Roster.record && byRecord[record] == nil && !(records[record]?.kept.isEmpty ?? true) {
+        for record in records.keys where record != Roster.record && byRecord[record] == nil && !(records[record].map(keptHere)?.isEmpty ?? true) {
             byRecord[record] = []
         }
         for (record, messages) in byRecord.sorted(by: { $0.key.lexicographicallyPrecedes($1.key) }) {
@@ -148,17 +153,19 @@ extension Device {
             }
             doomed += gone.sorted()
             // Healing (§12.2): the messages left, taken together, must cover this device's state of the record.
-            guard let state = records[record] else { continue }
+            guard let record0 = records[record] else { continue }
+            let kept = keptHere(record0)
+            guard !kept.isEmpty else { continue }
             let left = messages.filter { !gone.contains($0.id) }.reduce(into: Set<Bytes>()) { $0.formUnion($1.writes) }
-            let covered = state.kept.allSatisfy { k in
+            let covered = kept.allSatisfy { k in
                 left.contains(k.id) || left.contains { entries[$0].map { supersedes($0, k) } ?? false }
             }
             // Concurrent publishers (§10.7): when no single message left holds this device's state, publish the merged
             // state, which then dominates the others. Two devices doing it at once are settled by the hash rule.
             let single = messages.filter { !gone.contains($0.id) }.contains { m in
-                state.kept.allSatisfy { k in m.writes.contains(k.id) || m.writes.contains { entries[$0].map { supersedes($0, k) } ?? false } }
+                kept.allSatisfy { k in m.writes.contains(k.id) || m.writes.contains { entries[$0].map { supersedes($0, k) } ?? false } }
             }
-            if !covered || (!single && messages.count - gone.count > 1) { try await republish(record, state.kept.map(\.write)) }
+            if !covered || (!single && messages.count - gone.count > 1) { try await republish(record, kept.map(\.write)) }
         }
         guard !doomed.isEmpty else { return }
         try await hub.destroy(ids: doomed)
