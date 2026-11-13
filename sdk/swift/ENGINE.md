@@ -8,7 +8,7 @@ One `Device` per installation per hub, an actor. Everything it knows is in a `St
 
 | Layer | Type | Spec | State |
 |---|---|---|---|
-| Mail binding | `TandemIMAP.IMAPStore: PushStore` (Network.framework, no dependencies), `MemoryHub` for tests | §10.1–10.4 | IMAP client in progress on `swift/imap`; memory hub to do |
+| Mail binding | `TandemIMAP.IMAPStore: PushStore` (Network.framework, no dependencies), `MemoryHub` for tests | §10.1–10.4 | IMAP client in progress on `swift/imap`; `MemoryHub` **done** (push, removals, hiding and dropping as a hostile hub) |
 | Password stretching | `Argon2id` in the core, for the admin capsule | §6.7 | In progress on `swift/argon2` |
 | Registry | `Registry`: certificates, revocations, snapshots, floors | §6.9 | **Done**, tested against the vectors and the Lean attacks |
 | Durable state | `Store`: replica, message index, journal; SQLite from the SDK (`import SQLite3`, a system library) | §11.6 journal rules | To do |
