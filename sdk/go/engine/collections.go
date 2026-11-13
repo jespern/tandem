@@ -536,14 +536,17 @@ func (d *Device) refreshMemberships() {
 			continue
 		}
 		c := d.collection(cid)
+		// Keys from home are candidates too: a revoked keychain can still write to home until it
+		// is rekeyed, so a key counts only once the owner-signed statement of its epoch commits to
+		// it, and never displaces one.
 		for _, el := range r.Elements("keys") {
 			if e, key, ok := parseKeyElement(el); ok {
-				c.keys[string(e)] = key
+				c.offer(key, e)
 			}
 		}
 		// The key of a change still in flight, so this device can finish or discard it (§11.7).
 		if note := parseFlightNote(r); note != nil {
-			c.keys[string(note.Statement)] = note.Key
+			c.offer(note.Key, note.Statement)
 		}
 	}
 }
@@ -582,14 +585,6 @@ func loadCollections(store *Store, hub []byte, home map[string]*tandem.Record, i
 // announcements, without its records.
 func loadRoster(store *Store, hub, cid []byte, membership *tandem.Record) (*collection, error) {
 	c := newCollection(cid)
-	for _, el := range membership.Elements("keys") {
-		if e, k, ok := parseKeyElement(el); ok {
-			c.keys[string(e)] = k
-		}
-	}
-	if note := parseFlightNote(membership); note != nil {
-		c.keys[string(note.Statement)] = note.Key
-	}
 	rows, err := store.Writes(cid, rosterRecord)
 	if err != nil {
 		return nil, err
@@ -608,6 +603,15 @@ func loadRoster(store *Store, hub, cid []byte, membership *tandem.Record) (*coll
 			c.genesis = writeID(w)
 		}
 		c.statements[string(writeID(w))] = stmt{w, s}
+	}
+	// Keys after statements, so a key is confirmed against its epoch's commitment as it is read (offer).
+	for _, el := range membership.Elements("keys") {
+		if e, k, ok := parseKeyElement(el); ok {
+			c.offer(k, e)
+		}
+	}
+	if note := parseFlightNote(membership); note != nil {
+		c.offer(note.Key, note.Statement)
 	}
 	prefix := "ann." + hexs(cid) + "."
 	anns, err := store.Values(prefix)

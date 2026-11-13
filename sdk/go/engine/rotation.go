@@ -650,7 +650,7 @@ func (d *Device) settleHome(ctx context.Context, cid, statement, key []byte, inv
 		}
 	}
 	if c := d.collections[string(cid)]; c != nil {
-		c.keys[string(statement)] = key
+		c.offer(key, statement)
 	}
 	if _, ok := d.inventories[string(statement)]; inv != nil && !ok {
 		if err := d.keepInventory(inv, statement); err != nil {
@@ -889,7 +889,7 @@ func (d *Device) Finish(ctx context.Context, list []byte, seen *FlightNote) erro
 	st, ok := c.statements[string(note.Statement)]
 	old := c.epochOf(note.Parent)
 	inv, hasInv := d.inventories[string(note.Statement)]
-	if !ok || old == nil || !hasInv {
+	if !ok || old == nil || !hasInv || !bytes.Equal(st.s.Commit, tandem.Commit(note.Key)) {
 		return ErrCantFinish
 	}
 	invBytes, err := inv.Bytes()
@@ -968,6 +968,10 @@ func (d *Device) settleAnnouncedNotes(ctx context.Context) error {
 		c := d.collections[k]
 		note := d.flightNote(c.id)
 		if note == nil || !c.announced[string(note.Statement)] {
+			continue
+		}
+		// Only a note whose key the announced statement commits to: anyone who can write to home can write a note.
+		if s, ok := c.statements[string(note.Statement)]; !ok || !bytes.Equal(s.s.Commit, tandem.Commit(note.Key)) {
 			continue
 		}
 		if _, ok := d.store.Journal("rotate." + hexs(c.id)); ok {
