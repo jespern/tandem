@@ -25,6 +25,17 @@ independent security review are still to come. The earlier v1 reference SDK and
 device engine on the [`testbed` branch](https://github.com/jespern/tandem/tree/testbed)
 implement a different protocol.
 
+## SDKs
+
+Native [Go, Python, TypeScript and Swift SDK cores](sdk/README.md) implement the
+specified v2 encodings, cryptography and record merge rules. Each exposes an
+event-driven session API for push updates and submitting local changes, with
+bounded buffers and cancellation. They contain no polling loop.
+
+The four implementations share vectors and check every sender/receiver pairing.
+They are development SDKs: the complete device engine, durable storage, IMAP
+adapters and remaining control formats are still being built.
+
 ## Not `sorry`
 
 In Lean, `sorry` means “the proof goes here.” Our proofs have none.
@@ -48,6 +59,7 @@ out the boundary.
 | --- | --- |
 | [DESIGN.md](DESIGN.md) | The protocol, threat model, wire rules, everyday flows and open questions. |
 | [proofs/](proofs/README.md) | Lean proofs, the executable oracle and model comparisons. |
+| [sdk/](sdk/README.md) | Native Go, Python, Node.js/TypeScript and Swift protocol cores, async session APIs and cross-language checks. |
 | [model/](model/README.md) | Small Python models and regression tests; older designs are identified in the README. |
 | [conformance/](conformance/README.md) | Real-crypto checks in Python and Apple CryptoKit, mail probes and process-crash tests. Much of the harness targets v1; selected tests cover v2. |
 | [site/](site/README.md) | The public website, built from the specification with Pandoc. |
