@@ -31,7 +31,7 @@ The trade-off, accepted on purpose: anyone holding the hub credential can **dele
 2. **Offline content editing.** Every device has a local replica and can edit content without the network. Content merge is eventual and order-independent. Membership and keys are changed by the owner, one change at a time; they are not offline CRDT operations.
 3. **Multi-user sharing.** A collection can be private (one user) or shared with other users, each with a role. A shared collection can become private again.
 4. **End-to-end confidentiality and integrity.** The hub operator, and hub-credential holders who aren't members of a collection, can't read it or forge changes to it.
-5. **Attribution.** Every change is signed by an admitted device key, bound to its participant record and immutable authorization snapshot. The UI can show “Aimee added this”; details identify the particular device. A display name is not proof of a physical person.
+5. **Attribution.** Every change is signed by an admitted device key, bound to its participant record and immutable authorization snapshot. The UI can show “Alice added this”; details identify the particular device. A display name is not proof of a physical person.
 6. **Device loss.** Revoke an individual device while surviving devices keep the same participant, lists and settings (§6.4). The hub recovery key can recover the creator's access, not another member's private data. Ordinary members with no surviving device rejoin as new participants. Conflicting collection histories still require copying (§11.8).
 7. **No infrastructure of our own.** Any standards-compliant mail account works as the hub. No relay, no push service, no key server.
 8. **Portable.** Uses X25519, Ed25519, HKDF-SHA-256, ChaCha20-Poly1305 and HPKE, plus Argon2id for management-password wrapping. Argon2id requires an additional implementation on Apple platforms; the old CryptoKit conformance tests do not validate this new profile.
@@ -343,15 +343,15 @@ The `membership` rows are what the reference SDK writes. The `hubinvite`, `pairi
 
 ### 6.3 Adding a device
 
-**The required experience:** Aimee opens "Add a device" on her enrolled phone,
+**The required experience:** Alice opens "Add a device" on her enrolled phone,
 creates a QR/link and opens it on her laptop. The laptop obtains connection and
 pairing information there, generates independent keys, and submits its claim.
-The admin sees **"New device from Aimee: Laptop — Approve / Reject"**. There is
-no preliminary admin invitation, additional Aimee approval or six-digit comparison.
+The admin sees **"New device from Alice: Laptop — Approve / Reject"**. There is
+no preliminary admin invitation, additional Alice approval or six-digit comparison.
 The laptop says "Waiting for the hub admin" and shows private data after approval.
 "Enrolled" is recorded only after that approval, so Reject remains meaningful.
 
-Aimee creates a pending pairing record in her own encrypted home. It contains a
+Alice creates a pending pairing record in her own encrypted home. It contains a
 random token ID, intended device label, creation time, expiry, staged-package
 references and outcomes. The admin's private home records the arriving claim,
 not a copy of her secret link. Both histories sync across their respective
@@ -399,7 +399,7 @@ needed for the ceremony without keeping the phone online for final approval.
    This replaces a second signature from the phone over the now-known keys.
 2. Send the claim and opaque package/gate references to the admin's admitted
    device inboxes, encrypted to their device keys. Admin devices can display
-   "New device from Aimee: Laptop" while MS is locked. They verify the source
+   "New device from Alice: Laptop" while MS is locked. They verify the source
    member certificate, signed delegation and claim; they never receive L.
 3. **Approve:** admin enters the hub password. Re-sync, check expiry, source
    device admission/current revocations, root generation and prior token uses.
@@ -416,7 +416,7 @@ needed for the ceremony without keeping the phone online for final approval.
 5. Laptop verifies the certificate/release, opens A, combines it with L and opens
    the staged bundle. Its lists and personal metadata then sync. It retains its
    new device keys and current home/grant material and discards pairing secrets.
-   Signed completion receipts update Aimee's and the admin's private histories.
+   Signed completion receipts update Alice's and the admin's private histories.
 
 **Reject:** record and send the admitted admin device's signed rejection, keep A
 unreleased, and stop that claim's retries. Rejection is a negative workflow
@@ -425,13 +425,13 @@ manager-signed certificate takes precedence over a concurrent rejection receipt.
 Once certified, removal requires the normal revocation/rekey procedure (§6.4); a UI
 rejection cannot withdraw a completed enrollment. Deduplicate claims/outcomes.
 
-Aimee can cancel a pending pairing from an admitted device. Honest admins refuse
+Alice can cancel a pending pairing from an admitted device. Honest admins refuse
 cancelled/expired claims at final approval. The creator cancels their own link the
 same way. Revoke a certificate separately if approval already happened. Mailbox
 credentials leaked in any QR/link still require provider revocation.
 
 **Link security trade-off.** The link is a bearer delegation: anyone who captures
-it can request enrollment as Aimee. Without the comparison ceremony we cannot
+it can request enrollment as Alice. Without the comparison ceremony we cannot
 cryptographically distinguish her intended laptop from another link holder.
 Admin approval is still required, and L alone cannot open the staged private
 bundle. The admin, having A, must not receive or log L: capture of the link plus
@@ -572,7 +572,7 @@ a management seed the attacker already copied.
    successor. Devices retain the newest verified root and reject old-manager
    commands as current authority, regardless of their counters/timestamps.
 5. Renew other members' certificates only for their independently verified keys
-   with their approval. The admin cannot use RS to invent a device for Aimee.
+   with their approval. The admin cannot use RS to invent a device for Alice.
    Old revoked keys stay retired. If a member has no trusted surviving device,
    that member rejoins with a new member ID and has lists shared/copied again.
 6. Member devices rekey private homes and collection owners rotate affected
@@ -1046,7 +1046,7 @@ The directory holds whatever name a user gave themselves, so two entries can car
 **Answering.** An answer is an element added to the membership's `answers` set in home (§6.2): the admission's ID and `a` for add, `n` for no, `l` for leaving later (§11.5). Elements are only ever added, so an answer can't be overwritten or undone by a write that hadn't seen it.
 
 - **Add:** the user's devices follow the collection, and the key goes into `keys`.
-- **No:** the device posts a leave notice (§11.5). The owner sees "Aimee didn't add House" and can remove her. If the owner shares it with her again later, that is a new admission, and she is asked again.
+- **No:** the device posts a leave notice (§11.5). The owner sees "Alice didn't add House" and can remove her. If the owner shares it with her again later, that is a new admission, and she is asked again.
 
 **The state** of a membership is computed from the roster and the answers, never stored:
 
@@ -1091,7 +1091,7 @@ Any device of the owner answers. A currently admitted device of a current member
 
 ### 11.5 Leaving
 
-A member adds the answer `l` for its current admission to home (§11.2), stops following, and posts a kind-3 device-signed leave notice in the epoch it knows, binding hub, collection, participant, exact admission/roster, actor certificate and source policy (§11.4). The owner's app shows "Aimee left House" and removes her when the owner confirms, which starts a new epoch (§11.6). A notice counts only if `at` is a statement of the valid chain that lists the member, and every statement from `at` to the head lists them too. A key change in between does not spoil it; a removal does, so a notice from an earlier stay can't remove someone who has come back. The owner's devices read leave notices in every epoch whose key home holds. Until the owner confirms, the member stays listed.
+A member adds the answer `l` for its current admission to home (§11.2), stops following, and posts a kind-3 device-signed leave notice in the epoch it knows, binding hub, collection, participant, exact admission/roster, actor certificate and source policy (§11.4). The owner's app shows "Alice left House" and removes her when the owner confirms, which starts a new epoch (§11.6). A notice counts only if `at` is a statement of the valid chain that lists the member, and every statement from `at` to the head lists them too. A key change in between does not spoil it; a removal does, so a notice from an earlier stay can't remove someone who has come back. The owner's devices read leave notices in every epoch whose key home holds. Until the owner confirms, the member stays listed.
 
 The owner can't leave. They delete the collection (§11.9) or keep it.
 
@@ -1131,8 +1131,8 @@ Only the owner's fixed inventory or the author's own signing again carries old w
 
 The owner's independently keyed devices share collection access and home, and stay out of each other's way with the note in home (§8.2). A device that is asked to change a collection's sharing while another device's note is there doesn't sign. The note says what that change is, so the device can tell the user.
 
-- **If the change's statement and inventory are on the hub** in the new channel, there is nothing to choose. The device finishes it and says so: "Finishing a change started on Jesper's iPhone: making Aimee read-only in House." It checks the new channel against the inventory, copies across from the old channel any listed write that is missing, announces the statement, sends the grants and cleans up, as the first device would have (§11.6). It finishes a change only while the note still names the statement the user was shown, and makes the check of step 4 before announcing.
-- **Otherwise the change never happened**, and the device asks: "Jesper's iPhone started making Aimee read-only in House and didn't finish. Do it here, or discard it?" Either way it removes the note, and the key in it, from home and destroys what was uploaded. It removes the note only if it still names the statement the user was shown. For "do it here" it then makes the same change itself, with a new key, and signs only once the removal is on the hub.
+- **If the change's statement and inventory are on the hub** in the new channel, there is nothing to choose. The device finishes it and says so: "Finishing a change started on Jesper's iPhone: making Alice read-only in House." It checks the new channel against the inventory, copies across from the old channel any listed write that is missing, announces the statement, sends the grants and cleans up, as the first device would have (§11.6). It finishes a change only while the note still names the statement the user was shown, and makes the check of step 4 before announcing.
+- **Otherwise the change never happened**, and the device asks: "Jesper's iPhone started making Alice read-only in House and didn't finish. Do it here, or discard it?" Either way it removes the note, and the key in it, from home and destroys what was uploaded. It removes the note only if it still names the statement the user was shown. For "do it here" it then makes the same change itself, with a new key, and signs only once the removal is on the hub.
 
 A note that names a statement which is **already announced** is left over from a crash between the announcement and the home update. Any device of the owner that sees one adds the key to `keys` and removes that note, without asking: it is housekeeping, not a change to the roster, and two devices doing it do no harm. Otherwise the note would block every later change to sharing (§8.2).
 
@@ -1211,7 +1211,7 @@ The IMAP descriptor contains host, port, username and password/app-password cred
 
 **New-member invitations.** The admin unlocks MS and creates a manager-signed, purpose-limited invitation capability, intended label, token and expiry, carrying connection details/credential, HubK and root pins in a sensitive QR/link. The capability binds this hub/root, the invite verification key, new-participant purpose and limits. The first device proves both device keys and invitation possession over its exact registration/claim. The complete capability/claim/proof chain authorizes that first admission without a second admin tap; it never authorizes enrollment into an **existing** participant. Concrete capability encoding, consumption/cancellation and concurrent-claim handling must be specified/tested before shipping (Q28). Do not claim that a mutable “used” flag enforces one-time access against a hostile mailbox; duplicate uses are visible claims requiring admin resolution, not an arbitrary winning person.
 
-The admin's private home records **Pending invite: Aimee**, creation/expiry, credential hint and outcomes. Their other devices see the same pending invitation. Approval/completion receipts turn it into a joined participant; sharing two lists is a separate owner action. Invitation history and bearer secrets are different: do not put secrets into logs/directory/admin notifications.
+The admin's private home records **Pending invite: Alice**, creation/expiry, credential hint and outcomes. Their other devices see the same pending invitation. Approval/completion receipts turn it into a joined participant; sharing two lists is a separate owner action. Invitation history and bearer secrets are different: do not put secrets into logs/directory/admin notifications.
 
 **Pairing links.** The member creates them from an existing device (§6.3); the hub admin approves the resulting exact target device. They contain setup information and a bearer delegation, with private home access gated until approval. The app may use `liszto://` links or an HTTPS universal link with the sensitive payload in the fragment, never query/path parameters. Open only in the trusted app; fragments are not sent in HTTP requests, but page scripts, browser history and captured links can still expose them. No member-side comparison code is required; the captured-link trade-off is explicit in §6.3.
 
@@ -1223,19 +1223,19 @@ The admin's private home records **Pending invite: Aimee**, creation/expiry, cre
 |---|---|
 | Create, edit, delete | Nothing special. Instant locally; a subtle sync indicator when offline or behind. |
 | Rename a list | Instant, from any of the owner's devices, offline too. |
-| Add a device | On the enrolled phone: “Add device” → QR/link. Laptop opens it, names itself and shows “Waiting for hub approval”. Admin sees “New device from Aimee: Laptop — Approve / Reject”; Approve requests the hub password. Lists/settings then sync. No second Aimee confirmation or comparison code. |
+| Add a device | On the enrolled phone: “Add device” → QR/link. Laptop opens it, names itself and shows “Waiting for hub approval”. Admin sees “New device from Alice: Laptop — Approve / Reject”; Approve requests the hub password. Lists/settings then sync. No second Alice confirmation or comparison code. |
 | Hub recovery key | Saved by the creator at hub setup. Recovery needs the offline key and setup details; it is not a personal backup key shown to every joining member. |
 | A device broke or was replaced | Pair from a surviving enrolled device. Private device keys are not restored by cloning an app backup. |
 | Lost every device | Creator: explicit hub recovery using the saved key. Ordinary member: rejoin as a new participant, ask owners to share lists again; private data without a readable replica is lost. |
 | A device was stolen | People → person → Devices → Remove. Admin unlocks management; surviving member devices rekey home and owners rekey lists. Show remaining rekeys and mailbox credential steps separately. Previously downloaded data stays readable. |
 | Share a list | "Share" → pick people from the hub's People, each as editor or read-only. Someone not on the hub yet first needs a hub invite. |
 | Someone shared a list with you | "Jesper shared House with you. Add it?", once, on all your devices. |
-| Add someone to the hub | Admin: “Invite someone” → label/connection credential → management password → QR/link. “Pending invite: Aimee” appears on all admin devices; accepting creates her participant and first device. Then share selected lists. |
+| Add someone to the hub | Admin: “Invite someone” → label/connection credential → management password → QR/link. “Pending invite: Alice” appears on all admin devices; accepting creates her participant and first device. Then share selected lists. |
 | On more than one hub | Lists appear together. Each hub has its own participant and device approval; pairing on one does not silently enroll on the others. |
-| Who's on this hub | Hub → People → Aimee → Phone, Laptop. Admission/revocation comes from certificates. Proven inviter/claimed names help recognition but do not prove a physical person. |
+| Who's on this hub | Hub → People → Alice → Phone, Laptop. Admission/revocation comes from certificates. Proven inviter/claimed names help recognition but do not prove a physical person. |
 | Members | The list's sharing screen shows names and roles. The owner can add people from the hub's People, switch someone between editing and read-only, or remove them. It takes effect at once for the owner; the key change runs in the background and needs the network. |
-| Sharing change started on another device | If it got far enough to finish: "Finishing a change started on Jesper's iPhone: making Aimee read-only in House." If not: "Jesper's iPhone started making Aimee read-only in House and didn't finish. Do it here, or discard it?" |
-| Leave | "Leave list". Gone from all your devices. The owner sees "Aimee left House" and confirms. |
+| Sharing change started on another device | If it got far enough to finish: "Finishing a change started on Jesper's iPhone: making Alice read-only in House." If not: "Jesper's iPhone started making Alice read-only in House and didn't finish. Do it here, or discard it?" |
+| Leave | "Leave list". Gone from all your devices. The owner sees "Alice left House" and confirms. |
 | Removed by the owner | "House is no longer shared with you." Unsent edits are kept (app-specific: Liszto puts them in the Inbox). |
 | A list can't sync any more | "House can't sync any more. Copy it to a new list?" The copy is yours; you share it again (§11.8). |
 | Conflicts | App-specific. Tandem tells the app which fields have concurrent values. |
@@ -1313,7 +1313,7 @@ References for the CRDT parts: Shapiro, Preguiça, Baquero, Zawirski, "Conflict-
 | List name, icon, tags-enabled | The `_meta` record, written only by the owner (§8.3); works offline |
 | Zone-wide CKShare | Roster, shared from the hub's directory. The list's creator is the owner; participants are writers or readers |
 | Revoke share | Remove all other members (rotation) |
-| "Aimee added" | Device signature and participant certificate/source policy, then collection role; device visible in details |
+| "Alice added" | Device signature and participant certificate/source policy, then collection role; device visible in details |
 | Field-level merge, `notesBase`/`notesSent` | Multi-value register: concurrent `notes` writes become siblings; Liszto resolves them with its existing conflict-text rule by writing a merged value covering both |
 | Tags three-way merge, `tagsBase`/`tagsSent` | OR-set; no base bookkeeping needed |
 | Delete wins | Sticky tombstone |

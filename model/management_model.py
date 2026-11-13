@@ -269,7 +269,7 @@ class Hub:
                        and r not in root.old_revocations) for r in cert.issued_revocations)):
             return False
         if cert.source is None:
-            # A manager can introduce a new member, not rename their key as Aimee's.
+            # A manager can introduce a new member, not rename their key as Alice's.
             if cert.member != member_record_id(self.key, cert.device, cert.enrollment) or cert.approver != cert.device:
                 return False
         else:

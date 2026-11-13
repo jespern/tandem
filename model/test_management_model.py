@@ -14,8 +14,8 @@ class Administration(unittest.TestCase):
         self.phone = self.h.enroll(self.creator, "phone", "laptop")
 
     def test_admin_has_no_personal_home_box_for_another_member(self):
-        alice = self.h.join("aimee-phone"); self.h.add_certificate(alice)
-        self.assertEqual(self.h.home_recipients(alice.member), {"aimee-phone"})
+        alice = self.h.join("alice-phone"); self.h.add_certificate(alice)
+        self.assertEqual(self.h.home_recipients(alice.member), {"alice-phone"})
         self.assertNotIn("laptop", self.h.home_recipients(alice.member))
         self.assertNotIn("offline-recovery", self.h.home_recipients(alice.member))
         self.assertIn("offline-recovery", self.h.home_recipients(self.creator))
@@ -47,20 +47,20 @@ class Administration(unittest.TestCase):
         self.assertFalse(self.h.frozen)
 
     def test_manager_cannot_impersonate_an_existing_member(self):
-        alice = self.h.join("aimee-phone"); self.assertTrue(self.h.add_certificate(alice))
+        alice = self.h.join("alice-phone"); self.assertTrue(self.h.add_certificate(alice))
         fake = self.h.join("attacker-device")
         fake = replace(fake, member=alice.member)
         fake = replace(fake, consent_for=fake.request_id)
         self.assertFalse(self.h.add_certificate(fake))
-        existing = self.h.enroll(alice.member, "new-aimee-device", "aimee-phone")
+        existing = self.h.enroll(alice.member, "new-alice-device", "alice-phone")
         forged = replace(existing, approver="admin-device")
         forged = replace(forged, consent_for=forged.request_id)
         self.assertFalse(self.h.add_certificate(forged))
         self.assertTrue(self.h.add_certificate(existing))
 
     def test_member_cannot_enroll_without_admin_signature(self):
-        alice = self.h.join("aimee-phone"); self.h.add_certificate(alice)
-        cert = self.h.enroll(alice.member, "aimee-laptop", "aimee-phone", signer="aimee-phone")
+        alice = self.h.join("alice-phone"); self.h.add_certificate(alice)
+        cert = self.h.enroll(alice.member, "alice-laptop", "alice-phone", signer="alice-phone")
         self.assertFalse(self.h.add_certificate(cert))
 
     def test_member_approval_is_bound_to_target_invitation_and_root(self):
@@ -69,8 +69,8 @@ class Administration(unittest.TestCase):
         self.assertFalse(self.h.add_certificate(replace(self.phone, root="other-root")))
 
     def test_wrong_member_approval_is_not_borrowable(self):
-        alice = self.h.join("aimee-phone"); self.h.add_certificate(alice)
-        bad = self.h.enroll(self.creator, "phone", "aimee-phone", source=alice.id)
+        alice = self.h.join("alice-phone"); self.h.add_certificate(alice)
+        bad = self.h.enroll(self.creator, "phone", "alice-phone", source=alice.id)
         self.assertFalse(self.h.add_certificate(bad))
 
     def test_member_cannot_revoke_a_peer_without_admin_authority(self):
@@ -132,7 +132,7 @@ class Administration(unittest.TestCase):
         self.assertTrue(self.h.permits_after_floor(self.phone, self.h.snapshot(), floor))
 
     def test_unrelated_member_revocation_does_not_change_owners_policy_floor(self):
-        alice = self.h.join("aimee-phone"); self.h.add_certificate(alice)
+        alice = self.h.join("alice-phone"); self.h.add_certificate(alice)
         floor = self.h.snapshot(member=self.creator)
         self.h.add_revocation(self.h.revoke(alice))
         source = self.h.snapshot(member=self.creator)
@@ -169,12 +169,12 @@ class Administration(unittest.TestCase):
 class MemberInitiatedPairing(unittest.TestCase):
     def setUp(self):
         self.h = Hub()
-        self.alice = self.h.join("aimee-phone"); self.h.add_certificate(self.alice)
-        self.delegation = self.h.pair(self.alice.member, "aimee-phone")
+        self.alice = self.h.join("alice-phone"); self.h.add_certificate(self.alice)
+        self.delegation = self.h.pair(self.alice.member, "alice-phone")
         self.h.add_delegation(self.delegation)
 
     def test_member_creates_pairing_without_admin_password(self):
-        self.assertEqual(self.delegation.signer, "aimee-phone")
+        self.assertEqual(self.delegation.signer, "alice-phone")
         self.assertFalse(self.h.current_device(self.alice.member, "laptop"))
 
     def test_admin_approves_claim_without_an_additional_phone_signature(self):
@@ -182,15 +182,15 @@ class MemberInitiatedPairing(unittest.TestCase):
         self.assertIsNotNone(cert)
         self.assertTrue(self.h.add_certificate(cert))
         self.assertTrue(self.h.current_device(self.alice.member, "laptop"))
-        self.assertNotEqual(cert.approver, "aimee-phone")
-        self.assertEqual(self.h.home_recipients(self.alice.member), {"aimee-phone", "laptop"})
+        self.assertNotEqual(cert.approver, "alice-phone")
+        self.assertEqual(self.h.home_recipients(self.alice.member), {"alice-phone", "laptop"})
 
-    def test_admin_without_bearer_claim_cannot_enroll_as_aimee(self):
+    def test_admin_without_bearer_claim_cannot_enroll_as_alice(self):
         self.assertIsNone(self.h.approve_pairing(self.delegation, "evil", "admin-key"))
 
     def test_bearer_without_admin_authority_cannot_enroll(self):
         self.assertIsNone(self.h.approve_pairing(self.delegation, "laptop", self.delegation.invite_key,
-                                               manager="aimee-phone"))
+                                               manager="alice-phone"))
 
     def test_source_revocation_blocks_old_pairing_link(self):
         self.h.add_revocation(self.h.revoke(self.alice))
@@ -271,31 +271,31 @@ class PasswordAndRecovery(unittest.TestCase):
         self.assertFalse(h.password_unlocks_current_capsule("initial-password"))
 
     def test_manager_reset_cannot_bootstrap_an_arbitrary_member(self):
-        h = Hub(); alice = h.join("aimee-phone"); h.add_certificate(alice)
+        h = Hub(); alice = h.join("alice-phone"); h.add_certificate(alice)
         h.add_root(h.recover())
         self.assertFalse(h.current_device(alice.member, "clean"))
-        renewed = h.enroll(alice.member, "aimee-new", "aimee-phone", source=alice.id)
+        renewed = h.enroll(alice.member, "alice-new", "alice-phone", source=alice.id)
         self.assertTrue(h.add_certificate(renewed))
-        self.assertTrue(h.current_device(alice.member, "aimee-new"))
+        self.assertTrue(h.current_device(alice.member, "alice-new"))
 
     def test_old_manager_commands_after_reset_cannot_affect_new_generation(self):
-        h = Hub(); alice = h.join("aimee-phone"); h.add_certificate(alice)
+        h = Hub(); alice = h.join("alice-phone"); h.add_certificate(alice)
         old_cut = h.revoke(alice)  # not published or included in recovery checkpoint
-        old_alias = h.enroll(alice.member, "evil", "aimee-phone")
+        old_alias = h.enroll(alice.member, "evil", "alice-phone")
         old_wrapper = h.rewrap("stolen")
         h.add_root(h.recover())
-        renewed = h.enroll(alice.member, "aimee-phone", "aimee-phone", source=alice.id)
+        renewed = h.enroll(alice.member, "alice-phone", "alice-phone", source=alice.id)
         self.assertTrue(h.add_certificate(renewed))
         self.assertTrue(h.add_revocation(old_cut)); self.assertTrue(h.add_certificate(old_alias))
         self.assertTrue(h.add_wrapper(old_wrapper))
-        self.assertTrue(h.current_device(alice.member, "aimee-phone"))
+        self.assertTrue(h.current_device(alice.member, "alice-phone"))
         self.assertFalse(h.current_device(alice.member, "evil"))
         self.assertFalse(h.password_unlocks_current_capsule("stolen"))
 
     def test_known_revocation_is_not_erased_by_root_reset(self):
-        h = Hub(); alice = h.join("aimee-phone"); h.add_certificate(alice)
+        h = Hub(); alice = h.join("alice-phone"); h.add_certificate(alice)
         h.add_revocation(h.revoke(alice)); h.add_root(h.recover())
-        bad = h.enroll(alice.member, "alias", "aimee-phone", source=alice.id)
+        bad = h.enroll(alice.member, "alias", "alice-phone", source=alice.id)
         self.assertFalse(h.add_certificate(bad))
 
     def test_old_manager_cannot_certify_new_generation_devices(self):

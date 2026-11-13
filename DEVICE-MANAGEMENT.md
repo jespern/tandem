@@ -20,15 +20,15 @@ There are three different powers:
 
 The hub password is separate from IMAP credentials. It is **per hub**, not per
 app installation or user. Someone creating a hub sees "Set the management
-password" and "Save your recovery key". Someone joining Aimee's household hub
+password" and "Save your recovery key". Someone joining Alice's household hub
 simply enrolls their device. They may create their own hub later, with its own
 password and recovery key. A member need not know another hub's password.
 
 An ordinary member can request device addition/removal. This proposal makes the
 hub admin approve both security actions; a local "forget device" is not a
-cryptographic revocation. Aimee authorizes pairing by creating a QR/link on her
+cryptographic revocation. Alice authorizes pairing by creating a QR/link on her
 existing device.
-The admin approves the resulting laptop request; Aimee has no second approval
+The admin approves the resulting laptop request; Alice has no second approval
 or code-comparison step. For the creator's own device, the creator does both.
 
 The hub administrator **cannot** mint a replacement device for an existing
@@ -56,13 +56,13 @@ hub admin decryption power.
 
 One participant/member record has several device keypairs. Lists are owned by
 and shared with that record; signatures authenticate the particular device.
-Pairing admits the laptop to Aimee's existing record and transfers access to her
+Pairing admits the laptop to Alice's existing record and transfers access to her
 shared encrypted home. It does not take a one-time snapshot of her permissions.
 
 When her phone creates a list, its membership, key and metadata are written into
 that same home. The laptop receives them through ordinary sync, with no new
 invitation or admin approval. The same applies when another owner shares a new
-list with Aimee. An admitted owner device acts for the existing owner record;
+list with Alice. An admitted owner device acts for the existing owner record;
 pairing does not turn one list into multiple independent owners.
 
 The record is ordinary persistent bookkeeping, with no separate personal root
@@ -237,15 +237,15 @@ a fresh client shown only old metadata cannot prove freshness.
 
 ## 5. Member-initiated pairing and the admin's approval
 
-**The required experience:** Aimee opens "Add a device" on her enrolled phone,
+**The required experience:** Alice opens "Add a device" on her enrolled phone,
 creates a QR/link and opens it on her laptop. The laptop obtains connection and
 pairing information there, generates independent keys, and submits its claim.
-The admin sees **"New device from Aimee: Laptop — Approve / Reject"**. There is
-no preliminary admin invitation, additional Aimee approval or six-digit comparison.
+The admin sees **"New device from Alice: Laptop — Approve / Reject"**. There is
+no preliminary admin invitation, additional Alice approval or six-digit comparison.
 The laptop says "Waiting for the hub admin" and shows private data after approval.
 "Enrolled" is recorded only after that approval, so Reject remains meaningful.
 
-Aimee creates a pending pairing record in her own encrypted home. It contains a
+Alice creates a pending pairing record in her own encrypted home. It contains a
 random token ID, intended device label, creation time, expiry, staged-package
 references and outcomes. The admin's private home records the arriving claim,
 not a copy of her secret link. Both histories sync across their respective
@@ -293,7 +293,7 @@ needed for the ceremony without keeping the phone online for final approval.
    This replaces a second signature from the phone over the now-known keys.
 2. Send the claim and opaque package/gate references to the admin's admitted
    device inboxes, encrypted to their device keys. Admin devices can display
-   "New device from Aimee: Laptop" while MS is locked. They verify the source
+   "New device from Alice: Laptop" while MS is locked. They verify the source
    member certificate, signed delegation and claim; they never receive L.
 3. **Approve:** admin enters the hub password. Re-sync, check expiry, source
    device admission/current revocations, root generation and prior token uses.
@@ -310,7 +310,7 @@ needed for the ceremony without keeping the phone online for final approval.
 5. Laptop verifies the certificate/release, opens A, combines it with L and opens
    the staged bundle. Its lists and personal metadata then sync. It retains its
    new device keys and current home/grant material and discards pairing secrets.
-   Signed completion receipts update Aimee's and the admin's private histories.
+   Signed completion receipts update Alice's and the admin's private histories.
 
 **Reject:** record and send the admitted admin device's signed rejection, keep A
 unreleased, and stop that claim's retries. Rejection is a negative workflow
@@ -319,13 +319,13 @@ manager-signed certificate takes precedence over a concurrent rejection receipt.
 Once certified, removal requires the normal revocation/rekey procedure; a UI
 rejection cannot withdraw a completed enrollment. Deduplicate claims/outcomes.
 
-Aimee can cancel a pending pairing from an admitted device. Honest admins refuse
+Alice can cancel a pending pairing from an admitted device. Honest admins refuse
 cancelled/expired claims at final approval. The creator cancels their own link the
 same way. Revoke a certificate separately if approval already happened. Mailbox
 credentials leaked in any QR/link still require provider revocation.
 
 **Link security trade-off.** The link is a bearer delegation: anyone who captures
-it can request enrollment as Aimee. Without the comparison ceremony we cannot
+it can request enrollment as Alice. Without the comparison ceremony we cannot
 cryptographically distinguish her intended laptop from another link holder.
 Admin approval is still required, and L alone cannot open the staged private
 bundle. The admin, having A, must not receive or log L: capture of the link plus
@@ -440,7 +440,7 @@ a management seed the attacker already copied.
    successor. Devices retain the newest verified root and reject old-manager
    commands as current authority, regardless of their counters/timestamps.
 5. Renew other members' certificates only for their independently verified keys
-   with their approval. The admin cannot use RS to invent a device for Aimee.
+   with their approval. The admin cannot use RS to invent a device for Alice.
    Old revoked keys stay retired. If a member has no trusted surviving device,
    that member rejoins with a new member ID and has lists shared/copied again.
 6. Member devices rekey private homes and collection owners rotate affected
@@ -494,22 +494,22 @@ and claimed/received times, not a fictitious globally trusted wall-clock order.
 
 ## 10. The four UX cases
 
-1. Creator invites Aimee as a new member, shares two of five lists, and receives
+1. Creator invites Alice as a new member, shares two of five lists, and receives
    her acceptance receipts. She chooses no management password and saves no hub
    recovery key. Her device cannot read the other three lists.
-2. Aimee creates a pairing QR/link on her enrolled phone and opens it on her
-   laptop. The admin receives "New device from Aimee: Laptop — Approve / Reject".
-   Approval with the hub password releases the staged access package. Aimee has
+2. Alice creates a pairing QR/link on her enrolled phone and opens it on her
+   laptop. The admin receives "New device from Alice: Laptop — Approve / Reject".
+   Approval with the hub password releases the staged access package. Alice has
    no second approval/code-comparison step and never learns the hub password.
    The creator adds their own devices using the same flow and approves their
    own request. Pending/completed states appear across the relevant devices.
 3. Creator removes their lost phone with the hub password. The app carries out
-   §7, showing incomplete rekeys/provider revocation honestly. Aimee requests
+   §7, showing incomplete rekeys/provider revocation honestly. Alice requests
    the corresponding action for her phone. Removing a device on one hub does
    not silently remove it from every other hub.
 4. Creator sees their administration and sharing history on every admitted
-   device, privately. Aimee's acceptance is visible through her receipt. Hub
-   admin status alone gives no access to Aimee's private personal activity.
+   device, privately. Alice's acceptance is visible through her receipt. Hub
+   admin status alone gives no access to Alice's private personal activity.
 
 ## 11. Verification and implementation boundary
 
