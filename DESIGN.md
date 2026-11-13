@@ -1,6 +1,6 @@
 # Tandem: encrypted, shared, real-time collections over a mailbox
 
-Status: **draft for review**, 2026-11-12. Author: Jesper Nøhr, with Claude. Cut down to the requirements: one secret per user, one owner per collection for its whole life, signed writes, and no automatic recovery from lost keys or conflicting histories (§19). This is an architecture revision, not a security sign-off.
+Status: **draft for review**, 2026-11-13. Author: Jesper Nøhr, with Claude. Cut down to the requirements: one secret per user, one owner per collection for its whole life, signed writes, and no automatic recovery from lost keys or conflicting histories (§19). This is the second draft: the first was implemented and tested, and this one is brought up to what that found (§19). It is an architecture revision, not a security sign-off.
 
 This document is self-contained. It assumes no knowledge of the app that motivated it (Liszto, a to-do app; §17) and is written so that independent reviewers can check it for soundness. The words MUST, SHOULD and MAY are used in the sense of RFC 2119.
 
@@ -58,7 +58,7 @@ The trade-off, accepted on purpose: anyone holding the hub credential can **dele
 
 | Term | Meaning |
 |---|---|
-| **Hub** | One mail account (JMAP or IMAP) whose credential is shared by all participants. |
+| **Hub** | One mail account (JMAP or IMAP) that every participant's devices can log in to, with one shared credential or with one each (§13.1). |
 | **Binding** | How Tandem's abstract storage operations map onto JMAP (§10.2) or IMAP (§10.3). |
 | **User** | A person. Identified by their **user ID**, which is their public signing key. |
 | **User secret** | 32 random bytes from which all of a user's keys derive. Every device of the user holds it (§6). |
@@ -72,7 +72,7 @@ The trade-off, accepted on purpose: anyone holding the hub credential can **dele
 | **Roster** | A collection's chain of statements signed by the owner: who is a member, in which role, and which key is current (§8). Everything else in a collection is a **data record**. |
 | **Epoch** | A period during which a collection uses one symmetric **epoch key**. Removing a member or lowering a role starts a new epoch. |
 | **Record** | An object in a collection (Liszto: an item), made of named **fields**. |
-| **Write** | One signed change to one field of one record. The atomic unit of the protocol. |
+| **Write** | One signed change to a record: to one of its fields, or deleting it. The atomic unit of the protocol. |
 | **Channel** | A stream of hub messages sharing a **channel tag** (a collection epoch, a home, an inbox, an invite, a pairing session). |
 | **Hub credential** | Whatever the binding needs to log in: JMAP session URL + bearer token, or IMAP host + username + password. |
 
@@ -203,7 +203,8 @@ For symmetric kinds (1, 3), with channel key `K` (an epoch key, a home key, an i
 ```
 mk         = KDF(K, salt, "tandem/v1/msg", 32)     # fresh per message; salt random
 nonce      = 12 zero bytes                          # safe: mk is never reused
-aad        = "TNDM" || u8(1) || u8(kind) || tag     # tag: the channel's tag (§5.6)
+aad        = "TNDM" || u8(1) || u8(kind) || tag     # tag: the channel's tag as its 32 characters of b32 text (§5.6),
+                                                    # the same bytes as the Tandem-Channel header, not the 20 decoded bytes
 ciphertext = ChaCha20-Poly1305-Seal(mk, nonce, plaintext, aad)
 ```
 
@@ -223,10 +224,10 @@ Each write (§9.1) is signed over this exact byte string (independent of JSON fo
 sigInput = "TANDEM-WRITE-V1"                 (15 ASCII bytes)
         || scopeID (16)                      # collection ID, or the user's home scope (§6.2); zero in a genesis
         || recordID (16)
-        || lp(fieldName UTF-8)
+        || lp(fieldName UTF-8)               # empty for a delete
         || u8(op)                            # 1 assign, 2 add, 3 remove, 4 delete
         || lp(element)                       # set element for add/remove; else empty
-        || H(value)                          # value bytes; H("") for remove/delete
+        || H(value)                          # value bytes on an assign; H("") for add, remove and delete
         || authorUID (32)                    # the author's user ID: their public signing key (§5.3)
         || deviceID (8)                      # the installation that wrote it (§5.3)
         || u64(hlcMillis) || u16(hlcCounter)
@@ -236,6 +237,8 @@ writeID  = H(sigInput)
 
 vv(x)    = u16(n) || n × ( deviceID (8) || u64(millis) || u16(counter) )   # sorted by deviceID; n ≤ 1024 (§9.2)
 ```
+
+**Identity.** A write is identified by its write ID, and a roster statement by the write ID of its write. Ed25519 signing may be randomized (Apple's CryptoKit is), so one `sigInput` can carry different valid signatures from different devices of one user. Two writes with one write ID are one write, whichever signature arrived first. Devices deduplicate by write ID and never compare signatures to decide whether two writes are the same. A device that retries a publish reuses the signed message it stored. Hub messages are a different matter: they are identified by `H(envelope)` (§10.4).
 
 **Who signs.** Everything is signed with its author's **user signing key** `UKs`: data, home writes, and for the owner the roster statements and grants. The author's user ID in `sigInput` is that key, so a signature can be checked with nothing but the write. Whether the write is allowed is a separate question, answered by the roster (§8).
 
@@ -290,7 +293,7 @@ A Tandem client works locally with no hub. When the user connects a hub (§13.1)
 
 | Record | Fields |
 |---|---|
-| `membership:<collectionID>` | `keys` (a set of `{ "epoch": b64u(ID of the statement that started the epoch), "k": b64u(epoch key) }`, one for every epoch the user has been given), `role` (cached), `state` (`requested`, `active`, `left`, `removed`), `invite` (while requested), `flight` (collections the user owns: the one key change not yet announced, with its key and the roster it leads to, §8.2), app-defined display hints |
+| `membership:<collectionID>` | `keys` (a set of `{ "epoch": b64u(ID of the statement that started the epoch), "k": b64u(epoch key) }`, one for every epoch the user has been given), `owner`, `role` (cached), `state` (`requested`, `active`, `left`, `removed`), `invite` (while requested), `flight` (collections the user owns: the one key change not yet announced, with its key and the roster it leads to, §8.2), app-defined display hints |
 | `invite:<inviteID>` | An invite the user made for a collection they own (§11.1): `c` (collection ID), `s` (the invite secret), `role`, `expires`, `autoApprove`, `maxUses`, `closed` |
 | `settings:<app>` | App-defined (Liszto: list order, pinned lists) |
 
@@ -298,6 +301,26 @@ Home uses the write and merge rules of §9, as a single epoch, with `scopeID = H
 
 - `keys` only grows. Keys are indexed by the **full epoch-start statement ID**, never by their commitment alone. Which epoch is current follows the collection's roster, not a clock or arrival order.
 - Home records are never deleted (§7.3): leaving a collection sets `state`, so the user can join it again later.
+
+**Field encodings.** Every SDK reads home, so the bytes of its protocol fields are fixed. `<collectionID>` and `<inviteID>` in record names are spelled in b64u. A value below is the value of an `assign` or the element of an `add`.
+
+| Record | Field | Op | Bytes |
+|---|---|---|---|
+| `membership:…` | `_name` | assign | The record name in UTF-8: `membership:<b64u collection ID>` |
+| | `owner` | assign | The owner's user ID, 32 raw bytes. For a collection being joined it comes from the invite's `by.uid` (§11.2) |
+| | `role` | assign | ASCII `owner`, `writer` or `reader` |
+| | `state` | assign | ASCII `requested`, `active`, `left` or `removed` |
+| | `invite` | assign | The invite ID, 16 raw bytes |
+| | `keys` | add | One element per epoch key: the UTF-8 JSON `{"epoch":"<b64u 32-byte epoch-start ID>","k":"<b64u 32-byte key>"}`, with the two properties in that order and no whitespace. Readers index the elements by epoch ID, so the same key in another spelling does no harm |
+| | `flight` | assign | A pending key change: the UTF-8 JSON `{"parent","stmt","k","members","what","device"}`. `parent` and `stmt` are statement IDs and `k` the new key, all in b64u; `members` is the member list the change leads to, in the roster's form (§8.1); `what` is a short description for the user; `device` is the name of the device that started it. **No pending change** is the JSON `null`. A reader also takes an empty value, or anything that is not a well-formed note naming a statement, as no pending change |
+| `invite:…` | `_name` | assign | `invite:<b64u invite ID>` |
+| | `c`, `s` | assign | The collection ID (16 raw bytes) and the invite secret (32 raw bytes) |
+| | `role` | assign | ASCII `writer` or `reader` |
+| | `expires`, `maxUses` | assign | ASCII decimal digits: Unix milliseconds, and a count |
+| | `autoApprove`, `closed` | assign | ASCII `true` or `false` |
+| `settings:<app>` | | | App-defined |
+
+The `membership` rows are what the reference SDK writes. The `invite` rows are not implemented yet and may still change (Q21).
 
 ### 6.3 Adding a device, and the backup key
 
@@ -307,11 +330,15 @@ Home uses the write and merge rules of §9, as a single epoch, with `scopeID = H
 { "t": "pair", "v": 1, "hub": <hub descriptor §13.1>, "u": "<b64u uid>", "p": "<b64u P>", "exp": <unix ms, now + 120 s> }
 ```
 
-1. The new device scans it, stores the hub credential, makes a one-time X25519 key pair, and posts a kind-3 **pairing request** to the pairing channel: `{ "name", "ek": "<b64u one-time public key>" }`.
-2. The showing device, watching the pairing channel while the QR is on screen, answers each request it sees, at most three per QR code, with a kind-3 **challenge**: `{ "ek", "n": "<b64u 16 random bytes>", "sig" }`, signed with the user's key over `"TANDEM-PAIR-CODE-V1" || P || ek || n`.
+1. The new device scans it, stores the hub credential, makes a one-time X25519 key pair, and posts a kind-3 **pairing request** to the pairing channel: `{ "type": "request", "name", "ek": "<b64u one-time public key>" }`.
+2. The showing device, watching the pairing channel while the QR is on screen, answers each request it sees, at most three per QR code, with a kind-3 **challenge**: `{ "type": "challenge", "ek", "n": "<b64u 16 random bytes>", "sig" }`, signed with the user's key over `"TANDEM-PAIR-CODE-V1" || P || ek || n`.
 3. Both devices compute a **code**: the first four bytes of `H("tandem/v1/pair-code" || P || ek || n)` as an unsigned integer, modulo 1,000,000, shown as six digits. The new device shows it only after checking the challenge's signature against the `uid` in the QR code. The showing device asks "Add 'Aimee's iPad'? Code 483 920", and the user approves only if the new device shows the same code.
-4. On approval the showing device posts a kind-3 reply to the same channel: `US`, HPKE-sealed (§5.4) to `ek` with `info = "tandem/v1/pair"` and `aad = "TANDEM-PAIR-V1" || uid || ek`. It stops listening when the QR code expires or after one approval.
+4. On approval the showing device posts a kind-3 **reply** to the same channel: `{ "type": "reply", "ek", "sealed": "<b64u enc || ct>" }`, where `sealed` is the 32 bytes of `US`, HPKE-sealed (§5.4) to `ek` with `info = "tandem/v1/pair"` and `aad = "TANDEM-PAIR-V1" || uid || ek`. It stops listening when the QR code expires or after one approval.
 5. The new device opens the reply, checks that the secret gives the `uid` in the QR code, picks its own device ID, opens home, and starts following every active membership.
+
+The three messages share one channel and are told apart by `type`. A message of another type, or one whose `ek` a device doesn't recognise, is ignored. The showing device answers one `ek` once, however often it sees it.
+
+**Cleaning up.** Once it has stored `US`, the new device erases its one-time private key and `P`, and destroys its request and the reply. If no reply came, it erases both when the QR code expires; from then on nobody can open a sealed reply. The showing device destroys its challenges after an approval or when the QR code expires, and never destroys an approved reply before the new device could have read it. Anything left over is junk and harmless.
 
 The QR code holds no secret of the identity, but it contains the hub credential, and anyone who captures it within its 120 seconds can read the pairing channel and post requests of their own, under any name. Approving such a request would hand over the identity for good. The code is what stops that. It depends on a number the showing device picks only after it has seen the request's key, and the new device accepts that number only with the user's signature. A request the new device didn't make shows a different code, and one put in the real request's place leaves the new device showing none. With three answers per QR code, a blind guess succeeds three times in a million (decided 2026-11-12, §19).
 
@@ -338,7 +365,7 @@ The app offers this as one flow ("Start over on this device"). Nothing in the pr
 
 ### 7.1 Identity and genesis
 
-The creator writes the genesis roster: themselves as the owner, a commitment to a random `K(c,0)`, and 16 random bytes. The **collection ID** is the first 16 bytes of that statement's ID. The genesis uses zero `scopeID`, so its ID is computed before the collection ID is needed. The collection ID therefore fixes who the owner is, for the life of the collection.
+The creator writes the genesis roster: themselves as the owner, a commitment to a random `K(c,0)`, and 16 random bytes. In the statement's JSON (§8.1) that is `n: 0`, `key.n: 0`, no `key.prev`, no `snapshot`, and `nonce`: the 16 random bytes in b64u. A genesis that differs is invalid. The **collection ID** is the first 16 bytes of that statement's ID. The genesis uses zero `scopeID`, so its ID is computed before the collection ID is needed. The collection ID therefore fixes who the owner is, for the life of the collection.
 
 The **epoch ID** `E` is the full 32-byte ID of its starting roster statement, including for epoch 0. Only after that ID exists is the channel tag derived (§5.6). Sharing one key commitment never makes two different starts the same epoch.
 
@@ -355,7 +382,7 @@ Only the owner starts an epoch. Clients accept data directly under the **same ep
 | `_roster` | The collection's chain of statements: members and roles, and each epoch's key commitment (§8) | The owner |
 | `_meta` | The collection's name, icon and other app metadata. An ordinary data record | The owner (§8.3) |
 
-Ordinary record IDs are 16 random bytes. **Named records** (`_roster`, `_meta`, and the records in home) use `id(name) = H("tandem/v1/named" || name)[0..16]` and carry their name in a `_name` field, so every client derives the same ID for the same name. A random ID colliding with a named one is as likely as a 128-bit collision.
+Ordinary record IDs are 16 random bytes. **Named records** (`_roster`, `_meta`, and the records in home) use `id(name) = H("tandem/v1/named" || name)[0..16]` and, except `_roster`, carry their name in a `_name` field, written with their first write, so every client derives the same ID for the same name. `_roster` has no field but `s`; any other write to it is invalid. A random ID colliding with a named one is as likely as a 128-bit collision.
 
 Reserved and named records are never removed: a record ID derived from a name can't be created afresh, so they change state through their fields instead. A `delete` write on a named record is invalid.
 
@@ -392,24 +419,25 @@ Every statement after the genesis is signed with the **owner's key**: the user I
 
 The owner may add or remove members and change a member between writer and reader. Removing a member or lowering a role MUST advance the epoch counter by one, use a fresh random key whose commitment does not occur earlier in the roster, and commit a new snapshot inventory. A statement that starts an epoch adds no member. A same-epoch statement keeps the epoch commitment and snapshot commitment unchanged.
 
-**One change at a time.** Every device of the owner holds the key, so nothing cryptographic stops two of them from signing at once. Three rules keep them apart:
+**One change at a time.** Every device of the owner holds the key, so nothing cryptographic stops two of them from signing at once. These rules keep them apart:
 
 - A device changes a roster only when its user asks for it, on that device. The one automatic change is admitting someone through an auto-approve invite, made by the device that is showing its QR code (§11.3).
-- Before signing, a device syncs the roster and home. It never signs two different successors of one statement: it persists the exact signed bytes before exporting them, and after a crash it resumes with those bytes.
+- Before signing, a device syncs the roster and home. It never **announces** two different successors of one statement. It persists the exact signed statement in its journal before it writes the note or exports anything, and while the change is pending every retry reuses that statement. Between signing and publishing it syncs again and makes the check of §11.6 step 4. A statement inside an epoch, such as an admission, has no note; for it the check is that its parent is still the head and that no note has appeared.
+- Until it is announced, a statement that starts an epoch is a draft (§9.4). A draft may always be abandoned, by the device that signed it or by another device of the owner (§11.7): its channel is destroyed, its note removed, its journal entry dropped, and the user is told. An announced statement is never replaced or withdrawn. A device signs a second successor of one statement only after the first has been abandoned and its removal is on the hub.
 - Before starting an epoch, a device writes the new epoch key and a note of the change (the parent, the statement's ID, and the members and roles it leads to) to the collection's `flight` field in home. While a note is there, no other device of the owner signs anything in that collection; it offers to finish the change instead (§11.7). The note is removed when the change is announced, and also when it is discarded, so a missing note doesn't say which of the two happened (§11.6).
 
-The roster does not merge. Two different successors of one statement, both signed by the owner, mean one of three things: two devices of the owner acted in the same moment, the hub hid one device's change from another, or someone else holds the owner's secret. In each case the collection is dead (§9.4). This deliberately gives up the collection in a rare accident in exchange for having no rule that chooses a winner; the rules that were tried are listed in §19.
+The roster does not merge. Two different successors of one statement, both signed by the owner and both published (a draft is not), mean one of three things: two devices of the owner acted in the same moment, the hub hid one device's change from another, or someone else holds the owner's secret. In each case the collection is dead (§9.4). This deliberately gives up the collection in a rare accident in exchange for having no rule that chooses a winner; the rules that were tried are listed in §19.
 
 ### 8.3 Valid data writes and snapshots
 
-A data write names a valid roster statement and is signed by its author, whom that statement lists as owner or writer. Its source epoch is the first statement, going back from the one it names, that carries the same epoch commitment. In a channel identified by epoch-start ID `E`, it is eligible iff:
+A data write names a roster statement that is valid and stands in a chain of valid statements from the genesis (§8.2), and is signed by its author, whom that statement lists as owner or writer. A missing ancestor holds the write; an invalid one rejects it. A draft authorizes nothing (§9.4). Its source epoch is the first statement, going back from the one it names, that carries the same epoch commitment. In a channel identified by epoch-start ID `E`, it is eligible iff:
 
 1. its source epoch ID is **exactly `E`**; or
 2. its write ID and record ID occur in the snapshot inventory committed by `E`, and the roster statement it names is an ancestor of `E`.
 
-Matching a key or counter alone is never sufficient. Readers' writes are rejected, and a write to the `_meta` record is accepted only if the statement it names lists its author as the owner. These checks depend only on signed statements and a fixed inventory, none of which can change, so superseded data can be pruned. In a dead collection processing stops (§9.4); clients do not try to reconstruct a trusted state from what was already pruned.
+Matching a key or counter alone is never sufficient. Readers' writes are rejected, and a write to the `_meta` record is accepted only if the statement it names lists its author as the owner. These checks depend only on signed statements and a fixed inventory, none of which can change, so superseded data can be pruned, within the limit §9.3 sets. In a dead collection processing stops (§9.4); clients do not try to reconstruct a trusted state from what was already pruned.
 
-**Snapshot inventory.** Before signing a statement that starts an epoch, the owner's device fixes every record/write ID it will carry over. The canonical inventory bytes are `u32(recordCount)`, then entries sorted by 16-byte record ID; each entry is `recordID || u32(writeCount) || writeIDs`, with the 32-byte write IDs sorted and unique. Record IDs are unique. Empty inventories encode a zero count. `snapshot = H(inventoryBytes)` in the roster statement commits the whole set before the epoch ID exists, avoiding a cycle.
+**Snapshot inventory.** Before signing a statement that starts an epoch, the owner's device fixes every record/write ID it will carry over. The canonical inventory bytes are `u32(recordCount)`, then entries sorted by 16-byte record ID; each entry is `recordID || u32(writeCount) || writeIDs`, with the 32-byte write IDs sorted and unique. Record IDs are unique. Every entry lists at least one write: a record with nothing to carry over does not appear, and an entry with a zero count is invalid. The bytes are then a function of the set of (record, write) pairs. The empty inventory is exactly `u32(0)`. `snapshot = H(inventoryBytes)` in the roster statement commits the whole set before the epoch ID exists, avoiding a cycle.
 
 An inventory is published as indexed encrypted fragments in the new channel (§10.5–10.6). A receiver checks the assembled bytes against the signed commitment before using any entry. A missing inventory holds the epoch: without it nothing old can be judged. A listed write that is absent holds nothing. The inventory says which old writes may enter, not which must be present: later edits supersede snapshot writes and their messages are collected (§10.7), and one that was destroyed is restored by the devices that hold it (§12.2). Only listed writes are imported, with their original signatures. Tombstones are included like any other write. The inventory cannot later grow: a late write is signed again by its own author (§11.6).
 
@@ -428,7 +456,7 @@ A write is the tuple:
 | Field | Meaning |
 |---|---|
 | `record` | 16-byte record ID |
-| `field` | Field name (UTF-8; app-defined; names starting with `_` reserved). Two names are the same field iff their UTF-8 bytes are equal. Nothing is normalized or case-folded: `é` as one code point and as `e` with a combining accent are two fields |
+| `field` | Field name (UTF-8; app-defined; names starting with `_` reserved). Two names are the same field iff their UTF-8 bytes are equal. Nothing is normalized or case-folded: `é` as one code point and as `e` with a combining accent are two fields. Empty for a `delete` |
 | `op` | `assign` (register), `add` / `remove` (set element), `delete` (record tombstone) |
 | `element` | Set element bytes (add/remove only) |
 | `value` | Opaque bytes (assign only); the app chooses the encoding |
@@ -441,13 +469,17 @@ A write is the tuple:
 
 **HLC:** each device keeps a hybrid logical clock `(millis u48, counter u16)`. A new write's HLC is `(max(now, last.millis), counter)`, with `counter` incremented if `millis` didn't advance; if the counter would pass 65 535, `millis` advances by one and the counter restarts at 0. A device's HLCs are strictly increasing. Devices do **not** adopt other devices' clock values: causality is tracked by `context` and `base`, not by timestamps, so a device with a wrong clock can't make its writes win over writes that saw them.
 
+A write whose `millis` is 2^48 or more is invalid, although the signed slot is wider. The HLC is stored durably with the device ID: a device reserves each new clock value, and stores the write, before it shows the edit as made or lets the write leave the device, an app extension included (§17). A restart must never issue a dot again. A device that can't recover its last clock value picks a new device ID (§5.3) and does not try to recover the value from vectors other devices claim.
+
 A device ID in a dot only tells one device's writes from another's. Writes are signed with the user's key, so a dot proves nothing about which device wrote.
 
 ### 9.2 Field semantics (data records)
 
 Write `reach(x)` for `x.context` joined with `x`'s own dot, and say a vector **covers** another if it is at least as large in every entry.
 
-**Supersession.** A write `x` is superseded by a write `w` to the same field (the same record, and field names equal byte for byte, §9.1) iff either
+**Registers.** Every write belongs to one register: `(assign, record, field)`, `(set, record, field, element)` for `add` and `remove`, or `(delete, record)`. Field names and elements are compared as bytes (§9.1). An `assign` and an `add` to one field name are in different registers and never supersede each other; what an app makes of a field that holds both is its own business.
+
+**Supersession.** A write `x` is superseded by a write `w` iff `w` is in `x`'s register, or `w` is a `delete` of `x`'s record and `x` is not a delete, and either
 
 - `w` is from a **later** epoch, and `w.base` covers both `reach(x)` and `x.base`; or
 - `w` is from the **same** epoch, `w` includes `x`, and `x` doesn't include `w`, where "`w` includes `x`" means `w.context` covers `reach(x)` and `w.base` covers `x.base`.
@@ -456,9 +488,9 @@ A write never supersedes a write from a later epoch.
 
 For writes by honest devices this is the familiar rule: a write supersedes exactly what its author had seen. The rest only matters when a context is malformed. Two writes that each claim to cover the other are both kept, as a conflict. A context that claims to cover the future binds only its own epoch, because a new epoch starts with empty contexts. Whatever the vectors say, supersession is a strict partial order, with no cycles (§9.3).
 
-**Building a write.** When a device writes a field, the new write's `context` is the join of `reach(k)` over the kept writes `k` of the current epoch, and its `base` is the join of `k.base` over all kept writes plus `reach(k)` over those from earlier epochs. It therefore supersedes everything the device knew.
+**Building a write.** The new write's `context` is the join of `reach(k)` over the kept writes `k` of **the register being written** that are of the current epoch, and its `base` is the join of `k.base` over all kept writes of that register plus `reach(k)` over those from earlier epochs. A `delete` builds both over every kept write of the record, in all its registers. The write therefore supersedes everything the device knew in that register. Taking a whole field's writes for a set element would be wrong: a dot from another element could then cover an `add` the device never saw, and add-wins would fail.
 
-**Vector size.** A `context` or `base` with more than 1,024 entries makes a write invalid. Device IDs in a vector are claims nobody can check, so without a limit a writer could sign contexts full of made-up IDs, and every later write would have to copy them. Honest collections stay far below the limit: a vector has one entry per device that ever wrote the field. If the vectors a write would need don't fit, the device writes with what fits. Its write then doesn't replace everything, and no later write can settle the field. The way out needs no vectors: once the member responsible has been removed, any writer deletes the record and creates it again. The app is told when a field is in that state.
+**Vector size.** A `context` or `base` with more than 1,024 entries makes a write invalid. Device IDs in a vector are claims nobody can check, so without a limit a writer could sign contexts full of made-up IDs, and every later write would have to copy them. Honest collections stay far below the limit: a vector has one entry per device that ever wrote the field. If the vectors a write would need don't fit, the device writes with what fits, keeping the most recent dots. Its write then doesn't replace everything, and no later write can settle the field. The way out doesn't depend on vectors, because a delete takes effect whatever it covers: once the member responsible has been removed, any writer deletes the record and creates it again. The app is told when a field is in that state.
 
 **Register (op `assign`): a multi-value register.** For each field, a device keeps the writes not superseded by another kept write.
 
@@ -468,7 +500,7 @@ For writes by honest devices this is the familiar rule: a write supersedes exact
 
 **Set (ops `add` / `remove`): an add-wins observed-remove set.** Per element, the `add` and `remove` writes form a register of their own under the same supersession rule, and the element is present iff at least one kept write for it is an `add`. A concurrent add and remove therefore leave the element in (add wins); a remove that saw every add takes it out; a replayed old add stays superseded.
 
-**Delete (op `delete`): sticky tombstone.** A record with any valid `delete` write is deleted, whatever else happens to it, and stays deleted (§12.3). Undeleting means creating a new record. (This is "delete wins", a deliberate product choice: an offline device editing a record someone deleted doesn't resurrect it.) `delete` is not used on the roster or named records (§7.3).
+**Delete (op `delete`): sticky tombstone.** A delete write has an empty field name, no element and an empty value (`H("")` in `sigInput`), so every SDK signs it the same way. It supersedes every write of its record that it includes, in any register, and only another delete that includes it supersedes a delete. A deleted record therefore shrinks to its tombstone, plus whatever was written without having seen the delete. A record with any valid `delete` write is deleted, whatever else happens to it, and stays deleted (§12.3). Undeleting means creating a new record. (This is "delete wins", a deliberate product choice: an offline device editing a record someone deleted doesn't resurrect it.) `delete` is not used on the roster or named records (§7.3).
 
 **Unknown fields** (written by a newer app version) are merged and carried like any other, so mixed versions don't lose data.
 
@@ -476,17 +508,17 @@ For writes by honest devices this is the familiar rule: a write supersedes exact
 
 A data record's state is the set of its valid writes that no other valid write supersedes. Merging two states is set union followed by dropping superseded writes. Supersession is irreflexive and transitive for any `context` and `base`, honest or not, so the kept set is simply the set of maximal writes, and merging is a join on a semilattice: commutative, associative and idempotent. Devices that have seen the same writes hold the same state, regardless of order, duplicates or replays. For honest writers the rule coincides with the standard multi-value register and observed-remove set over dotted version vectors (Shapiro et al. 2011; Preguiça et al. 2012).
 
-Whether a write is valid never changes (§8.3), so a device can discard what is superseded without ever having to judge it again.
+Whether a write is valid never changes (§8.3), so a device never has to judge a write twice. Discarding what is superseded has one limit. A write that is superseded only by writes the next epoch's inventory doesn't list is current again in that epoch: the usual case is a late write from a member who is being removed and so can't sign it again. A device therefore keeps the superseded writes of an epoch until the next epoch's inventory is fixed, and may then drop those the inventory doesn't list. Hub messages are still collected as before (§10.7); the cost is local storage that grows for as long as an epoch lasts (Q22).
 
-**Malicious writers.** A member can sign anything: the same dot twice, contexts that cover each other, contexts that cover the future. None of it breaks convergence. Writes are identified by write ID, so two writes with one dot are simply two writes, and the ordering has no cycle to exploit. What such a member can do is keep a field in conflict, or pin a value of their own on top of it, for as long as they are a member (§1.2). The rotation that removes them ends it: old-epoch contexts don't bind writes of the new epoch, so the next honest write settles the field. Where a member has left a field with more to cover than a write can carry, the record is deleted and created again (§9.2). (Kleppmann 2022 gets the same guarantee from hash-linked histories; Tandem keeps version vectors for data so that superseded writes can be discarded.)
+**Malicious writers.** A member can sign anything: the same dot twice, contexts that cover each other, contexts that cover the future. None of it breaks convergence. Writes are identified by write ID, so two writes with one dot are simply two writes, and the ordering has no cycle to exploit. What such a member can do is keep a field in conflict, or pin a value of their own on top of it, for as long as they are a member (§1.2). The rotation that removes them ends it: old-epoch contexts don't bind writes of the new epoch, so the next honest write settles the field. The cost falls on late honest writes to that field from the poisoned epoch: they come back only when their author signs them again (§11.6). Where a member has left a field with more to cover than a write can carry, the record is deleted and created again (§9.2). (Kleppmann 2022 gets the same guarantee from hash-linked histories; Tandem keeps version vectors for data so that superseded writes can be discarded.)
 
 ### 9.4 The roster chain and dead collections
 
 Statements are `assign` writes to field `s` of `_roster`, carrying the complete JSON state and the parent statement ID in `ref`. Their IDs are the write IDs. The first 16 bytes of a collection's genesis ID identify the collection. A statement's exact value bytes are signed without JSON reserialization.
 
-**Following the roster.** Starting at the genesis, a device follows the one successor signed by the owner. Out-of-order statements are held until their parents arrive. A device keeps every statement the owner signed.
+**Following the roster.** Starting at the genesis, a device follows the one successor signed by the owner. Out-of-order statements are held until their parents arrive. A device keeps every statement the owner signed. An owner-signed successor that is invalid under §8.2 is kept and counts for the conflict test, but it has no successors: the chain ends at its parent, and no data write may name it. The device that signed it has a bug, and the remedy is a copy (§11.8).
 
-**Conflict.** Receipt of any two different `_roster` successors of the same statement, both signed by the owner, means the collection is **dead**, even if one of the two is invalid: the owner's key must never sign two decisions for one position. A statement that starts an epoch counts once it is announced; before that it is a draft that only the owner's devices can read (§11.6). The test needs the full signed statement bytes. Signatures with any other key do not count.
+**Conflict.** Receipt of any two `_roster` successors of the same statement with different statement IDs, both signed by the owner, means the collection is **dead**, even if one of the two is invalid: the owner must never publish two decisions for one position. A statement that starts an epoch counts once it is announced; before that it is a draft that only the owner's devices can read (§11.6). The test needs the full signed statement bytes. Signatures with any other key do not count.
 
 A device that finds a collection dead:
 
@@ -535,7 +567,7 @@ The core needs six operations:
 |---|---|
 | `ensureFolder` | `Mailbox/query` with filter `name: "Tandem"`, then `Mailbox/get`. The filter matches substrings (RFC 8621 §2.3), so take the mailbox named exactly `Tandem` with no parent, or failing that the one directly under the inbox (where some servers keep IMAP folders, §10.3). `Mailbox/set create` at top level if there is none. On a duplicate-name error, query again (sibling names are unique, RFC 8621 §2). |
 | `append` | `Email/set create` with `mailboxIds: {<Tandem>: true}`, `keywords: {"$seen": true}`, `header:Tandem-Channel:asText`, `header:Tandem-Version:asText`, and a `text/plain` body via `bodyValues` (§10.4). Batch up to the session's `maxObjectsInSet`. The server chooses the body's charset and transfer encoding (RFC 8621 §4.6), so the stored bytes may differ from an IMAP append; readers allow for that (§10.4). |
-| `changes` | `Email/changes` since the stored state, repeated while `hasMoreChanges` is true. Then `Email/get` of the **created and updated** ids with properties `mailboxIds`, `header:Tandem-Channel:asText`: an id that is in the Tandem mailbox and not yet known is added; a known id that is no longer in it is removed. (Moving a message is an update, not a destroy.) Known ids in `destroyed` are removed. On `cannotCalculateChanges`, and on `invalidArguments` (which some servers answer to a state they can no longer use), full resync: `Email/query` with `inMailbox`, paged. |
+| `changes` | `Email/changes` since the stored state, repeated while `hasMoreChanges` is true. Then `Email/get` of the **created and updated** ids with properties `mailboxIds`, `header:Tandem-Channel:asText`: an id that is in the Tandem mailbox and not yet known is added; a known id that is no longer in it is removed. (Moving a message is an update, not a destroy.) Known ids in `destroyed` are removed. On `cannotCalculateChanges`, and on `invalidArguments` (which some servers answer to a state they can no longer use), do a full resync (below). |
 | `fetch` | `Email/get` with `bodyValues`, `fetchTextBodyValues: true`. The value arrives decoded, with CRLF turned into LF (RFC 8621 §4.1.4). If it is flagged `isEncodingProblem`, the server couldn't decode it: download the raw message by its `blobId` and decode it as an IMAP reader would (§10.4). |
 | `destroy` | `Email/set destroy`. |
 | `watch` | EventSource push (RFC 8620 §7.3) with `types=Email`, `closeafter=no`, `ping=60`. On a `StateChange`, run `changes`. A server may ping at an interval of its own choosing and says which in every ping (`interval`). If neither an event nor a ping arrives for two of **those** intervals, reconnect and run `changes`. |
@@ -543,6 +575,17 @@ The core needs six operations:
 Writes don't use `ifInState`: merging is coordination-free, so concurrent writers never conflict at the JMAP layer.
 
 A push can arrive before the answer to the device's own `Email/set`, and an append whose answer was lost may still have landed. In both bindings a device therefore knows its own messages by `H(envelope)` (§10.4), not by the id in an answer, and looks for an envelope on the hub before appending it a second time.
+
+A client uses the URLs the session object advertises; a download URL may be on another host.
+
+**Full resync.** Pages of a query are positions in a list that other devices are changing. If the results are `[a, b, c, d]` and, between two pages of two, someone destroys `a` and appends `e`, the second page is `[d, e]`: the client has four ids and never saw `c`. Counting ids is therefore not enough.
+
+1. Take the current `Email` state first; an `Email/get` with no ids returns it.
+2. Run `Email/query` with `inMailbox`, a fixed sort and `calculateTotal: true`, page by page. Every page reports a `queryState`, which changes whenever the results do (RFC 8620 §5.5).
+3. If a page's `queryState` differs from the first page's, the list moved under the client: start the query again, or reconcile with `Email/queryChanges` (RFC 8620 §5.6). The enumeration is complete when the pages hold `total` ids under one `queryState`, not when a page comes back short.
+4. Run `changes` from the state taken in step 1. Whatever was appended or destroyed during the enumeration is then applied; applying a change twice does no harm, so the two can't leave a gap between them.
+
+**One push stream per credential.** A provider may keep only one EventSource connection per credential. Fastmail does: a second connection with the same API token closes the first within half a second, and a different token's connection is untouched (measured 2026-11-12). On such a provider every device that wants live updates needs a credential of its own (§13.1). A client whose stream keeps being closed backs off instead of fighting for it.
 
 ### 10.3 IMAP binding (RFC 9051 / RFC 3501)
 
@@ -562,7 +605,8 @@ Required extensions: **UIDPLUS** (RFC 4315), **IDLE** (RFC 2177). Strongly recom
 - the client needs an IMAP implementation (Apple's `swift-nio-imap` is a protocol codec, not a full client);
 - push needs a long-lived TCP connection, which mobile OSes suspend;
 - servers cap concurrent connections, per address or per account. Dovecot's default is 10 per user and IP, so a household behind one address can reach it. Stalwart's is 16 per account wherever they come from, so a shared hub there serves 16 IMAP devices in all, across every user. Every device holds one connection open for IDLE; a device uses a single connection and leaves IDLE to run commands;
-- some servers lack QRESYNC.
+- some servers lack QRESYNC;
+- on Fastmail a JMAP append reaches IMAP IDLE only after about a minute, while an IMAP append reaches it in about two seconds. Devices on IMAP there run a minute behind devices on JMAP.
 
 The JMAP binding is the reference; the IMAP binding is second.
 
@@ -612,7 +656,7 @@ The channel tag is the `Tandem-Channel` value, unfolded and trimmed. It is match
 }
 ```
 
-`r` is the write's `ref`, `c` its context and `b` its base (§9.1). A roster statement has `r` (none in a genesis), empty `c` and `b`, and no `e`.
+`r` is the write's `ref`, `c` its context and `b` its base (§9.1). A roster statement has `r` (none in a genesis), empty `c` and `b`, and no `e`. `v` is present exactly on an `assign` and `e` exactly on an `add` or `remove`; a `delete` has `"f": ""` and neither. An absent `v` signs as the empty value.
 
 **Kind 1, inventory fragment.** Instead of `rec`/`writes`, a message may contain `{ "inventory": { "epoch": "<epoch-start id>", "part": 0, "parts": 1, "bytes": "<b64u fragment>" } }`. Exactly one of these two payload forms is allowed. Parts are numbered from zero; all parts must agree on `parts`. Assemble in index order, decode the canonical inventory and check its hash against the epoch statement. Duplicate identical fragments are harmless; inconsistent versions are held separately until a complete hash-matching assembly exists. A fragment is not an authorized inventory by itself.
 
@@ -623,7 +667,8 @@ Clients MUST use a real JSON serializer and MUST ignore unknown keys. A value (`
 - any object has the same property name twice, at any depth. Names are compared as their decoded UTF-8 bytes: `é` as one code point and as `e` with a combining accent are two names, not one name twice;
 - any number is not an integer in plain digits (no fraction, no exponent) of magnitude at most 2^53. HLC millis (≤ 2^48) and counters fit;
 - it is not valid UTF-8, starts with a byte-order mark, holds an escaped surrogate that isn't half of a pair, or has anything but whitespace around the one value;
-- a `b64u` value is not in its one spelling (§5.2). Lenient decoders read `QQ`, `QR` and `QQ==` as the same byte, and an ID would then have several texts.
+- a `b64u` value is not in its one spelling (§5.2). Lenient decoders read `QQ`, `QR` and `QQ==` as the same byte, and an ID would then have several texts;
+- a `c` or `b` vector names a device twice or is not sorted by device ID, the order it is signed in (§5.5).
 
 **Bytes, not strings.** Wherever this document compares text (field names, property names, record names, channel tags), it means the UTF-8 bytes, with no Unicode normalization and no case folding. Some string types compare otherwise: Swift's `==` says that `é` and `e` with a combining accent are equal, Python's says they differ. Two clients built on those would keep different writes for the same field and never agree.
 
@@ -631,20 +676,20 @@ A standard parser that silently picks a winner among repeated names, or folds eq
 
 **Kind 2, inbox message** (HPKE-sealed): grants, key requests, roster replies and declines (§11.4).
 
-**Kind 3, request or notice**: join requests (invite channel, §11.2), pairing requests, challenges and replies (pairing channel, §6.3), leave notices (collection channel, §11.5) and key-request notices in an earlier collection epoch (§11.4).
+**Kind 3, request or notice**, each with a `type`: join requests (invite channel, §11.2), pairing requests, challenges and replies (pairing channel, §6.3), leave notices (collection channel, §11.5) and key-request notices in an earlier collection epoch (§11.4).
 
 ### 10.6 Sizes
 
-A message SHOULD stay under 64 KiB and MUST stay under 1 MiB. A record whose state doesn't fit (a long chain, a field with many siblings) is published as several messages, each holding part of its writes; the record's state is the union of what its messages hold. Snapshot inventories are split into indexed fragments under the same message limit; limits on assembly memory and incomplete fragments are configurable. A single write value must itself fit the message limit. Apps put large content elsewhere or split it.
+A message SHOULD stay under 64 KiB and MUST stay under 1 MiB. A record whose state doesn't fit (a long chain, a field with many siblings) is published as several messages, each holding part of its writes; the record's state is the union of what its messages hold. The parts of a split record may overlap, and such a record is not promised to settle into a fixed set of messages on the hub. Snapshot inventories are split into indexed fragments under the same message limit; limits on assembly memory and incomplete fragments are configurable. A single write value must itself fit the message limit. Apps put large content elsewhere or split it.
 
 ### 10.7 Publishing and garbage collection
 
-A device publishes a record by appending a kind-1 message with the record's current state (for a record in several messages, the part that changed). A message `m` is **dominated** by a message `n` of the same record if every write in `m` is in `n` or is superseded by a write in `n`. Held writes (§8.3) count as writes here, and inventory fragments are never dominated: an epoch's inventory stays on the hub for as long as the epoch is current, and devices that hold it restore a missing fragment (§12.2). The roster, and the two statements that prove a collection dead, are never pruned. The one exception is the channel of a key change that was discarded before it was announced: everything in it goes, its draft statement included (§11.7).
+A device publishes a record by appending a kind-1 message with the record's current state (for a record in several messages, the part that changed). A message `m` is **dominated** by a message `n` of the same record if every write in `m` is in `n` or is superseded by a write in `n`. Writes are compared by write ID (§5.5). Held writes (§8.3) count as writes here, and inventory fragments are never dominated: an epoch's inventory stays on the hub for as long as the epoch is current, and devices that hold it restore a missing fragment (§12.2). The roster, and the two statements that prove a collection dead, are never pruned. The one exception is the channel of a key change that was discarded before it was announced: everything in it goes, its draft statement included (§11.7).
 
 - A device MAY destroy a data message once it has merged it and another message on the hub dominates it. Two messages can dominate **each other**: when they hold the same writes, and also when they differ only in writes that are superseded anyway (`{x, y}` and `{y}`, where `y` supersedes `x`). Of two such messages, only the one with the greater `H(envelope)` may be destroyed on account of the other. Every device makes the same choice, so two devices never destroy each other's message and leave none.
 - Byte-identical copies, which have the same `H(envelope)`, come from an append that was repeated after its answer was lost (§10.2). Only the device that made that envelope removes the extra copies, keeping one. Other devices leave them alone, since no hash can tell them which to keep.
 - It MUST NOT destroy a message it hasn't merged, or a message of a version it doesn't understand (§15). Incomplete objects can be evicted locally under §9.4; that does not authorize destroying their hub messages. Statements the owner signed are kept.
-- When a device sees messages for one record that none of them dominates (concurrent publishers), it waits a short random time, a few seconds at most, and publishes the merged state only if no dominating message has appeared in the meantime. Without the delay, every online device would publish the same merge at once. A record converges to one message on the hub between bursts of activity.
+- When a device sees messages for one record that none of them dominates (concurrent publishers), it waits a short random time, a few seconds at most, and publishes the merged state only if no dominating message has appeared in the meantime. Without the delay, every online device would publish the same merge at once. A record that fits one message converges to one message on the hub between bursts of activity. For a record split over several messages the test is the union: a device publishes only if the valid messages on the hub, taken together, don't dominate its own state. Parts that merely differ from each other are no reason to publish. Messages are still destroyed only one against one, by the rule above. Letting a set of messages dominate one would not be safe: of `{a, b}`, `{b, c}` and `{a, c}` each is covered by the other two, and three devices could destroy all three.
 - Writes made in quick succession SHOULD be coalesced (debounce ~1 s) into one publish, so typing doesn't create a message per keystroke.
 
 ---
@@ -685,14 +730,14 @@ The joiner's client:
 4. Appends a kind-3 message to the invite channel (keyed from the invite secret, §5.6):
 
 ```json
-{ "uid": "<b64u>", "uka": "<b64u agreement key>", "name": "Aimee",
+{ "type": "join", "uid": "<b64u>", "uka": "<b64u agreement key>", "name": "Aimee",
   "sig": "<by the joiner's key over 'TANDEM-JOIN-V1' || collectionID || inviteID || uid || uka || lp(name)>",
   "isig": "<by the invite key over 'TANDEM-INVITE-V1' || collectionID || inviteID || uid>" }
 ```
 
 `sig` ties the agreement key and the name to the joiner. `isig` proves the joiner holds the invite itself. The request can be read by the owner's devices and by everyone else who holds this invite: whoever the link or code reached, including someone who joined through it and was later removed. Members who never held the invite can't read it, and neither can the hub.
 
-5. Shows "Waiting for Jesper to approve" (or nothing, for auto-approve) and watches its inbox until the invite expires.
+5. Shows "Waiting for Jesper to approve" (or nothing, for auto-approve) and watches its inbox until the invite expires. Until then, or until a decline arrives (§11.4), it keeps its request and appends the same envelope again if a sync finds it gone from the hub (§12.2).
 
 ### 11.3 Approval
 
@@ -701,7 +746,7 @@ A device of the owner that sees a request checks `sig` against the `uid` in it, 
 - For an **auto-approve** invite, the device that is showing its QR code admits the joiner at once. The owner's other devices leave the request alone, so that only one of them signs (§8.2).
 - For any other invite, the owner's devices show "Aimee wants to join House" with Approve / Decline. The name is whatever the request claims; the owner should know who they sent the link to. The device where the owner taps acts.
 
-Admitting is a same-epoch roster statement that adds the member with the invite's role, their `uid`, `uka`, `name` and `via`. Once that statement is on the hub, the device sends the grant (§11.4) and destroys the request. Declining sends a hint instead.
+Admitting is a same-epoch roster statement that adds the member with the invite's role, their `uid`, `uka`, `name` and `via`. Once that statement is on the hub, the device sends the grant (§11.4) and destroys the request. Declining sends a hint instead. So does refusing without a tap: a request on an invite that is closed, used up or expired SHOULD be answered with the same hint (§11.4) and is then destroyed. A request that arrives again after that means the joiner asked again (§11.4), and is treated as a new one.
 
 A join request carries nothing that ties it to a moment, so anyone on the hub can post an old one again, and a removed member still holds the invite they came in through. Two rules keep a removal final. Both are read from the signed roster, so neither depends on a second write reaching home after the removal:
 
@@ -733,15 +778,15 @@ A receiver requires all of this:
 
 A device that already follows the collection checks the roster it is given against every statement it knows: a second successor anywhere means the collection is dead (§9.4). An older grant never moves it back. A grant for an earlier statement of the still-current epoch remains useful if the user is still listed. The device adds the key to home only after these checks. A grant that depends on something missing is held.
 
-**Key requests** are `{ "type": "keyreq", "c", "have", "by", "sig" }`, signed by the member over `"TANDEM-KEYREQ-V1" || collectionID || have || uid`. A device that has learned of an epoch whose key it lacks, and has waited 10 minutes for the grant, sends one to the owner's inbox. It also posts it as a kind-3 notice in the last epoch channel it can read; the owner's devices keep watching earlier epochs' tags, whose keys are in home. This is one hub change feed, not a polling loop or a connection per epoch. The 10 minutes are a safety net behind the grant, not a schedule.
+**Key requests** are `{ "type": "keyreq", "c", "have", "by", "sig" }`, signed by the member over `"TANDEM-KEYREQ-V1" || collectionID || have || uid`. `have` is the 32-byte ID of the latest valid roster statement the member holds, not an epoch counter or a commitment; a roster reply starts at its successor. A device that has learned of an epoch whose key it lacks, and has waited 10 minutes for the grant, sends one to the owner's inbox. It also posts it as a kind-3 notice in the last epoch channel it can read; the owner's devices keep watching earlier epochs' tags, whose keys are in home. This is one hub change feed, not a polling loop or a connection per epoch. The 10 minutes are a safety net behind the grant, not a schedule.
 
 Any device of the owner answers. A current member gets the current key. Someone since removed gets no key. They get `{ "type": "roster", "c", "statements": [ … ] }`: the signed roster statements from `have` up to the one that removed them, which prove themselves and are how a device that was away for several epochs learns of its removal. Answering is not a roster change, so two devices answering is harmless.
 
-A decline is `{ "type": "declined", "c", "i": "<invite id>" }`. A first-time joiner can't check who it is from, so it is a hint only: the client tells the user and keeps the request until the invite expires. A valid grant that arrives later still counts.
+A decline is `{ "type": "declined", "c", "i": "<invite id>" }`. A first-time joiner can't check who it is from, so it is a hint only and never settles the request. The client tells the user, stops waiting and stops posting its request again, as it does when the invite's `exp` passes. Otherwise a declined request would go round for the rest of the invite's life: destroyed by the owner's device, missed and posted again by the joiner's, answered and destroyed again. The user can ask again, which posts the request anew. The price is that a forged decline, from anyone who knows the joiner's user ID and agreement key, also stops the retries; the joiner is told and can ask again. It keeps the membership in `requested`, with the invite and the owner it names, so a valid grant that was only delayed still counts. Only the user cancelling the request sets `left`, and a grant that arrives after that is refused.
 
 ### 11.5 Leaving
 
-A member sets its home membership to `left`, stops following, and posts a kind-3 leave notice in the epoch it knows: `{ "type": "leave", "uid", "at", "sig" }`, signed over `"TANDEM-LEAVE-V1" || collectionID || uid || at`. The owner's app shows "Aimee left House" and removes her when the owner confirms, which starts a new epoch (§11.6). A notice counts only if `at` is a statement of the current epoch, so one from an earlier stay can't remove someone who has come back. Until the owner confirms, the member stays listed.
+A member sets its home membership to `left`, stops following, and posts a kind-3 leave notice in the epoch it knows: `{ "type": "leave", "uid", "at", "sig" }`, signed over `"TANDEM-LEAVE-V1" || collectionID || uid || at`. The owner's app shows "Aimee left House" and removes her when the owner confirms, which starts a new epoch (§11.6). A notice counts only if `at` is a statement of the valid chain that lists the member, and every statement from `at` to the head lists them too. A key change in between does not spoil it; a removal does, so a notice from an earlier stay can't remove someone who has come back. The owner's devices read leave notices in every epoch whose key home holds. Until the owner confirms, the member stays listed.
 
 The owner can't leave. They delete the collection (§11.9) or keep it.
 
@@ -752,17 +797,24 @@ Only the owner rotates: when they remove a member, lower a role, or ask for a ne
 The device makes one journalled change:
 
 1. Sync the current epoch fully and choose the data state to preserve, including tombstones. Entries of the current inventory that the device hasn't seen are carried forward as they are (§8.3).
-2. Generate the new key; build the exact inventory and roster statement; write the key and the note to home (§8.2), and persist the signed statement, inventory and progress in the device's journal, **before exporting any of them**.
+2. Generate the new key; build the exact inventory and roster statement; persist the signed statement, inventory and progress in the device's journal; then write the key and the note to home (§8.2). Both come **before anything is exported**, and the journal comes before the note. A note that names a statement this device has no journal entry for is another device's note (§11.7). A note the device sees in home outweighs its own record of whether the note's append succeeded: an append whose answer was lost may have landed.
 3. Upload the complete inventory fragments and the snapshot data to the new epoch's channel, then the full roster ending in the new statement. The statement is thus on the hub only once everything it commits to is. Verify it all, and restore anything destroyed meanwhile. No grant is sent yet.
-4. **Announce:** publish the statement in the **old** epoch channel's `_roster`. This is the moment the change happens, and the only evidence that it did. Then move the key from the note into `keys` in home and remove the note.
+4. **Announce:** sync. If the statement is already announced, by this device before a crash or by another device that finished the change, do the home update at the end of this step and go on to step 5. Otherwise check that the note in home still names this statement and that its parent is still the roster's head. If either fails, another device discarded or overtook the change (§11.7): destroy the new channel, drop the journal entry and tell the user that nothing changed. Otherwise publish the statement in the **old** epoch channel's `_roster`. This is the moment the change happens, and the only evidence that it did. Then update home: add the key to `keys`, and remove the note if it still names this statement. Both can be repeated without harm, and a device that finds the announcement made but home not yet updated does them first.
 5. Send grants to the remaining members, the owner included. A grant can be sent again after a crash or on request.
 6. Make sure the inventory is still on the hub. Then destroy the old epoch's **data** messages, each only once every write in it is in the new channel, has been replaced there by a valid write, or was not carried over; a listed write that is missing from the new channel is copied across first. Its roster stays for good, and home keeps its key: that is how a device that was away finds out where the collection went.
 
-An interruption before the announcement leaves everyone on the old epoch. The device resumes the **same** change after a restart; it never abandons signed bytes it has exported to sign something else. An interruption after the announcement may leave members waiting for the key; they stop publishing to the old epoch, and the device resumes sending grants. If that device is gone, another device of the owner finishes or drops the change (§11.7). Nothing happens on a timer.
+An interruption before the announcement leaves everyone on the old epoch. After a restart the device syncs first. If its statement is announced, it completes step 4's home update, which the crash may have cut off, and carries on from step 5. If its note is still in home naming its statement and the parent is still the head, it resumes the same change from the journalled step with the same statement. If there is no note at all, it resumes only a change it had not yet exported, and only while the parent is still the head. In every other case (another device's note, a new head) the change was discarded or overtaken: it drops the journal entry, destroys what it uploaded and tells the user. Unannounced bytes may always be dropped; announced ones never. An interruption after the announcement may leave members waiting for the key; they stop publishing to the old epoch, and the device resumes sending grants. If that device is gone, another device of the owner finishes or drops the change (§11.7). Nothing happens on a timer.
 
-A device learns of the change from the announcement in the old channel, or from a verified grant and the roster in the new channel. The owner's other devices can read the new key in the note from step 2 on. Until they have the announcement they use it for one thing only: finishing that change when the user asks (§11.7). A missing note is not evidence, and neither is a key: a note goes when a change is announced and also when it is discarded (§11.7). Until it is announced, a statement that starts an epoch exists only in its own channel, under a key that only the owner's devices hold. There it is a draft: not part of the roster, not a successor, and not one half of a conflict (§9.4). A device that has learned of the change stops publishing to the old epoch and changes to the new snapshot. It keeps every old write the new inventory lists, whoever wrote it, and re-publishes one that the new channel lacks (§12.2). It signs again any write of its own user that the inventory doesn't list and the new state doesn't supersede (§9.2). A write the snapshot replaced is not signed again: that would bring the replaced value back on top. A missing inventory delays the move; a listed write that is absent does not (§8.3). A removed user is told, stops publishing, and keeps their replica read-only for 30 days, configurable, so that unsent work can be rescued. They receive no new key.
+A device learns of the change from the announcement in the old channel, or from a verified grant and the roster in the new channel. The owner's other devices can read the new key in the note from step 2 on. Until they have the announcement they use it for one thing only: finishing that change when the user asks (§11.7). A missing note is not evidence, and neither is a key: a note goes when a change is announced and also when it is discarded (§11.7). Until it is announced, a statement that starts an epoch exists only in its own channel, under a key that only the owner's devices hold. There it is a draft: not part of the roster, not a successor, and not one half of a conflict (§9.4).
 
-**Signing again.** Use the same record, field, operation, element, value and dot. Set the new context empty and the base to the join of the old base and `reach(oldWrite)`. As `ref`, use the **first statement of the new epoch that lists this user as owner or writer**, which is not necessarily the statement that starts it. Every device of the user that signs the same write again gets the same bytes and the same write ID. If no statement allows it, or the base would exceed the vector limit (§9.2), the work is kept for the app instead of being published as an invalid write.
+**Moving over.** A device that has learned of the change stops publishing to the old epoch and changes to the new snapshot. It keeps every old write the new inventory lists, whoever wrote it, and re-publishes one that the new channel lacks (§12.2). A missing inventory delays the move; a listed write that is absent does not (§8.3). A device coming back online reads the change feed before it sends the edits it had queued, so it never publishes into an epoch it is about to learn is over, where a removed member could still read. An edit made while a device waits for the new key is queued until the grant arrives. A removed user is told, stops publishing, and keeps their replica read-only for 30 days, configurable, so that unsent work can be rescued. They receive no new key.
+
+**Late writes.** Any device of the user signs again a late write of that user: one that the inventory doesn't list and that no listed write supersedes under the old epoch's rules. A write that a listed write replaced is not signed again: that would bring the replaced value back on top. Vectors are claims, not proof that anything was delivered (§9.3), so two cases get special care:
+
+- **A forged claim about this device.** If the new state supersedes one of the device's *own* writes only through a vector entry for this device's ID that is higher than any dot the device has issued, that entry is forged. The device signs the write again all the same, and it survives as a sibling. A later write by the same device always counts as having replaced its earlier one, whatever claims it copied, so this never brings back a value the user had already replaced.
+- **Anything else the new state claims to cover.** A late write that is not signed again only because the new state supersedes it is kept, and reported to the app as work that may never have been shared, to recover or dismiss. The cost is that the app may be shown an edit that really was replaced.
+
+**Signing again.** Use the same record, field, operation, element, value and dot. Set the new context empty and the base to the join of the old base and `reach(oldWrite)`. As `ref`, use the **first statement of the new epoch that lists this user as owner or writer**, which is not necessarily the statement that starts it. Every device of the user that signs the same write again gets the same `sigInput` and the same write ID; the signature bytes may differ (§5.5). If no statement allows it, or the base would exceed the vector limit (§9.2), the work is kept for the app instead of being published as an invalid write.
 
 Signing again starts from an empty context, so the order between two writes that both missed the inventory is lost. If one had replaced the other, the replaced value returns as a conflict, and a removed set element returns, until the next write settles it. Keeping the old context instead would let a removed member's malformed context outlive its epoch (§9.3).
 
@@ -772,20 +824,23 @@ Only the owner's fixed inventory or the author's own signing again carries old w
 
 The owner's devices share the key and home, and stay out of each other's way with the note in home (§8.2). A device that is asked to change a collection's sharing while another device's note is there doesn't sign. The note says what that change is, so the device can tell the user.
 
-- **If the change's statement and inventory are on the hub** in the new channel, there is nothing to choose. The device finishes it and says so: "Finishing a change started on Jesper's iPhone: making Aimee read-only in House." It checks the new channel against the inventory, copies across from the old channel any listed write that is missing, announces the statement, sends the grants and cleans up, as the first device would have (§11.6).
-- **Otherwise the change never happened**, and the device asks: "Jesper's iPhone started making Aimee read-only in House and didn't finish. Do it here, or discard it?" Either way it removes the note, and the key in it, from home and destroys what was uploaded. For "do it here" it then makes the same change itself, with a new key.
+- **If the change's statement and inventory are on the hub** in the new channel, there is nothing to choose. The device finishes it and says so: "Finishing a change started on Jesper's iPhone: making Aimee read-only in House." It checks the new channel against the inventory, copies across from the old channel any listed write that is missing, announces the statement, sends the grants and cleans up, as the first device would have (§11.6). It finishes a change only while the note still names the statement the user was shown, and makes the check of step 4 before announcing.
+- **Otherwise the change never happened**, and the device asks: "Jesper's iPhone started making Aimee read-only in House and didn't finish. Do it here, or discard it?" Either way it removes the note, and the key in it, from home and destroys what was uploaded. It removes the note only if it still names the statement the user was shown. For "do it here" it then makes the same change itself, with a new key, and signs only once the removal is on the hub.
 
-It then makes the change it was asked for. A change is never dropped without the user being told which one it was. The first device, when it next syncs, looks for the announcement of its change in the old channel. If it is there, the change was made, by itself or by the device that finished it, and it carries on from step 5. If it isn't there and the note naming its statement is gone, the change was discarded: the announcement always precedes the note's removal and the hub has one change feed (§10.1), so a device that has seen the note go has seen the announcement if there was one. It then discards its journal entry and anything it had uploaded. While its note is still there, it resumes.
+A note that names a statement which is **already announced** is left over from a crash between the announcement and the home update. Any device of the owner that sees one adds the key to `keys` and removes that note, without asking: it is housekeeping, not a change to the roster, and two devices doing it do no harm. Otherwise the note would block every later change to sharing (§8.2).
 
-Three things can still put two successors on one statement, and each kills the collection (§9.4): the user has the second device deal with a change while the first device is in fact still working on it; the hub hides one device's change from another; or two devices are asked for a change in the same moment. Members never end up following different rosters.
+It then makes the change it was asked for. A change is never dropped without the user being told which one it was. The first device, when it next syncs, looks for the announcement of its change in the old channel. If it is there, the change was made, by itself or by the device that finished it; it completes step 4's home update and carries on from step 5. If it isn't there and the note naming its statement is gone, the change was discarded: the announcement always precedes the note's removal and the hub has one change feed (§10.1), so a device that has seen the note go has seen the announcement if there was one. It then discards its journal entry and anything it had uploaded. While its note is still there and the parent is still the head, it resumes (§11.6).
+
+Two things can still put two successors on one statement, and each kills the collection (§9.4): the hub hides one device's change from another; or two devices pass the check of step 4 in the same moment, each announcing before it has seen the other's announcement. The check narrows that window to one round trip. It can't close it (Q20). Members never end up following different rosters.
 
 ### 11.8 Dead collections and copying
 
-A collection can't be administered any more in three cases:
+A collection can't be administered any more in four cases:
 
 - **It is dead** (§9.4): two successors of one roster statement exist. It is read-only for everyone.
 - **The owner's secret is lost**: every device and the backup key. Members can go on editing, but its sharing can never change again.
 - **The owner's secret is in someone else's hands** (§6.4). The owner abandons it.
+- **The owner published an invalid statement** (§9.4). The roster ends at the statement before it, and any other successor would kill the collection. Members can go on editing; its sharing can never change again.
 
 There is no recovery under the same collection ID. Anyone who can read the collection can copy it: they create a **new collection**, of which they are the owner, write the current state of the records into it as writes of their own, and invite people again. Tombstones and the old writes' signatures are not carried over; a copied item is the copier's. Apps do not silently redirect an old membership to the copy.
 
@@ -809,14 +864,14 @@ After each full sync of a channel, a device compares its replica with the hub:
 
 - **The hub lacks something the device holds.** If the messages on the hub for a record, taken together, don't dominate (§10.7) the device's state of that record, the device re-publishes it. That covers a record with no message left at all, and one that was rolled back to an older message. The same goes for the roster, the current epoch's inventory fragments (§8.3) and the two statements that prove a collection dead (§9.4).
 - **Messages the device can't decrypt** in a channel it follows indicate corruption or junk. The device logs and ignores them.
+- **The device's own pending request.** While a membership is `requested`, its invite hasn't expired and no decline has arrived (§11.4), the joiner's device appends its join request again if the hub lacks its envelope; a device being paired does the same with its request until the QR code expires or a challenge arrives. Expiry ends it. Nothing is retried for ever.
 
 A device heals only where that is safe:
 
 - **Only in a current channel:** the epoch of the roster's head, and home. A channel whose `_roster` shows a later epoch is never refilled, except for that `_roster` record itself, which devices that have moved on keep complete (§11.6).
 - **Not when the roster itself is missing.** If a collection's channel has no `_roster` record at all, the device first looks for a newer epoch in its home and its inbox and asks the owner for the current key (§11.4). It may restore the roster statements it holds, but an unanswered request is not proof that its old epoch is current. Data healing stays paused until it knows.
-- **Not next to messages it can't read:** if the channel holds messages of a version it doesn't understand (§15), a newer client may have replaced what looks missing.
 
-This makes vandalism by a hub participant a temporary nuisance, as long as a member device survives, while still honouring legitimate deletes (tombstones).
+This makes vandalism by a hub participant a temporary nuisance, as long as a member device survives, while still honouring legitimate deletes (tombstones). A participant who keeps deleting can still keep a join or a pairing from ever completing.
 
 The hub can still withhold a newer roster statement. Signatures detect modification, not freshness, and silence proves nothing.
 
@@ -853,6 +908,8 @@ The hub descriptor:
 
 **Shared vs per-person credentials.** Whoever sets up the hub chooses. One credential for everyone is simplest, and it is what invites and pairing codes pass on by default: the newcomer gets a copy of the credential the inviting device uses. Cutting one person off then means changing the credential and handing the new one to everyone else. A hub owner who wants to cut off a single person or a stolen device creates a token for each at the provider (Fastmail: one API token each) and enters it when inviting or pairing ("Use a separate hub token for this invite"). The protocol doesn't care which credential a device uses. The app SHOULD tell the hub owner which they're doing ("Everyone you invite gets access to this hub's mailbox").
 
+**Where one credential isn't enough.** A provider that allows one push stream per credential (§10.2) gives live updates to one device per credential. On **Fastmail** every device therefore gets an API token of its own (decided 2026-11-12, §19): setup, invites and pairing hand the new device a separately issued token, not a copy of the inviting device's. The same goes for the hub QR code. Only someone who can sign in to the Fastmail account can make a token, so a member who adds a device of their own needs one from whoever runs the hub. The app tells the user when a separate credential is needed, and when a device is running without live updates because it shares one.
+
 The app shows the hub QR on request, behind device authentication. It is how a new or restored device gets hub access.
 
 A **dedicated mail account** is strongly recommended. Tandem's change feed covers the whole account, an ordinary mail client would show the folder and might tidy it up, and the credential often allows sending mail as the account.
@@ -866,6 +923,7 @@ After connecting, the client sets up the identity (§6.1) and shows the **backup
 | Create, edit, delete | Nothing special. Instant locally; a subtle sync indicator when offline or behind. |
 | Rename a list | Instant, from any of the owner's devices, offline too. |
 | Add a device | Device A: "Add a device" shows a QR code with a 2-minute countdown. Device B: scan; it shows a six-digit code. Device A: "Add 'Aimee's iPad'? Code 483 920" → Add, if the codes match. Everything appears on B. |
+| Add a device on Fastmail | The same, after one more step: the app asks for an API token made for the new device (§13.1). Without one the new device still syncs, but without live updates. |
 | Backup key | Settings → Sync → "Show backup key", behind device authentication. |
 | A device broke or was replaced | Nothing to do. Pair the new one from another device, or type the backup key. |
 | Lost every device | On a new device: connect the hub (scan the hub QR from anyone on it, or enter its details), choose "I have a backup key", type it. |
@@ -879,6 +937,7 @@ After connecting, the client sets up the identity (§6.1) and shows the **backup
 | Removed by the owner | "House is no longer shared with you." Unsent edits are kept (app-specific: Liszto puts them in the Inbox). |
 | A list can't sync any more | "House can't sync any more. Copy it to a new list?" The copy is yours; you invite people again (§11.8). |
 | Conflicts | App-specific. Tandem tells the app which fields have concurrent values. |
+| An edit that may not have reached anyone | App-specific. After someone was removed, Tandem may hand the app an edit of yours from around that time, to keep or dismiss (§11.6). |
 
 ### 13.3 Errors
 
@@ -910,9 +969,9 @@ Tandem doesn't defend against traffic analysis by the hub. Padding message sizes
 ## 15. Versioning
 
 - `Tandem-Version` header and envelope version byte: both `1`.
-- A client MUST ignore (not delete) messages with a version it doesn't understand and SHOULD tell the user an update is available. It MUST NOT heal (§12.2) or garbage-collect (§10.7) in a channel that holds such messages: a newer client may have replaced what looks missing.
+- A message in a v1 channel whose header or envelope version isn't 1, or whose two version fields disagree, is junk to a v1 client: ignored, never destroyed, and no reason to pause healing (§12.2) or garbage collection (§10.7). Only authenticated v1 messages affect v1 processing. Otherwise anyone on the hub could switch healing off for good with one forged message. A client MAY tell the user that a newer version seems to be in use, but must not treat it as fact: anyone on the hub can post such a message.
 - Within v1, payload JSON may gain keys. Clients ignore unknown keys and preserve unknown fields (§9.2).
-- A new crypto suite or incompatible change is v2. Collections migrate by rotation into a v2 epoch once all members' clients support v2.
+- A new crypto suite or incompatible change is v2. How a collection moves from v1 to v2 is not defined yet (Q23). Whatever it is, it will start from a statement that v1 clients can authenticate.
 
 ---
 
@@ -962,16 +1021,17 @@ References for the CRDT parts: Shapiro, Preguiça, Baquero, Zawirski, "Conflict-
 
 | # | Question |
 |---|---|
-| Q1 | Does Fastmail serve JMAP EventSource push to API-token clients, and what are its JMAP rate limits and `maxObjectsInSet`? |
-| Q2 | Does Fastmail accept arbitrary `Tandem-*` headers via `Email/set`, and return them unchanged on `Email/get`? |
-| Q3 | Folder size: how do Fastmail and Dovecot behave with ~100k messages in one folder (Tandem's expected upper bound per hub)? |
+| Q3 | Folder size on servers other than Fastmail: how do Stalwart and Dovecot behave with ~100k messages in one folder (Tandem's expected upper bound per hub)? Fastmail handles it (§19). |
 | Q5 | Backup key format: base32 groups (§6.3) or a word list (easier to write down, adds a list to every SDK)? |
 | Q9 | Padding message sizes to hide content length from the hub. |
 | Q10 | Tombstones are kept for good (§12.3). Is that affordable at Liszto's deletion rate, or does v1 need a safe way to drop them? |
-| Q14 | `model/owner_model.py` and `model/test_owner_model.py` model the collection rules: the owner's key as the only authority, epoch identity, fixed inventories, dead collections and how the news spreads, signing again, crash-resumable rotation, and the owner's devices coordinating through home, with a randomized run of three devices, crashes and decisions. Keys and signatures are symbols, not cryptography. Not modelled: the mail bindings, pairing and its code, invitations and UX. `tandem_model.py` and `rotation_model.py` are models of withdrawn designs (§19) and say nothing about this one. |
+| Q14 | What checks the design, and what doesn't. A Go reference SDK and device engine, test vectors checked by a Swift SDK, Lean proofs of the merge, roster, clean-up and encoding rules, and a scenario harness live on the `testbed` branch; `conformance/` tests real cryptography, mail transport and a durable journal. `model/owner_model.py` is a small symbolic model of the roster rules and lags the draft in three places (its README says which). The testbed's `TESTING.md` says what is implemented and what isn't. |
 | Q15 | A stolen device or a found backup key can't be cut off; the user starts over (§6.4). Per-device keys would fix that. They were designed three times in this draft's history and never came out sound (§19), so they are left for a later version. |
 | Q16 | A roster gains one complete statement per change and is copied at every rotation, and an inventory keeps entries for writes no rotating device has seen (§8.3). Is a signed checkpoint needed for long-lived collections? It would also have to carry who came in through which invite and has since gone, which devices now read from the full chain (§11.3). |
 | Q20 | Two devices of one owner changing a collection's sharing in the same moment kill it (§11.7). The note in home makes that unlikely. If it happens in practice, a designated device per collection is the known fix (§19). |
+| Q21 | The `invite` records in home have proposed encodings that no SDK writes yet (§6.2). They are settled when the invite flow is implemented. |
+| Q22 | A device keeps an epoch's superseded writes until the next epoch's inventory is fixed (§9.3). A collection that is never rotated keeps them for good. Is a narrower rule safe, for instance dropping at once what the owner's own writes superseded? |
+| Q23 | How a collection, a home and an inbox move to a version 2 (§15). |
 
 ---
 
@@ -997,3 +1057,22 @@ References for the CRDT parts: Shapiro, Preguiça, Baquero, Zawirski, "Conflict-
 | 2026-11-12 | Review (Sol), fifth pass: no protocol finding, one model defect. The model let an invite reopen when a removed member was let back in through another invite; it now reads the roster's history, as §11.3 already said, and §11.1 and §11.3 say so in as many words. A last read of the whole draft added three clarifications and no rule: what a removed member can do about coming back (§3.3), that a discarded draft's channel is the one place a roster copy is destroyed (§10.7), and the prompt for re-adding someone who was removed (§13.2). |
 | 2026-11-12 | Review (Sol), sixth pass: one gap, in how text is compared. Field names, property names, record names and channel tags are equal iff their UTF-8 bytes are; nothing is normalized or case-folded (§9.1, §10.5). Swift's string comparison treats equivalent Unicode spellings as equal and Python's doesn't, so two honest clients could keep different writes. For the same reason base64url has one spelling per value (§5.2). The cost: two field names that look alike can be different fields, which is the app's to avoid, and a Swift client compares bytes, not `String`s. |
 | 2026-11-12 | Findings from the testbed work, folded in before the draft was frozen. Clean-up: two messages that dominate each other need not hold the same writes, so the tie-break by envelope hash now covers every such pair, and byte-identical copies are removed only by the device that made them (§10.7). Bindings, from probing a real server (Stalwart 1.1.0): `invalidArguments` also means a full resync; the push timeout uses the interval the server reports; a JMAP reader checks `isEncodingProblem`; an IMAP connection cap can be per account; a device knows its own messages by envelope hash, because a push can beat the answer to its own append (§10.2–§10.4). A device picks a new device ID whenever the secret is installed on it, so a phone migration can't put one ID on two devices (§5.3, §6.3). |
+| 2026-11-13 | **Second draft.** The frozen draft (`f4ce2e6`) was implemented: a Go reference SDK with test vectors checked by a Swift SDK, JMAP and IMAP bindings run against Stalwart and Fastmail, a durable device engine with crash tests, Lean proofs of the merge, roster and clean-up rules, and 340 scenarios. The rows below are what that changed. Two reviews of the findings (Fable, Sol) agreed on most; where they differed the choice is named. |
+| 2026-11-13 | Key changes: the announcement is the boundary, not the export. A device never *announces* two successors; a draft may always be abandoned; before announcing, and when resuming after a restart, a device checks that its note still names its statement and the parent is still the head; finishing and discarding act only on the note the user was shown; a second signature on one parent comes only after the first draft's removal is on the hub; admitting a member makes the same check between signing and publishing; a note seen in home outweighs a local record of whether its append succeeded (§8.2, §11.6, §11.7). A crash test had reproduced a dead collection under the old wording. |
+| 2026-11-13 | Deletes: a delete has an empty field name and supersedes every write of its record that it includes; only a delete supersedes a delete. A deleted record shrinks to its tombstone, as §12.3 promised. Registers are typed: assign, set element, delete (§9.2). Fable's rule for what a delete supersedes, Sol's typed registers. |
+| 2026-11-13 | A write is identified by its write ID, not by its signature bytes: CryptoKit's Ed25519 is randomized. A roster conflict means two different statement IDs (§5.5, §9.4, §11.6). |
+| 2026-11-13 | Every inventory entry lists at least one write; the empty inventory is `u32(0)` (§8.3). |
+| 2026-11-13 | A data write needs a valid chain of statements back to the genesis. An owner-signed invalid successor counts for the conflict test and ends the chain (§8.3, §9.4). |
+| 2026-11-13 | Encodings the draft had left unsaid: the AAD tag is its b32 text; the genesis has `n = key.n = 0` and a 16-byte `nonce`; home record names spell IDs in b64u; `have` is a statement ID; `v` only on assign and `e` only on add and remove; HLC millis are below 2^48; `_roster` carries nothing but `s`; vectors in JSON must be sorted (Fable's position); pairing and join messages carry a `type`, named `request`, `challenge`, `reply` and `join` (§5.4, §6.2, §6.3, §7.1, §7.3, §9.1, §10.5, §11.2, §11.4). |
+| 2026-11-13 | Signing again: any device of the user signs a late write again. A vector entry for a device's own ID above any dot it issued is forged, and the write is signed again anyway (Fable). A late write the new state merely claims to cover is kept and shown to the app as possibly unshared (Sol). A device's own later write always counts as replacing its earlier one. Both protections were kept (§11.6, §9.3). |
+| 2026-11-13 | A leave notice counts while its signer has been listed without a break from the statement it names to the head (§11.5). |
+| 2026-11-13 | Contexts and bases are built over the register being written, not the whole field: per-field contexts broke add-wins (§9.2). |
+| 2026-11-13 | Split records: a device publishes for healing only when the hub's parts together don't dominate its state; messages are still destroyed one against one. Domination by a set of messages was rejected as unsafe (§10.6, §10.7; Sol's text). |
+| 2026-11-13 | Refused and expired join requests: no new state. A decline is a hint; the joiner stops waiting but stays `requested`; only cancelling sets `left` (§11.3, §11.4; Sol's text). |
+| 2026-11-13 | Pairing messages are cleaned up and the one-time key erased; a lost join or pairing request is posted again until it expires; the HLC is stored durably, and a device that loses it takes a new device ID (§6.3, §12.2, §9.1). |
+| 2026-11-13 | Home's protocol fields have fixed encodings, taken from the reference SDK; no pending change is JSON `null` (§6.2; Sol's finding). The `invite` records are proposed only (Q21). |
+| 2026-11-13 | Fastmail, measured on a dedicated account: push reaches API-token clients but there is one EventSource connection per token; `Tandem-*` headers survive; 100,000 messages in one folder work (a full resync takes about a minute). Q1 and Q2 are closed and Q3 narrowed. **One API token per device on Fastmail** (§10.2, §13.1). A JMAP append reaches IMAP IDLE there about a minute late (§10.3). |
+| 2026-11-13 | A device keeps an epoch's superseded writes until the next inventory is fixed: a write superseded only by a late write that the next epoch doesn't carry is current again there (§9.3). Found by the scenario harness. The cost is local storage (Q22). |
+| 2026-11-13 | "What fits" in an over-full vector keeps the most recent dots (§9.2). A device reads the change feed before sending queued edits, so it never publishes into an epoch that is over (§11.6). |
+| 2026-11-13 | Versioning: a message of an unknown version in a v1 channel is junk and no longer stops healing or clean-up, since one forged message could otherwise switch them off for good. Migration to a version 2 is left undefined (Q23; Sol's position). |
+| 2026-11-13 | Review (Sol) of the second draft: three defects in recovery and transport, none in the cryptography. A crash between the announcement and the home update no longer leaves a note that blocks every later change: recovery completes the home update, and any device of the owner clears a note whose statement is already announced (§11.6, §11.7). A declined join request is no longer posted again by the joiner, which had made a loop with the owner's device destroying it; the user can ask again (§11.2–§11.4, §12.2). A JMAP full resync checks `queryState` across pages and then replays `Email/changes` from a state taken before it started: counting ids up to `total` could silently miss a message (§10.2). |

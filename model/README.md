@@ -21,6 +21,14 @@ not test cryptographic implementations, mail bindings, durable filesystem
 writes, pairing, inbox encryption, the invite channel and its signatures,
 or a production client.
 
+The reference implementation is elsewhere: a Go SDK and device engine, Lean
+proofs and a scenario harness on the `testbed` branch, and real-crypto and
+mail-transport tests in `conformance/`. This Python model stays a small,
+readable check of the roster rules. It does not model three things the draft
+now specifies: a delete superseding other fields' writes (§9.2), the forged-
+claim and possibly-unshared cases of signing again (§11.6), and keeping
+superseded writes until the next inventory (§9.3).
+
 `tandem_model.py`, `rotation_model.py` and their tests are models of
 **withdrawn designs** (ranked administrators, per-device keys, fork choice; see
 DESIGN.md §19). They are kept for the record. Passing those tests says nothing

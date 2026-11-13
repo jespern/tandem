@@ -183,10 +183,13 @@ class Data(unittest.TestCase):
     def test_inventory_encoding_is_deterministic_and_rejects_duplicates(self):
         a, b = record("a"), record("b")
         x, y = digest("x"), digest("y")
-        self.assertEqual(inventory_bytes({a: [x, y], b: []}),
-                         inventory_bytes({b: [], a: [y, x]}))
+        self.assertEqual(inventory_bytes({a: [x, y], b: [x]}),
+                         inventory_bytes({b: [x], a: [y, x]}))
         with self.assertRaises(ValueError):
             inventory_bytes({a: [x, x]})
+        with self.assertRaises(ValueError):                                    # an entry lists at least one write
+            inventory_bytes({a: [x], b: []})
+        self.assertEqual(inventory_bytes({}), bytes(4))                        # the empty inventory is u32(0)
 
     def test_reissue_uses_first_authorizing_statement_after_promotion(self):
         demotion = next_statement(self.log, demote, rotate=True)
@@ -627,6 +630,32 @@ class Rotation(unittest.TestCase):
         mac = self.mac()
         self.assertEqual(mac.admit("X", party, role="writer"), "refused")
         self.assertNotIn("X", mac.log.st[mac.log.head()]["body"]["members"])
+
+    def test_a_crash_right_after_the_announcement_leaves_no_note_behind(self):
+        # Review (Sol): the phone publishes the announcement and dies before it has updated home.
+        # The note still names the change. Carrying on with the grants alone would leave the note
+        # there for good, and every later change to sharing would be refused.
+        s = self.phone.prepare(demote, fresh_key="K1")
+        self.phone.step()                                                      # uploaded
+        old = self.hub.channels[(self.log.genesis, "K0")]
+        old["history"].append(copy.deepcopy(s))                                # announced; the home update is lost
+        self.assertEqual(self.home["flight"]["id"], s["id"])
+        phone = Device("O", copy.deepcopy(self.original), self.hub, self.home, self.phone.store)   # restart
+        self.finish(phone)
+        self.assertIsNone(self.home["flight"])
+        self.assertEqual(self.home["keys"][s["id"]], "K1")
+        self.assertTrue(self.hub.inbox["W"])
+        phone.amend(lambda b: b["members"].update(J="reader"))                 # sharing can change again
+        # The phone never comes back: the Mac sees the same thing and tidies up without being asked what to do.
+        log, hub, home = fixture()
+        gone = Device("O", log, hub, home)
+        s = gone.prepare(demote, fresh_key="K1")
+        gone.step()
+        hub.channels[(log.genesis, "K0")]["history"].append(copy.deepcopy(s))
+        mac = Device("O", family(), hub, home)
+        self.assertEqual(mac.finish_here(), "announced")
+        self.assertIsNone(home["flight"])
+        mac.amend(lambda b: b["members"].update(J="reader"))
 
     def test_a_change_the_hub_hides_from_another_device_kills_the_collection(self):
         # Fails closed: a withholding hub can stop the collection, never hand it to anyone.

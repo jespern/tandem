@@ -88,8 +88,8 @@ def field_key(name):
 def inventory_bytes(inventory):
     out = bytearray(struct.pack(">I", len(inventory)))
     for rec, ids in sorted(inventory.items()):
-        if len(bytes.fromhex(rec)) != 16 or len(set(ids)) != len(ids):
-            raise ValueError("noncanonical record or duplicate write")
+        if len(bytes.fromhex(rec)) != 16 or len(set(ids)) != len(ids) or not ids:
+            raise ValueError("noncanonical record, duplicate write or an entry with no writes")
         out += bytes.fromhex(rec) + struct.pack(">I", len(ids))
         for wid in sorted(ids):
             raw = bytes.fromhex(wid)
