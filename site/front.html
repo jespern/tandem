@@ -141,10 +141,29 @@ The IMAP binding wants a password or an app password.
 This is a draft for review, not a security sign-off.
 </p>
 <p>
-Executable models, cryptographic conformance tests and mail-transport probes
-are kept alongside the draft.
-The participant/device design has selected model and crypto tests;
-its complete wire format, implementation and independent security review remain unfinished.
+The mechanics are <b>formally checked</b>.
+Machine-checked proofs in <a href="https://lean-lang.org">Lean</a> cover
+how edits merge,
+who may change who a list is shared with and what happens when two changes collide,
+cleaning up the mailbox without losing a write,
+sharing and answering,
+admitting, pairing and revoking devices,
+the directory,
+the hub password,
+and the byte encodings that get signed.
+Nothing is left unproved.
+The same definitions run as a test oracle,
+compared against an independent model on thousands of random histories.
+</p>
+<p>
+The proofs take the cryptography as given:
+that ciphers, signatures and Argon2id do their job.
+Conformance tests check the real primitives,
+and mail-transport probes check real servers.
+The step-by-step procedures, such as rotating a key after a crash,
+and the mail binding itself are tested rather than proved.
+The complete wire format, a production implementation
+and an independent security review are still to come.
 </p>
 
 <h2 id="airforce">Why .airforce?</h2>
