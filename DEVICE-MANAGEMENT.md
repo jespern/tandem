@@ -1,7 +1,8 @@
 # Proposal: hub management passwords, device keys and recovery
 
-Status: **proposal for review**, 2026-11-13. This does not edit `DESIGN.md`
-or define a deployable wire version. It replaces the earlier per-user-password
+Status: **rationale for the participant/device architecture draft**, 2026-11-13.
+The design is now integrated in this branch's `DESIGN.md`; neither document
+defines a deployable complete wire version. It replaces the earlier per-user-password
 proposal in this working branch. The governing UX decision is: **the hub admin
 sets the password and saves the recovery key when creating a hub; the hub admin
 authorizes enrollment of other people's devices too**. Joining a hub requires
@@ -69,6 +70,16 @@ key, identity password or identity-recovery chain. Removing one device retires
 that key and rotates exposed home/list keys; the surviving devices continue as
 the same participant, retaining their lists, roles and metadata.
 
+### When the record is created
+
+Creating a hub creates its creator's participant and first device as part of
+setup. Accepting a new-member invitation creates a new participant and its first
+device as part of enrollment; persist that registration/claim so retries do not
+create extra people. The record is pending until admission is authorized.
+Pairing attaches new device keys to the existing record and must not create a
+second participant. None of these flows asks for a personal identity key or
+personal password. Joining another hub creates a separate record there.
+
 ## 2. Keys
 
 Use the draft's strict Ed25519 policy, X25519, HPKE base suite, HKDF-SHA-256 and
@@ -128,8 +139,8 @@ holds MS and its recovery-certificate ID. After decrypting, derive both manager 
 their public halves against the recovery certificate. Independently HPKE-seal MS to
 RKa with a distinct purpose label and the same hub/certificate binding.
 
-The manager signs wrapper metadata and ciphertext. The first wrapper is
-committed by recovery genesis. A replacement names all known current wrappers
+The manager signs wrapper metadata and ciphertext. Recovery genesis fixes the
+manager keys before the first wrapper/recovery box is created. A replacement names all known current wrappers
 as parents, has revision one above its greatest parent, and wraps the same MS.
 Parents are sorted/unique, missing ancestry is held, and IDs hash signature
 inputs rather than randomized signature bytes.
@@ -155,7 +166,7 @@ password/MS compromise requires §8 and a fresh MS, not another wrapper.
 ## 4. Recovery authority and the device registry
 
 A recovery certificate binds hub authority ID, previous certificate ID,
-generation exactly predecessor + 1, both manager public keys, bootstrap commitments,
+generation exactly predecessor + 1, both manager public keys, any creator-bootstrap public keys,
 permitted mailbox descriptors, and the immutable creator member registration. Genesis
 also fixes RKa. RKs signs it; the new MKs proves possession over that exact
 certificate. The recovery key is never encrypted under the management password.
@@ -168,8 +179,13 @@ An invalid genuine root-signed control decision is also a recovery failure;
 start a new hub authority and migrate readable data. No automatic root-key
 replacement or device-seniority rule exists.
 
-The device registry is a set of immutable manager-signed certificates and
-permanent manager-signed revocations. Union merges certificates and revocations;
+The device registry is a set of immutable manager-authorized certificates and
+permanent manager-signed revocations. Existing-member pairing requires direct
+manager certification of the exact target keys. New-member first admission may
+use the purpose-limited manager capability plus invite-key-signed exact
+registration/claim and both device-key proofs; that composite chain authorizes
+only a newly computed registration, never an arbitrary existing member ID.
+Union merges certificates and revocations;
 removal wins. A revocation commits the exact certificate/public keys being
 retired and the fixed set of member device certificates retained at that cut, so
 issuing a new certificate for the same keys cannot resurrect them under an
@@ -178,6 +194,15 @@ that reset. The recovery operator must gather surviving replicas and review
 that cut: a receiver cannot merge excluded old-manager facts back into the new
 generation to compensate for an incomplete checkpoint. Concurrent device
 additions and concurrent removals do not create competing device registries.
+
+Manager signature alone is insufficient: existing-member admission requires
+that member's independently verified device authorization, either an exact
+request signature or the signed delegation plus bearer target claim (§5).
+Initial admission proves the new registration and both device keys. Creator
+recovery is restricted to the immutable creator and root-authorized fresh
+bootstrap keys. Issuance proofs bind the full target keys, dot namespace,
+participant, hub, root and revocation cut; source authorization is judged at
+that immutable cut, not retroactively against a later revocation.
 
 Each certificate has an **issuance snapshot**, the exact known certificate and
 revocation IDs against which member authorization was checked. A valid new
@@ -321,8 +346,8 @@ one explicit action or displayed batch, then release/wipe buffers on completion,
 cancellation, backgrounding or lock. Malware present during password entry can
 steal MS. Managed runtimes cannot promise perfect memory erasure.
 
-An ordinary invitation for a **new member** remains separate. It may preauthorize
-new-member admission through a manager-signed, purpose-limited invitation key;
+An ordinary invitation for a **new member** remains separate. The integrated
+draft preauthorizes first admission through a manager-signed, purpose-limited invitation key;
 it cannot reuse this path to claim an existing member ID. Its bounded delegation
 and forwarding risks still require explicit wire validation.
 
@@ -396,10 +421,11 @@ a management seed the attacker already copied.
    Create a fresh creator device keypair. Do not inherit opaque pending
    invitations or unidentified devices from the compromised manager.
 2. Build root generation g+1, linked to the exact preceding root certificate.
-   Bind fresh manager keys, capsule/recovery-box commitments, the new creator
-   certificate and a fixed inventory of retained old certificate/revocation IDs
+   Bind fresh manager keys, fresh creator public keys and a fixed inventory of retained old certificate/revocation IDs
    and their complete proof dependencies.
-   Only RKs can sign it. Old-manager objects absent from that inventory are
+   Only RKs can sign it. Create the new creator certificate and manager-signed
+   capsule/recovery boxes against this root after its ID exists; do not create
+   circular root/wrapper/certificate commitments. Old-manager objects absent from that inventory are
    historical only: they cannot arrive later and revoke a renewed member or
    smuggle an extra device into the new generation. Missing inventoried proofs
    hold the dependent operations; they are not silently discarded.
@@ -535,5 +561,6 @@ They use the existing Python wire primitives and do not test Swift or the full
 enrollment controller.
 The 51 collection-model tests on this branch's base (`3f601c6`) also pass.
 Those are historical collection checks, not validation of the new complete wire
-profile. The proposed architecture still needs an independent security review
-and the implementation evidence above before integration into DESIGN.md.
+profile. Integration into the draft is a design decision, not security approval:
+the architecture still needs independent review and the implementation evidence
+above before adoption by the SDKs.
