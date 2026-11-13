@@ -19,14 +19,18 @@ type ChangeBatch struct {
 }
 type Wake struct{ Err error }
 
-// PushStore.Watch returns only once the live subscription is active. It buffers
-// invalidations until read, and emits one after reconnecting. Changes reconciles
-// from a cursor; it is called only at startup, after push/reconnect, or after Append.
-// Implementations serialize IMAP commands with IDLE/DONE and resume IDLE afterwards.
+// PushStore is the abstract store of DESIGN §10.1. Watch returns only once the live
+// subscription is active. It buffers invalidations until read, and emits one after
+// reconnecting. Changes reconciles from a cursor; it is called only at startup, after
+// push/reconnect, or after Append. Fetch reads messages by ID, leaving out those that
+// don't decode (§10.4); Destroy removes them for good (§10.7). Implementations
+// serialize IMAP commands with IDLE/DONE and resume IDLE afterwards.
 type PushStore interface {
 	Watch(context.Context) (<-chan Wake, error)
 	Changes(context.Context, string) (ChangeBatch, error)
 	Append(context.Context, string, []byte) (string, error)
+	Fetch(context.Context, []string) ([]Message, error)
+	Destroy(context.Context, []string) error
 	Close() error
 }
 type submission struct {

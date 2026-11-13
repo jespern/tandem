@@ -360,7 +360,9 @@ func (s *fakePushStore) Append(ctx context.Context, channel string, body []byte)
 	s.added = append(s.added, Message{"local", channel, bytes.Clone(body)})
 	return "local", nil
 }
-func (s *fakePushStore) Close() error { s.mu.Lock(); defer s.mu.Unlock(); s.closed = true; return nil }
+func (s *fakePushStore) Fetch(context.Context, []string) ([]Message, error) { return nil, nil }
+func (s *fakePushStore) Destroy(context.Context, []string) error            { return nil }
+func (s *fakePushStore) Close() error                                       { s.mu.Lock(); defer s.mu.Unlock(); s.closed = true; return nil }
 
 func TestSessionPushSubmitReconnectAndClose(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
