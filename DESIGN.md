@@ -233,7 +233,7 @@ Each write (§9.1) is signed over this exact byte string (independent of JSON fo
 
 ```
 sigInput = "TANDEM-WRITE-V2"                 (15 ASCII bytes)
-        || hubID (32)                        # pinned recovery public key
+        || hubID (32)                        # pub(MKs), the hub's identity (§5.3)
         || scopeID (16)                      # collection ID, or the user's home scope (§6.2); zero in a genesis
         || recordID (16)
         || lp(fieldName UTF-8)               # empty for a delete
@@ -262,7 +262,7 @@ Signatures live **inside** the ciphertext, so message contents tell the hub noth
 
 **Verification is strict and the same everywhere.** Whether a write is valid must not depend on which library checked it, or two honest clients could disagree and diverge. A verifier MUST reject a signature whose `S` is not below the group order, MUST reject a public key or `R` that isn't a canonical point encoding, MUST reject a small-order public key, and MUST check the plain equation `[S]B = R + [k]A`. RFC 8032 §5.1.7 permits either that or the cofactored form; Tandem fixes the choice. Libraries that verify in batches or with the cofactored equation accept signatures the others reject and MUST NOT be used.
 
-Other signed objects (grants, key requests, leave notices and pairing challenges) use their own `TANDEM-…-V2` prefixes, given where they're defined, so a signature can never be replayed as a different kind of object.
+Other signed objects (grants, key requests, leave notices and pairing challenges) use their own `TANDEM-…-V2` prefixes, so a signature can never be replayed as a different kind of object. Those prefixes are fixed with the objects' encodings (Q28); none is defined yet.
 
 ### 5.6 Channels and tags
 
