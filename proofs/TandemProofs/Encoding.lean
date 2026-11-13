@@ -252,7 +252,7 @@ def kdfUses : List (String × String) :=
    ("CK", "tandem/v2/admin-capsule"),
    ("K", "tandem/v2/msg"), ("K", "tandem/v2/collection-tag"),
    ("HK", "tandem/v2/msg"), ("HK", "tandem/v2/home-tag"),
-   ("HubK", "tandem/v2/directory-key"), ("HubK", "tandem/v2/directory-tag"),
+   ("HubK", "tandem/v2/directory-key"), ("HubK", "tandem/v2/directory-tag"), ("HubK", "tandem/v2/wake-tag"),
    ("DirK", "tandem/v2/msg"),
    ("PairK", "tandem/v2/msg"),
    ("L || A", "tandem/v2/pair-package"),

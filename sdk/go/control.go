@@ -623,6 +623,8 @@ func PairingKey(link, hub, token []byte) []byte {
 func PairingTag(link, hub, token []byte) string {
 	return B32(KDF(link, cat(hub, token), "tandem/v2/pair-tag", 20))
 }
+// WakeTag is the opaque tag a wake hint names (§10.3).
+func WakeTag(directoryKey, hub []byte) string { return B32(KDF(directoryKey, hub, "tandem/v2/wake-tag", 20)) }
 func DirectoryScope(hub []byte) []byte { return H([]byte("tandem/v2/directory"), hub)[:16] }
 
 // RegistrationID is the participant ID uid (§5.3).

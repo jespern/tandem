@@ -23,9 +23,40 @@ public enum DeviceEvent: Hashable, Sendable {
     case revoked
     /// A sync failed; the next push or `sync()` tries again. The message is for logs.
     case syncFailed(String)
+    /// This device put something on the hub: the cue to send a wake hint naming `wakeTag`, if the app sends any.
+    case published
+}
+
+/// Lets the device hear of its own appends, wherever they happen, to announce `.published`.
+final class PublishWatch: @unchecked Sendable {
+    weak var device: Device?
+}
+
+/// The hub connection as the device uses it: every append is reported once it is on the hub.
+struct Watched: PushStore {
+    let inner: any PushStore, watch: PublishWatch
+    func watch() async throws -> AsyncThrowingStream<Void, any Error> { try await inner.watch() }
+    func changes(since cursor: String) async throws -> ChangeBatch { try await inner.changes(since: cursor) }
+    func append(channel: String, body: Bytes) async throws -> String {
+        let id = try await inner.append(channel: channel, body: body)
+        await watch.device?.didPublish()
+        return id
+    }
+    func fetch(ids: [String]) async throws -> [Message] { try await inner.fetch(ids: ids) }
+    func destroy(ids: [String]) async throws { try await inner.destroy(ids: ids) }
+    func close() async { await inner.close() }
 }
 
 extension Device {
+    /// The opaque tag a wake hint for this hub names (§10.3). Every participant's devices compute the same one; it
+    /// reveals nothing else. Subscribe to hints for it, and send one on `.published`.
+    public nonisolated var wakeTag: String { Control.wakeTag(directoryKey: directoryKey, hub: pin.hub) }
+
+    func didPublish() {
+        changed(.published)
+        if syncing == nil { flushEvents() }   // within a sync, sent once at its end
+    }
+
     /// A stream of what changes, from now on. Each call is its own subscriber; ending the loop unsubscribes.
     public func events() -> AsyncStream<DeviceEvent> {
         let (stream, continuation) = AsyncStream<DeviceEvent>.makeStream()

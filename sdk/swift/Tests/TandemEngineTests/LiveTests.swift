@@ -86,4 +86,23 @@ final class LiveTests: XCTestCase {
         XCTAssertTrue(wrote)
         _ = try await Self.next(bobEvents) { if case let .items(l, r) = $0 { return l == list && r.contains(bread) }; return false }
     }
+
+    /// §10.3 wake hints: every participant's device names the same opaque tag, and a device says when it published.
+    func testWakeHints() async throws {
+        let hub = MemoryHub(), bobKeys = DeviceKeys()
+        let f = try Founder.found(account: account, keys: bobKeys, label: "Bob’s iPhone")
+        let bob = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: bobKeys, store: try Store(path: ":memory:"),
+                                  hub: await hub.connect())
+        try await bob.publish(f)
+        let alice = try await Device.join(link: try await bob.invite(label: "Alice", account: account, ms: f.managementSeed),
+                                          keys: DeviceKeys(), label: "Alice’s iPhone", store: try Store(path: ":memory:"),
+                                          hub: await hub.connect())
+        XCTAssertEqual(alice.wakeTag, bob.wakeTag)
+        let other = try Founder.found(account: account, keys: DeviceKeys(), label: "x")
+        XCTAssertNotEqual(Control.wakeTag(directoryKey: other.directoryKey, hub: other.pin.hub), bob.wakeTag)
+        let events = await bob.events()
+        let list = try await bob.createList(name: "Groceries")
+        _ = try await Self.next(events) { $0 == .published }
+        _ = list
+    }
 }

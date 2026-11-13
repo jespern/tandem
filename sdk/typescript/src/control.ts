@@ -184,6 +184,8 @@ export const pairingInviteKey = (link: Uint8Array, hub: Uint8Array, token: Uint8
   privateKey(pairing(link, hub, token, 'tandem/v2/pair-invite'), 'ed25519');
 export const pairingKey = (link: Uint8Array, hub: Uint8Array, token: Uint8Array): Buffer => pairing(link, hub, token, 'tandem/v2/pair-key');
 export const pairingTag = (link: Uint8Array, hub: Uint8Array, token: Uint8Array): string => b32(pairing(link, hub, token, 'tandem/v2/pair-tag', 20));
+/** The opaque tag a wake hint names (§10.3). */
+export const wakeTag = (directoryKey: Uint8Array, hub: Uint8Array): string => b32(kdf(bytes(directoryKey, 32), bytes(hub, 32), 'tandem/v2/wake-tag', 20));
 export const directoryScope = (hub: Uint8Array): Buffer => sha(Buffer.from('tandem/v2/directory'), bytes(hub, 32)).subarray(0, 16);
 export const registrationID = (hub: Uint8Array, signPublic: Uint8Array, agreePublic: Uint8Array, enrollment: Uint8Array): Buffer =>
   objectID('registration', {hub, sign: signPublic, agree: agreePublic, enrollment});

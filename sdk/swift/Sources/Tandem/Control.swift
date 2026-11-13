@@ -160,6 +160,10 @@ public enum Control {
     public static func pairingTag(link: Bytes, hub: Bytes, token: Bytes) -> String {
         B32.encode(KDF(link, salt: hub + token, info: "tandem/v2/pair-tag", count: 20))
     }
+    /// The opaque tag a wake hint names (§10.3): computable by the hub's participants, nothing else.
+    public static func wakeTag(directoryKey: Bytes, hub: Bytes) -> String {
+        B32.encode(KDF(directoryKey, salt: hub, info: "tandem/v2/wake-tag", count: 20))
+    }
     public static func directoryScope(hub: Bytes) -> Bytes { Array(H(Bytes("tandem/v2/directory".utf8), hub).prefix(16)) }
     public static func registrationID(hub: Bytes, sign: Bytes, agree: Bytes, enrollment: Bytes) throws -> Bytes {
         try ControlObject(kind: "registration", fields: ["hub": .id(hub), "sign": .id(sign), "agree": .id(agree),

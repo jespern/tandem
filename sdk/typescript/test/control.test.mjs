@@ -46,6 +46,7 @@ test('control derivations and boxes open to the vectors', () => {
   assert.equal(t.publicKey(t.pairingInviteKey(m.link, hub, m.token)).toString('hex'), d.pairing_invite_key);
   assert.equal(t.pairingKey(m.link, hub, m.token).toString('hex'), d.pairing_key);
   assert.equal(t.pairingTag(m.link, hub, m.token), d.pairing_tag);
+  assert.equal(t.wakeTag(m.directory_key, hub), d.wake_tag);
   assert.equal(t.directoryScope(hub).toString('hex'), d.directory_scope);
   assert.equal(t.publicKey(manager.agreement).toString('hex'), d.manager_agreement);
   assert.deepEqual(t.openPackage(m.link, m.gate_secret, hub, m.token, hex(d.package)), hex(d.package_plaintext));

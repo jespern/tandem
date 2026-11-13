@@ -69,6 +69,7 @@ for await event in events { refreshUI(for: event) }
 | `.approved` | a paired device is in: `awaitingApproval` is false |
 | `.revoked` | this device's keychain was revoked (`isRevoked`): show it, stop writing, offer to re-pair |
 | `.syncFailed(String)` | log it |
+| `.published` | this device put something on the hub: send a wake hint, if the app has a hint channel (below) |
 
 Events are coarse refresh signals, sent after each sync and each local write. Several subscribers are fine.
 
@@ -185,9 +186,23 @@ Share and widget extensions can't run the live sync, but they can write: open th
 
 Any IMAP server with IDLE works. Measured: Fastmail (Cyrus) about 0.5 s from one device's append to another's push; Stalwart milliseconds; Gmail about 30 s by itself, 9–12 s with the SDK's IDLE restart every 3 s (automatic on Gmail). Outlook.com doesn't allow the app passwords this needs. Use an app password, never the account password.
 
+## Running in the background
+
+IMAP IDLE runs while the app runs; the Mac app, which stays running, gets every change live. A suspended iOS app keeps no connection. Decided for the first version: it syncs when it is opened, and whenever iOS grants it background time.
+
+- **Background refresh.** Add the "Background fetch" mode and a task identifier (`BGTaskSchedulerPermittedIdentifiers`) to `Info.plist`. At launch, `BGTaskScheduler.shared.register(forTaskWithIdentifier:)` with a handler that calls `try await device.sync()`, schedules the next `BGAppRefreshTaskRequest`, and calls `setTaskCompleted`. iOS decides when it runs, from a few times an hour for an app used daily to a few times a day; each run has about 30 seconds.
+- **On the way out.** When the app goes to the background, wrap the last sends in `beginBackgroundTask` so a just-made edit leaves the device.
+
+**Wake hints, later, and never relied on.** Tandem exists so that the app depends on no cloud. A wake hint (`DESIGN.md` §10.3) only tells a device "something changed on this hub, sync now": it names `device.wakeTag`, an opaque tag every participant's devices compute the same, and carries no data, no key and no content. A lost, late or forged hint costs at most one sync or one delay, and with no hint channel at all everything still converges. So the channel is a plug-in the app may add and may drop:
+
+- send one on `DeviceEvent.published` (coalesce a burst into one);
+- on receiving one, call `device.sync()` (in the background, inside the time iOS gives a push);
+- keep it outside the SDK: the SDK has no dependency on any channel.
+
+For Liszto the first channel is CloudKit, which it already uses: a record type in the **public** database, `Wake`, with one field `tag`; a device that publishes saves (or touches) the `Wake` record for its tag, and every device subscribes with a `CKQuerySubscription` on `tag == device.wakeTag` and a silent notification (`shouldSendContentAvailable`). Apple then learns which devices share a tag and when a hub is busy, nothing more. Without an iCloud account, or if Apple throttles silent pushes, the app falls back to background refresh and opening. Another channel (a small relay, an Android push service) can replace it with no change to the SDK or the hub.
+
 ## Not like CloudKit
 
-- **Background.** IMAP IDLE runs while the app runs. A suspended iOS app gets no silent push: it syncs when opened, and whenever the system grants it background time (`BGAppRefreshTask` calling `sync()`). There is no push relay. Decide whether that's enough for Liszto; the Mac app, which stays running, gets every change live.
 - **Account events.** There is no account to sign out of. A revoked device (`.revoked`) is the closest: keep the replica read-only and offer to pair again.
 - **Quotas.** The hub is a mailbox: the SDK keeps about one message per record (old ones are collected), but a deleted record keeps a small tombstone for good.
 

@@ -267,6 +267,11 @@ def pairing_tag(link: bytes, hub: bytes, token: bytes) -> str:
     return b32(kdf(link, hub + token, "tandem/v2/pair-tag", 20))
 
 
+def wake_tag(directory_key: bytes, hub: bytes) -> str:
+    """The opaque tag a wake hint names (§10.3): computable by the hub's participants, nothing else."""
+    return b32(kdf(directory_key, hub, "tandem/v2/wake-tag", 20))
+
+
 def directory_scope(hub: bytes) -> bytes:
     return sha(b"tandem/v2/directory", hub)[:16]
 

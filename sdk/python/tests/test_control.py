@@ -36,7 +36,7 @@ class ControlVectors(unittest.TestCase):
 
     def test_derivations_and_boxes(self):
         m = {k: bytes.fromhex(v) for k, v in VECTORS["material"].items()}
-        d = {k: (bytes.fromhex(v) if k != "pairing_tag" else v) for k, v in VECTORS["derived"].items()}
+        d = {k: (bytes.fromhex(v) if k not in ("pairing_tag", "wake_tag") else v) for k, v in VECTORS["derived"].items()}
         mks, mka = t.manager_keys(m["management_seed"])
         hub = t.public(mks)
         self.assertEqual(t.public(c.invite_key(m["invite_secret"], hub, m["invite"])), d["invite_key"])
@@ -44,6 +44,7 @@ class ControlVectors(unittest.TestCase):
         self.assertEqual(c.pairing_key(m["link"], hub, m["token"]), d["pairing_key"])
         self.assertEqual(c.pairing_tag(m["link"], hub, m["token"]), d["pairing_tag"])
         self.assertEqual(c.directory_scope(hub), d["directory_scope"])
+        self.assertEqual(c.wake_tag(m["directory_key"], hub), d["wake_tag"])
         self.assertEqual(t.public(mka), d["manager_agreement"])
         self.assertEqual(c.open_package(m["link"], m["gate_secret"], hub, m["token"], d["package"]),
                          d["package_plaintext"])

@@ -65,6 +65,7 @@ final class ControlTests: XCTestCase {
         XCTAssertEqual(Control.pairingKey(link: m["link"]!, hub: hub, token: m["token"]!).hex, d["pairing_key"])
         XCTAssertEqual(Control.pairingTag(link: m["link"]!, hub: hub, token: m["token"]!), d["pairing_tag"])
         XCTAssertEqual(Control.directoryScope(hub: hub).hex, d["directory_scope"])
+        XCTAssertEqual(Control.wakeTag(directoryKey: m["directory_key"]!, hub: hub), d["wake_tag"])
         XCTAssertEqual(Bytes(manager.agreement.publicKey.rawRepresentation).hex, d["manager_agreement"])
         let package = hex(d["package"])
         XCTAssertEqual(try Control.openPackage(link: m["link"]!, gate: m["gate_secret"]!, hub: hub, token: m["token"]!,

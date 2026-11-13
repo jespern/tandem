@@ -171,6 +171,9 @@ func TestControlDerivationsAndBoxes(t *testing.T) {
 	if PairingTag(m("link"), hub, m("token")) != v.Derived["pairing_tag"] {
 		t.Error("pairing tag")
 	}
+	if WakeTag(m("directory_key"), hub) != v.Derived["wake_tag"] {
+		t.Error("wake tag")
+	}
 	if !bytes.Equal(DirectoryScope(hub), d("directory_scope")) {
 		t.Error("directory scope")
 	}

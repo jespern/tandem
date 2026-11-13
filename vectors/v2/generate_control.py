@@ -219,9 +219,9 @@ def generate():
 
     derived = dict(invite_key=public(invite_key), pairing_invite_key=public(pair_key),
                    pairing_key=c.pairing_key(link, hub, token), pairing_tag=c.pairing_tag(link, hub, token),
-                   directory_scope=c.directory_scope(hub), manager_agreement=public(mka),
+                   directory_scope=c.directory_scope(hub), manager_agreement=public(mka), wake_tag=c.wake_tag(hubk, hub),
                    package=package, package_plaintext=package_plain, gate=gate, home_recovery=recovery)
-    secrets = dict(management_seed=ms, invite_secret=invite_secret, invite=invite, link=link, gate_secret=gate_secret,
+    secrets = dict(management_seed=ms, directory_key=hubk, invite_secret=invite_secret, invite=invite, link=link, gate_secret=gate_secret,
                    token=token, home_epoch=home0, creator_home_key=creator_home_key)
     hexed = lambda d: {k: (v.hex() if isinstance(v, bytes) else v) for k, v in d.items()}
     return dict(description="Public Tandem v2 control-object vectors (§10.8). Test material only.",

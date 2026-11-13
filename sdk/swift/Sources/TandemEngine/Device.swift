@@ -16,7 +16,7 @@ public actor Device {
     public nonisolated let pin: HubPin
     let store: Store
     let hub: any PushStore
-    let directoryKey: Bytes
+    nonisolated let directoryKey: Bytes
     let keys: DeviceKeys?
     public internal(set) var registry: Registry
     public internal(set) var me: Me?
@@ -61,7 +61,9 @@ public actor Device {
     var directoryChannelKey: Bytes { Tandem.directoryKey(directoryKey, hub: pin.hub) }
 
     init(pin: HubPin, directoryKey: Bytes, keys: DeviceKeys?, store: Store, hub: any PushStore) throws {
-        self.pin = pin; self.directoryKey = directoryKey; self.keys = keys; self.store = store; self.hub = hub
+        let watch = PublishWatch()
+        self.pin = pin; self.directoryKey = directoryKey; self.keys = keys; self.store = store
+        self.hub = Watched(inner: hub, watch: watch)
         registry = Registry(pin: pin)
         for o in try store.objects() {
             switch o.kind {
@@ -116,6 +118,7 @@ public actor Device {
             c.offer(key: key, epoch: o.epoch)
             collections[o.collection] = c
         }
+        watch.device = self
     }
 
     /// Open a hub this device has the details of: its genesis (pinned at setup, invitation or pairing) and
