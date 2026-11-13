@@ -7,3 +7,6 @@ sdk/typescript/dist/
 sdk/python/.venv/
 **/__pycache__/
 **/*.egg-info/
+
+sdk/typescript/test-results/
+sdk/typescript/playwright-report/

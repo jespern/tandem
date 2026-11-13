@@ -4,6 +4,7 @@ import json
 import os
 import re
 import selectors
+import socket
 import subprocess
 import time
 import uuid
@@ -43,11 +44,23 @@ def listeners(name, wanted, timeout=45):
 
 
 class Stalwart:
+    def __init__(self, browser=False):
+        self.browser = browser
+
     def __enter__(self):
         self.name = 'tandem-test-' + uuid.uuid4().hex[:12]
         try:
-            docker('run', '-d', '--name', self.name, '--init', '-p', '127.0.0.1::8080', '-p', '127.0.0.1::443',
-                   '-p', '127.0.0.1::993', '-e', 'STALWART_RECOVERY_ADMIN=admin:conformance-test-only', IMAGE)
+            extra, https_binding = [], '127.0.0.1::443'
+            if self.browser:
+                # A real browser must follow the server's advertised URLs, not
+                # rewrite them or bypass CORS as the native fixture can.
+                with socket.socket() as reservation:
+                    reservation.bind(('127.0.0.1', 0))
+                    port = reservation.getsockname()[1]
+                https_binding = f'127.0.0.1:{port}:443'
+                extra = ['-e', f'STALWART_PUBLIC_URL=https://127.0.0.1:{port}']
+            docker('run', '-d', '--name', self.name, '--init', '-p', '127.0.0.1::8080', '-p', https_binding,
+                   '-p', '127.0.0.1::993', '-e', 'STALWART_RECOVERY_ADMIN=admin:conformance-test-only', *extra, IMAGE)
             listeners(self.name, {8080})
             self.inspect()
             origin = 'http://127.0.0.1:' + str(self.ports[8080])

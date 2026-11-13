@@ -1,4 +1,6 @@
-import {randomBytes, type KeyObject} from 'node:crypto';
+import {Buffer} from "buffer";
+import {randomBytes} from './crypto.js';
+import type {PrivateKey} from './key.js';
 import {bytes, sha, kdf, b32, b64u, unb64u, sign, verifyStrict, privateKey, encrypt, decrypt, sealHPKE, openHPKE} from './crypto.js';
 import {parseJSON, validUnicode, type JSONValue} from './json.js';
 
@@ -99,7 +101,7 @@ export function signedInput(kind: string, fields: Fields): Buffer {
   return Buffer.concat([Buffer.from(s.tag, 'ascii'), ...s.fields.map(([name, type]) => fieldBytes(type, fields[name]))]);
 }
 export const objectID = (kind: string, fields: Fields): Buffer => sha(signedInput(kind, fields));
-export const signControl = (kind: string, fields: Fields, key: KeyObject): Buffer => sign(key, signedInput(kind, fields));
+export const signControl = (kind: string, fields: Fields, key: PrivateKey): Buffer => sign(key, signedInput(kind, fields));
 export const verifyControl = (kind: string, fields: Fields, signerPublic: Uint8Array, signature: Uint8Array): boolean =>
   verifyStrict(signerPublic, signature, signedInput(kind, fields));
 
@@ -176,11 +178,11 @@ export function parseControl(value: JSONValue, expect?: string): ControlObject {
 export const controlFromJSON = (data: Uint8Array, expect?: string): ControlObject => parseControl(parseJSON(data), expect);
 
 // ---- Derivations and boxes (§10.8) ----
-export const inviteKey = (secret: Uint8Array, hub: Uint8Array, invite: Uint8Array): KeyObject =>
+export const inviteKey = (secret: Uint8Array, hub: Uint8Array, invite: Uint8Array): PrivateKey =>
   privateKey(kdf(secret, Buffer.concat([bytes(hub, 32), bytes(invite, 16)]), 'tandem/v2/invite-key'), 'ed25519');
 const pairing = (link: Uint8Array, hub: Uint8Array, token: Uint8Array, info: string, size = 32): Buffer =>
   kdf(bytes(link, 32), Buffer.concat([bytes(hub, 32), bytes(token, 16)]), info, size);
-export const pairingInviteKey = (link: Uint8Array, hub: Uint8Array, token: Uint8Array): KeyObject =>
+export const pairingInviteKey = (link: Uint8Array, hub: Uint8Array, token: Uint8Array): PrivateKey =>
   privateKey(pairing(link, hub, token, 'tandem/v2/pair-invite'), 'ed25519');
 export const pairingKey = (link: Uint8Array, hub: Uint8Array, token: Uint8Array): Buffer => pairing(link, hub, token, 'tandem/v2/pair-key');
 export const pairingTag = (link: Uint8Array, hub: Uint8Array, token: Uint8Array): string => b32(pairing(link, hub, token, 'tandem/v2/pair-tag', 20));
@@ -207,11 +209,11 @@ const gateAAD = (hub: Uint8Array, token: Uint8Array, participant: Uint8Array): B
 /** A, HPKE-sealed to MKa. */
 export const sealGate = (managerAgreePublic: Uint8Array, hub: Uint8Array, token: Uint8Array, participant: Uint8Array, gateSecret: Uint8Array): Buffer =>
   sealHPKE(managerAgreePublic, 'tandem/v2/pair-gate', gateAAD(hub, token, participant), gateSecret);
-export const openGate = (managerAgree: KeyObject, hub: Uint8Array, token: Uint8Array, participant: Uint8Array, gate: Uint8Array): Buffer =>
+export const openGate = (managerAgree: PrivateKey, hub: Uint8Array, token: Uint8Array, participant: Uint8Array, gate: Uint8Array): Buffer =>
   openHPKE(managerAgree, 'tandem/v2/pair-gate', gateAAD(hub, token, participant), gate);
 const recoveryAAD = (hub: Uint8Array, epoch: Uint8Array): Buffer => Buffer.concat([Buffer.from('TANDEM-HOME-RECOVERY-V2'), bytes(hub, 32), bytes(epoch, 32)]);
 /** The creator's home key, HPKE-sealed to MKa (§6.8). */
 export const sealHomeRecovery = (managerAgreePublic: Uint8Array, hub: Uint8Array, epoch: Uint8Array, homeKey: Uint8Array): Buffer =>
   sealHPKE(managerAgreePublic, 'tandem/v2/home-recovery', recoveryAAD(hub, epoch), homeKey);
-export const openHomeRecovery = (managerAgree: KeyObject, hub: Uint8Array, epoch: Uint8Array, box: Uint8Array): Buffer =>
+export const openHomeRecovery = (managerAgree: PrivateKey, hub: Uint8Array, epoch: Uint8Array, box: Uint8Array): Buffer =>
   openHPKE(managerAgree, 'tandem/v2/home-recovery', recoveryAAD(hub, epoch), box);

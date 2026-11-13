@@ -125,7 +125,8 @@ final class CoreTests: XCTestCase {
         }
         let v = try fixture("core.json"), m = v["material"] as! [String: String]
         let key = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: hex(m["agreement_private"]))
-        for language in ["go", "python", "typescript", "swift"] {
+        for file in try FileManager.default.contentsOfDirectory(atPath: directory).sorted() where file.hasSuffix(".json") {
+            let language = String(file.dropLast(5))
             let data = try Data(contentsOf: URL(fileURLWithPath: directory).appendingPathComponent(language + ".json"))
             let artifact = try JSONSerialization.jsonObject(with: data) as! [String: String]
             XCTAssertTrue(Ed25519.verify(signature: hex(artifact["signature"]), message: hex(v["plaintext"]), publicKey: hex(m["signing_public"])), language)

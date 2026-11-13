@@ -1,16 +1,16 @@
-import { createHash, createHmac, hkdfSync, randomBytes, createCipheriv, createDecipheriv,
-  createPrivateKey, createPublicKey, diffieHellman, sign as nativeSign,
-  type KeyObject } from 'node:crypto';
+import {Buffer} from "buffer";
+import {randomBytes, hash256, hash512, hmac256, hkdf, privateKey, publicKey, sign, sharedSecret, encrypt, decrypt} from "#platform-crypto";
+import type {PrivateKey} from "./key.js";
+export {randomBytes, privateKey, publicKey, sign, encrypt, decrypt};
+export type {PrivateKey} from "./key.js";
 
-export const sha = (...parts: Uint8Array[]): Buffer => {
-  const h = createHash('sha256'); for (const p of parts) h.update(p); return h.digest();
-};
+export const sha = (...parts: Uint8Array[]): Buffer => Buffer.from(hash256(Buffer.concat(parts)));
 export const kdf = (key: Uint8Array, salt: Uint8Array, info: string, size = 32): Buffer =>
-  Buffer.from(hkdfSync('sha256', key, salt, Buffer.from(info, 'ascii'), size));
-export const b64u = (value: Uint8Array): string => Buffer.from(value).toString('base64url');
+  Buffer.from(hkdf(key, salt, Buffer.from(info, 'ascii'), size));
+export const b64u = (value: Uint8Array): string => Buffer.from(value).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 export function unb64u(text: string): Buffer {
   if (typeof text !== 'string' || !/^[A-Za-z0-9_-]*$/.test(text)) throw new Error('invalid base64url');
-  const b = Buffer.from(text, 'base64url'); if (b64u(b) !== text) throw new Error('noncanonical base64url'); return b;
+  const b = Buffer.from(text.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - text.length % 4) % 4), 'base64'); if (b64u(b) !== text) throw new Error('noncanonical base64url'); return b;
 }
 const alphabet = 'abcdefghijklmnopqrstuvwxyz234567';
 export function b32(bytes: Uint8Array): string {
@@ -28,15 +28,7 @@ export function bytes(value: Uint8Array, n?: number): Buffer {
   if (!(value instanceof Uint8Array) || (n !== undefined && value.length !== n)) throw new Error('invalid byte length or type');
   return Buffer.from(value);
 }
-export function privateKey(raw: Uint8Array, kind: 'ed25519' | 'x25519'): KeyObject {
-  return createPrivateKey({key: Buffer.concat([Buffer.from(kind === 'ed25519' ? '302e020100300506032b657004220420' : '302e020100300506032b656e04220420', 'hex'), bytes(raw, 32)]), format: 'der', type: 'pkcs8'});
-}
-function pubKey(raw: Uint8Array, kind: 'ed25519' | 'x25519'): KeyObject {
-  return createPublicKey({key: Buffer.concat([Buffer.from(kind === 'ed25519' ? '302a300506032b6570032100' : '302a300506032b656e032100', 'hex'), bytes(raw, 32)]), format: 'der', type: 'spki'});
-}
-export const publicKey = (key: KeyObject): Buffer => Buffer.from(createPublicKey(key).export({format: 'der', type: 'spki'})).subarray(-32);
-export const sign = (key: KeyObject, input: Uint8Array): Buffer => nativeSign(null, input, key);
-export function deviceKeys(): {signing: KeyObject; agreement: KeyObject} {
+export function deviceKeys(): {signing: PrivateKey; agreement: PrivateKey} {
   return {signing: privateKey(randomBytes(32), 'ed25519'), agreement: privateKey(randomBytes(32), 'x25519')};
 }
 /** Keep this ID and its durable clock per installation; never sync them with keys. */
@@ -100,7 +92,7 @@ export function verifyStrict(publicBytes: Uint8Array, signature: Uint8Array, mes
   try {
     const a = point(publicBytes), r = point(signature.subarray(0, 32));
     if (equalPoint(multiply(a, 8n), identity)) return false;
-    const hash = createHash('sha512').update(signature.subarray(0, 32)).update(publicBytes).update(message).digest();
+    const hash = hash512(Buffer.concat([signature.subarray(0, 32), publicBytes, message]));
     return equalPoint(multiply(basePoint, little(signature.subarray(32))), add(r, multiply(a, little(hash) % L)));
   } catch { return false; }
 }
@@ -117,17 +109,6 @@ export const aad = (kind: number, hub: Uint8Array, tag: string): Buffer => Buffe
 function context(key: Uint8Array, hub: Uint8Array, tag: string): void {
   bytes(key, 32); bytes(hub, 32); if (unb32(tag).length !== 20) throw new Error('invalid channel tag');
 }
-/** Raw ChaCha20-Poly1305 with an explicit nonce: ciphertext || tag. */
-export function encrypt(key: Uint8Array, nonce: Uint8Array, ad: Uint8Array, plain: Uint8Array): Buffer {
-  const c = createCipheriv('chacha20-poly1305', key, nonce, {authTagLength: 16}); c.setAAD(ad, {plaintextLength: plain.length});
-  return Buffer.concat([c.update(plain), c.final(), c.getAuthTag()]);
-}
-export function decrypt(key: Uint8Array, nonce: Uint8Array, ad: Uint8Array, sealed: Uint8Array): Buffer {
-  if (sealed.length < 16) throw new Error('short ciphertext');
-  const d = createDecipheriv('chacha20-poly1305', key, nonce, {authTagLength: 16});
-  d.setAuthTag(sealed.subarray(-16)); d.setAAD(ad, {plaintextLength: sealed.length - 16});
-  return Buffer.concat([d.update(sealed.subarray(0, -16)), d.final()]);
-}
 export function seal(key: Uint8Array, hub: Uint8Array, tag: string, plaintext: Uint8Array, kind = 1): Buffer {
   context(key, hub, tag); if (kind !== 1 && kind !== 3) throw new Error('not a symmetric kind');
   const salt = randomBytes(32); return Buffer.concat([Buffer.from([84, 78, 68, 77, 2, kind]), salt,
@@ -140,12 +121,12 @@ export function openEnvelope(key: Uint8Array, hub: Uint8Array, tag: string, env:
 }
 const KEM = Buffer.from('4b454d0020', 'hex'), SUITE = Buffer.from('48504b45002000010003', 'hex');
 function extract(salt: Uint8Array, suite: Uint8Array, label: string, ikm: Uint8Array): Buffer {
-  return createHmac('sha256', salt).update(Buffer.concat([Buffer.from('HPKE-v1'), suite, Buffer.from(label), ikm])).digest();
+  return Buffer.from(hmac256(salt, Buffer.concat([Buffer.from('HPKE-v1'), suite, Buffer.from(label), ikm])));
 }
 function expand(prk: Uint8Array, suite: Uint8Array, label: string, info: Uint8Array, size: number): Buffer {
   // This suite asks only for 12 or 32 bytes: one HKDF-Expand block.
   const length = Buffer.alloc(2); length.writeUInt16BE(size);
-  return createHmac('sha256', prk).update(Buffer.concat([length, Buffer.from('HPKE-v1'), suite, Buffer.from(label), info, Buffer.from([1])])).digest().subarray(0, size);
+  return Buffer.from(hmac256(prk, Buffer.concat([length, Buffer.from('HPKE-v1'), suite, Buffer.from(label), info, Buffer.from([1])]))).subarray(0, size);
 }
 function schedule(dh: Uint8Array, enc: Uint8Array, recipient: Uint8Array, info: string): [Buffer, Buffer] {
   const empty = Buffer.alloc(0), shared = expand(extract(empty, KEM, 'eae_prk', dh), KEM, 'shared_secret', Buffer.concat([enc, recipient]), 32);
@@ -155,19 +136,19 @@ function schedule(dh: Uint8Array, enc: Uint8Array, recipient: Uint8Array, info: 
 }
 export function sealHPKE(recipient: Uint8Array, info: string, ad: Uint8Array, plaintext: Uint8Array): Buffer {
   const ephemeral = privateKey(randomBytes(32), 'x25519'), enc = publicKey(ephemeral);
-  const [key, nonce] = schedule(diffieHellman({privateKey: ephemeral, publicKey: pubKey(recipient, 'x25519')}), enc, recipient, info);
+  const [key, nonce] = schedule(sharedSecret(ephemeral, recipient), enc, recipient, info);
   return Buffer.concat([enc, encrypt(key, nonce, ad, plaintext)]);
 }
-export function openHPKE(privateValue: KeyObject, info: string, ad: Uint8Array, sealed: Uint8Array): Buffer {
+export function openHPKE(privateValue: PrivateKey, info: string, ad: Uint8Array, sealed: Uint8Array): Buffer {
   if (sealed.length < 48) throw new Error('short HPKE input'); const enc = sealed.subarray(0, 32);
-  const [key, nonce] = schedule(diffieHellman({privateKey: privateValue, publicKey: pubKey(enc, 'x25519')}), enc, publicKey(privateValue), info);
+  const [key, nonce] = schedule(sharedSecret(privateValue, enc), enc, publicKey(privateValue), info);
   return decrypt(key, nonce, ad, sealed.subarray(32));
 }
 export function sealInbox(hub: Uint8Array, uid: Uint8Array, recipient: Uint8Array, plaintext: Uint8Array): Buffer {
   bytes(uid, 32); const tag = inboxTag(uid, hub); context(recipient, hub, tag);
   return Buffer.concat([Buffer.from('TNDM\x02\x02'), keyID(hub, recipient), sealHPKE(recipient, 'tandem/v2/inbox', aad(2, hub, tag), plaintext)]);
 }
-export function openInbox(hub: Uint8Array, uid: Uint8Array, privateValue: KeyObject, env: Uint8Array): Buffer {
+export function openInbox(hub: Uint8Array, uid: Uint8Array, privateValue: PrivateKey, env: Uint8Array): Buffer {
   bytes(hub, 32); bytes(uid, 32);
   if (env.length < 86 || !Buffer.from(env.subarray(0, 6)).equals(Buffer.from('TNDM\x02\x02')) || !Buffer.from(env.subarray(6, 38)).equals(keyID(hub, publicKey(privateValue)))) throw new Error('not an inbox envelope for this device');
   return openHPKE(privateValue, 'tandem/v2/inbox', aad(2, hub, inboxTag(uid, hub)), env.subarray(38));

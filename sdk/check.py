@@ -78,6 +78,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--node", default="node")
     parser.add_argument("--oracle", type=Path)
+    parser.add_argument("--browser", action="store_true", help="also verify the browser build in headless Chromium")
     args = parser.parse_args()
     node = shutil.which(args.node)
     if node is None:
@@ -91,19 +92,24 @@ def main():
     if args.oracle:
         check_lean(args.oracle.resolve())
     with tempfile.TemporaryDirectory(prefix="tandem-sdk-interop-") as directory:
-        env = dict(os.environ, TANDEM_INTEROP_DIR=directory)
+        env = dict(os.environ, TANDEM_INTEROP_DIR=directory, PYTHONPATH=str(ROOT / "sdk/python"))
         run(["go", "test", "-race", "-count=1", "./..."], ROOT / "sdk/go", env)
         run([sys.executable, "-B", "-W", "error::ResourceWarning", "-m", "unittest", "discover", "-s", "sdk/python/tests", "-q"], env=env)
         run([node, "node_modules/typescript/bin/tsc"], ROOT / "sdk/typescript", env)
-        run([node, "--test", "test/core.test.mjs", "test/control.test.mjs"], ROOT / "sdk/typescript", env)
+        run([node, "--test", "test/core.test.mjs", "test/control.test.mjs", "test/registry.test.mjs"], ROOT / "sdk/typescript", env)
         # TandemArgon2 is built optimized in every configuration, so the 1 GiB tests take seconds in a debug build too.
         run(["swift", "test", "--quiet"], ROOT, env)
+        if args.browser:
+            run([node, "build-browser.mjs"], ROOT / "sdk/typescript", env)
+            run([node, "node_modules/@playwright/test/cli.js", "test"], ROOT / "sdk/typescript", env)
+            if not (Path(directory) / "browser.json").is_file():
+                raise SystemExit("browser test produced no interop artifact")
         env["TANDEM_VERIFY_INTEROP"] = "1"
         run(["go", "test", "-count=1", "-run", "TestCrossSDK", "./..."], ROOT / "sdk/go", env)
         run([sys.executable, "-B", "-m", "unittest", "discover", "-s", "sdk/python/tests", "-k", "cross_sdk", "-q"], env=env)
         run([node, "--test", "test/interop.test.mjs"], ROOT / "sdk/typescript", env)
         run(["swift", "test", "--quiet", "--filter", "CoreTests/testCrossSDK"], ROOT, env)
-    print("All four SDKs verify every sender's signature and decrypt every sender's inbox envelope.")
+    print(f"All {25 if args.browser else 16} sender/receiver combinations verified.")
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
   "version": "0.2.0-dev.0",
   "private": true,
   "type": "module",
-  "description": "Tandem v2 protocol core for Node.js",
+  "description": "Tandem v2 protocol core for Node.js and browsers",
   "engines": {
     "node": ">=26"
   },
@@ -11,6 +11,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser/tandem.js"
     }
   },
   "files": [
@@ -18,11 +22,26 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc",
-    "test": "npm run build && node --test test/*.test.mjs"
+    "build": "tsc && node build-browser.mjs",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "test:browser": "npm run build && playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "1.65.0",
     "@types/node": "^26.6.6",
+    "esbuild": "0.28.2",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@noble/ciphers": "2.4.0",
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "buffer": "6.0.3"
+  },
+  "imports": {
+    "#platform-crypto": {
+      "browser": "./dist/browser/platform.js",
+      "default": "./dist/platform.js"
+    }
   }
 }

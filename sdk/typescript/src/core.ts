@@ -1,4 +1,5 @@
-import {type KeyObject} from 'node:crypto';
+import {Buffer} from "buffer";
+import type {PrivateKey} from './key.js';
 import {bytes, sha, b64u, unb64u, sign, verifyStrict} from './crypto.js';
 import {parseJSON, validUnicode} from './json.js';
 
@@ -8,7 +9,7 @@ export interface Dot {device: Uint8Array; millis: number; counter: number}
 export interface Write {hub: Uint8Array; scope: Uint8Array; record: Uint8Array; field: string; op: Op;
   author: Uint8Array; certificate: Uint8Array; authorization: Uint8Array; dot: Dot; value: Uint8Array;
   element: Uint8Array | null; ref: Uint8Array; context: readonly Dot[]; base: readonly Dot[]; signature: Uint8Array}
-const eq = (a: Uint8Array, b: Uint8Array): boolean => Buffer.from(a).equals(b);
+const eq = (a: Uint8Array, b: Uint8Array): boolean => Buffer.from(a).equals(Buffer.from(b));
 const cmp = (a: Uint8Array, b: Uint8Array): number => Buffer.compare(a, b);
 export function integer(n: number, limit: number): void { if (!Number.isInteger(n) || n < 0 || n >= limit) throw new Error('integer out of range'); }
 function u16(n: number): Buffer { integer(n, 2**16); const b = Buffer.alloc(2); b.writeUInt16BE(n); return b; }
@@ -33,7 +34,7 @@ export function sigInput(w: Write): Buffer {
     u64(w.dot.millis), u16(w.dot.counter), w.ref, vectorBytes(w.context), vectorBytes(w.base)]);
 }
 export const writeID = (w: Write): Buffer => sha(sigInput(w));
-export const signWrite = (w: Write, key: KeyObject): Write => ({...clone(w), signature: sign(key, sigInput(w))});
+export const signWrite = (w: Write, key: PrivateKey): Write => ({...clone(w), signature: sign(key, sigInput(w))});
 export const verifyWrite = (w: Write, publicKey: Uint8Array): boolean => verifyStrict(publicKey, w.signature, sigInput(w));
 function clone(w: Write): Write {
   const dot = (d: Dot): Dot => ({...d, device: bytes(d.device)});

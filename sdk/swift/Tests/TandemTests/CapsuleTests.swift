@@ -26,7 +26,7 @@ final class CapsuleTests: XCTestCase {
     func hex(_ value: Any?) -> Bytes { Bytes(hex: value as! String)! }
 
     func testTheVectorAtTheRealProfile() throws {
-        // Allocates 1 GiB and takes seconds in release, minutes in debug.
+        // Allocates 1 GiB; TandemArgon2 is optimized in debug and release.
         try XCTSkipIf(ProcessInfo.processInfo.environment["TANDEM_SKIP_ARGON2_GIB"] == "1", "TANDEM_SKIP_ARGON2_GIB=1")
         let v = try fixture(), profile = v["profile"] as! [String: Any]
         XCTAssertEqual(profile["alg"] as? String, "argon2id")

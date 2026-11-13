@@ -130,7 +130,8 @@ class CoreTests(unittest.TestCase):
     def test_cross_sdk(self):
         m, v = self.m, self.v
         key = x25519.X25519PrivateKey.from_private_bytes(m["agreement_private"])
-        for language in ("go", "python", "typescript", "swift"):
+        for path in sorted(Path(os.environ["TANDEM_INTEROP_DIR"]).glob("*.json")):
+            language = path.stem
             artifact = json.loads((Path(os.environ["TANDEM_INTEROP_DIR"]) / (language + ".json")).read_text())
             self.assertTrue(t.verify_strict(m["signing_public"], bytes.fromhex(artifact["signature"]), bytes.fromhex(v["plaintext"])), language)
             self.assertEqual(t.open_inbox(m["hub"], m["uid"], key, bytes.fromhex(artifact["inbox"])), bytes.fromhex(v["plaintext"]), language)
