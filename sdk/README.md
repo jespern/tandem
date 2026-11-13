@@ -7,11 +7,17 @@ production device engine, `TandemEngine` ([INTEGRATING.md](swift/INTEGRATING.md)
 being built. `interop/interop.py` runs devices on different engines against one hub. The v1
 implementations on `testbed` are separate.
 
+The [browser target](typescript/BROWSER.md) adds direct JMAP push, an IndexedDB
+journal, remembered browser keys and worker-based admin capsules for Liszto.
+It shares the TypeScript protocol code; a full browser device controller and
+Liszto's web workspace remain to be integrated.
+
 | Language | Runtime | Changes arrive as | Runtime dependencies |
 | --- | --- | --- | --- |
 | [Go](go/README.md) | Go 1.26.4+ | A channel, scoped by `context.Context` | Go's `x/crypto` for ChaCha20-Poly1305 |
 | [Python](python/README.md) | Python 3.15+ | An async iterator under an async context manager | `cryptography` |
 | [TypeScript](typescript/README.md) | Node.js 26+ | An async iterator, with `AbortSignal` cancellation | None; TypeScript and Node types are build dependencies |
+| [TypeScript browser](typescript/BROWSER.md) | Current secure-context browsers | Async iterators; JMAP SSE, Web Locks and BroadcastChannel | Noble hashes/curves/ciphers, `buffer`; optional Argon2 worker |
 | [Swift](swift/README.md) | Swift 6.4, iOS/macOS 27+ | A bounded `AsyncSequence`, with task cancellation | None; CryptoKit supplies the native primitives |
 
 ## Device and recovery policy
