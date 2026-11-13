@@ -1,5 +1,12 @@
 # Proposal: hub management passwords, device keys and recovery
 
+> **Amended 2026-11-13 (Jesper).** Two decisions replace parts of this proposal; `DESIGN.md` §5.3 and §6 have the result.
+>
+> 1. **One admin key instead of a management password and a recovery key.** The app generates a 160-bit admin key at hub creation; the creator saves it. The management seed stays on the hub in one capsule sealed under that key, so entering it on any device unlocks management, and guessing it is out of reach: no Argon2id, no password wrappers, no offline recovery key and no recovery generations. It is never replaced; a leaked admin key means a new hub and a copy of the lists. It recovers the creator and nobody else. So §3 and §8 below, and the recovery parts of §2 and §4, are superseded.
+> 2. **Keypairs in the system keychain.** A keychain that syncs (iCloud Keychain) brings the keys to a new phone, so it needs no pairing or approval. Devices on one keychain share one keypair and certificate; revoking a stolen device's key cuts them all off, and they make a new keypair after the stolen device has been removed from the platform account. Device IDs are per installation and no longer in certificates. §5 below applies to devices that don't share a keychain.
+>
+> Labels are now `tandem/v2/`; the earlier `tandem/hubmgmt1/` namespace is gone.
+
 Status: **rationale for the participant/device architecture draft**, 2026-11-13.
 The design is now integrated in this branch's `DESIGN.md`; neither document
 defines a deployable complete wire version. It replaces the earlier per-user-password
@@ -83,15 +90,15 @@ personal password. Joining another hub creates a separate record there.
 ## 2. Keys
 
 Use the draft's strict Ed25519 policy, X25519, HPKE base suite, HKDF-SHA-256 and
-ChaCha20-Poly1305. New `tandem/hubmgmt1/` labels deliberately avoid v1 compatibility.
+ChaCha20-Poly1305. New `tandem/v2/` labels deliberately avoid v1 compatibility.
 
 | Material | Creation and storage |
 |---|---|
 | `RS`, hub recovery secret, 32 bytes | OS random at hub creation; printable offline backup, erased after confirmation |
-| `RKs`, `RKa` | HKDF(RS, empty, `tandem/hubmgmt1/recovery-sign` / `recovery-agree`, 32) |
+| `RKs`, `RKa` | HKDF(RS, empty, `tandem/v2/recovery-sign` / `recovery-agree`, 32) |
 | Stable hub authority ID | pub(RKs), pinned from setup/invitation; independent of mailbox credentials |
 | `MS`, management seed, 32 bytes | OS random; password-encrypted capsule and independent HPKE recovery box |
-| Management signing/agreement keys | HKDF(MS, empty, `tandem/hubmgmt1/manager-sign` / `manager-agree`, 32); both public keys are recovery-certified |
+| Management signing/agreement keys | HKDF(MS, empty, `tandem/v2/manager-sign` / `manager-agree`, 32); both public keys are recovery-certified |
 | Device signing/agreement keys | Independently random on each installation; this-device-only storage, never copied during pairing |
 | Home key | Random per member and home epoch; HPKE boxes to that member's admitted devices |
 | Collection epoch key | Random as in the draft; distributed to admitted member devices |
@@ -263,7 +270,7 @@ The phone generates two independent random 32-byte secrets, `L` and `A`:
 - `A` is HPKE-sealed to the current management agreement key. Unlocking MS lets
   the admin open A, but not L. There is no home key in that gate box.
 - The phone seals a small bootstrap bundle under
-  `HKDF(L || A, tokenID, "tandem/hubmgmt1/pair-package", 32)`, using
+  `HKDF(L || A, tokenID, "tandem/v2/pair-package", 32)`, using
   ChaCha20-Poly1305 and a fresh random 12-byte nonce. It contains this member's
   current shared home-epoch key and the necessary grant authorizations/metadata
   for continuous sync, including lists created or shared after pairing. It never

@@ -1,4 +1,8 @@
-"""Selected rules of DEVICE-MANAGEMENT.md, not a complete protocol/proof.
+"""Selected rules of DESIGN.md §6 (hub management), not a complete protocol/proof.
+
+The admin key is the hub's one root: it opens the capsule on the hub that holds the
+management key, and it is never replaced. A hub whose admin key may have leaked is
+abandoned for a new one (§6.8); there are no recovery generations or password wrappers.
 
 A signer string denotes a valid signature over the exact immutable object and
 possession of that private key. No real crypto, parser, storage, transport,
@@ -108,24 +112,11 @@ class Snapshot:
         return digest(["snapshot", self.root, sorted(self.certificates), sorted(self.revocations), self.member])
 
 
-@dataclass(frozen=True)
-class Wrapper:
-    root: str
-    parents: tuple[str, ...]
-    revision: int
-    password: str  # Symbolic label, never an actual password stored in production.
-    signer: str
-
-    @property
-    def id(self):
-        return digest(["wrapper", asdict(self)])
-
-
 class Hub:
-    def __init__(self, key="offline-root", manager="M0", creator_device="laptop"):
+    def __init__(self, key="admin-key", manager="M0", creator_device="laptop"):
         self.key = key
         self.creator = member_record_id(key, creator_device, "creator")
-        self.roots, self.children, self.certificates, self.revocations, self.wrappers = {}, {}, {}, {}, {}
+        self.roots, self.children, self.certificates, self.revocations = {}, {}, {}, {}
         self.delegations = {}
         self.current, self.frozen = None, False
         self.genesis = Root(None, 0, manager, creator_device, key)
@@ -146,13 +137,12 @@ class Hub:
         before = self.roots.get(root.parent)
         if root.parent is not None and before is None:
             return False  # real receiver holds then retries
-        if root.parent is None:
-            valid = (root.id == self.genesis.id and root.generation == 0
-                     and not root.old_certificates and not root.old_revocations)
-        else:
-            valid = (root.generation == before.generation + 1
-                     and all(self.roots[x].manager != root.manager for x in self.root_line(root.parent)))
-        if not valid or root.creator_device == root.manager:
+        # One genesis per hub and nothing after it: the admin key is never replaced (§6.8).
+        valid = (root.parent is None and root.id == self.genesis.id and root.generation == 0
+                 and not root.old_certificates and not root.old_revocations)
+        if not valid:
+            return False
+        if root.creator_device == root.manager:
             self.frozen = True
             return False
         self.roots[root.id] = root
@@ -161,21 +151,25 @@ class Hub:
             self.frozen = True
         if root.parent is None or root.parent == self.current:
             self.current = root.id
-        # Offline recovery's sole member-record recovery exception is the immutable creator.
+        # The creator's first device, fixed by the genesis.
         cert = Certificate(root.id, self.creator, root.creator_device, "root-bootstrap",
                            None, self.key, root.old_revocations, root.manager)
         cert = replace(cert, consent_for=cert.request_id)
         self.certificates[cert.id] = cert
-        boot_password = "initial-password" if root.generation == 0 else f"recovery-password-{root.generation}"
-        boot = Wrapper(root.id, (), 0, boot_password, root.manager)
-        self.wrappers[boot.id] = boot
         return True
 
-    def recover(self, manager="M1", device="clean", signer=None):
-        previous = self.roots[self.current]
-        snapshot = self.snapshot()
-        return Root(previous.id, previous.generation + 1, manager, device, signer or self.key,
-                    snapshot.certificates, snapshot.revocations)
+    def admin_key_opens(self, key):
+        """§6.7: the capsule on the hub holds the management key, sealed under the admin key."""
+        return not self.frozen and key == self.key
+
+    def recover_creator(self, device, key):
+        """§6.8: whoever holds the admin key can give the creator, and only the creator, a new device,
+        for instance after a move to a platform whose keychain doesn't carry the old keys."""
+        if not self.admin_key_opens(key):
+            return None
+        cert = Certificate(self.current, self.creator, device, "creator-recovery", None, device,
+                           self.snapshot().revocations, self.roots[self.current].manager)
+        return replace(cert, consent_for=cert.request_id)
 
     def can_manage(self, signer):
         return not self.frozen and self.roots[self.current].manager == signer
@@ -269,8 +263,11 @@ class Hub:
                        and r not in root.old_revocations) for r in cert.issued_revocations)):
             return False
         if cert.source is None:
-            # A manager can introduce a new member, not rename their key as Aimee's.
-            if cert.member != member_record_id(self.key, cert.device, cert.enrollment) or cert.approver != cert.device:
+            # A manager can introduce a new member, not rename their key as Aimee's. The one
+            # exception is the creator, recovered with the admin key (§6.8).
+            recovering_creator = cert.enrollment == "creator-recovery" and cert.member == self.creator
+            if ((cert.member != member_record_id(self.key, cert.device, cert.enrollment) and not recovering_creator)
+                    or cert.approver != cert.device):
                 return False
         else:
             source = self.certificates.get(cert.source)
@@ -343,7 +340,7 @@ class Hub:
         recipients = {c.device for c in self.certificates.values()
                       if c.member == member and self.active(self.snapshot(), c)}
         if member == self.creator:
-            recipients.add("offline-recovery")
+            recipients.add("admin-key")
         return recipients
 
     def permits_after_floor(self, cert, source, floor):
@@ -351,32 +348,3 @@ class Hub:
                 and source.root == floor.root and source.member == floor.member
                 and floor.certificates <= source.certificates
                 and source.revocations == floor.revocations and self.active(source, cert))
-
-    def frontier(self, root=None):
-        root = self.current if root is None else root
-        candidates = {w.id for w in self.wrappers.values() if w.root == root}
-        parents = {p for w in self.wrappers.values() if w.root == root for p in w.parents}
-        return candidates - parents
-
-    def rewrap(self, password, parents=None, signer=None):
-        parents = tuple(sorted(self.frontier() if parents is None else parents))
-        revision = 1 + max(self.wrappers[p].revision for p in parents)
-        return Wrapper(self.current, parents, revision, password,
-                       signer or self.roots[self.current].manager)
-
-    def add_wrapper(self, wrapper):
-        root = self.roots.get(wrapper.root)
-        if root is None or wrapper.signer != root.manager or not wrapper.parents:
-            return False
-        if len(set(wrapper.parents)) != len(wrapper.parents) or wrapper.parents != tuple(sorted(wrapper.parents)):
-            return False
-        parents = [self.wrappers.get(p) for p in wrapper.parents]
-        if any(p is None or p.root != wrapper.root for p in parents):
-            return False
-        if wrapper.revision != max(p.revision for p in parents) + 1:
-            return False
-        self.wrappers[wrapper.id] = wrapper
-        return True
-
-    def password_unlocks_current_capsule(self, password):
-        return not self.frozen and any(self.wrappers[w].password == password for w in self.frontier())
