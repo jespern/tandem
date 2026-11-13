@@ -1,6 +1,6 @@
 # Tandem: encrypted, shared, real-time collections over a mailbox
 
-Status: **participant/device architecture draft**, 2026-11-13. This revision adopts one participant record per person per hub, keypairs kept in the system keychain, and hub management unlocked by a hub password. It incorporates the current working draft's IMAP-only transport, directory and grow-only admission answers. The implemented shared-secret v1 is a different protocol. This draft calls the incompatible successor **v2**. Its control-object encodings are fixed (§10.8); migration from v1 remains open (§18). The model and crypto tests cover selected mechanisms, not a complete implementation or security sign-off.
+Status: **participant/device architecture draft**, 2026-11-13. This revision adopts one participant record per person per hub, keypairs kept in the system keychain, and hub management unlocked by a hub password. It incorporates the current working draft's IMAP-only transport, directory and grow-only admission answers. The implemented shared-secret v1 is a different protocol. This draft calls the incompatible successor **v2**. Its control-object encodings are fixed (§10.8). Nothing uses v1, so v2 replaces it outright: there is no migration. The model and crypto tests cover selected mechanisms, not a complete implementation or security sign-off.
 
 This document is self-contained. It assumes no knowledge of the app that motivated it (Liszto, a to-do app; §17) and is written so that independent reviewers can check it for soundness. The words MUST, SHOULD and MAY are used in the sense of RFC 2119.
 
@@ -1295,11 +1295,11 @@ Tandem doesn't defend against traffic analysis by the hub. Padding message sizes
 
 ## 15. Versioning
 
-This draft proposes incompatible **v2**: changed write inputs, participant/device authorization, random rotating home keys, registry controls, grants, directory and recovery. It must not be shipped under the implemented v1 version byte or labels. Envelope and mail header version fields are both 2; all authenticated contexts bind v2 and hubID. Control objects are encoded as §10.8 says; migration is Q23.
+This draft proposes incompatible **v2**: changed write inputs, participant/device authorization, random rotating home keys, registry controls, grants, directory and recovery. It must not be shipped under the implemented v1 version byte or labels. Envelope and mail header version fields are both 2; all authenticated contexts bind v2 and hubID. Control objects are encoded as §10.8 says.
 
-A message in a v2 channel with a different or inconsistent version is junk to that client: ignored, never destroyed, and no reason to pause healing/GC. An unauthenticated header cannot force migration or disable the protocol. Unknown authenticated payload fields are preserved under §9.2; an incompatible crypto/authorization change requires another version. These rules do not make v1 devices interoperable with v2.
+A message in a v2 channel with a different or inconsistent version is junk to that client: ignored, never destroyed, and no reason to pause healing/GC. An unauthenticated header cannot change the version or disable the protocol. Unknown authenticated payload fields are preserved under §9.2; an incompatible crypto/authorization change requires another version. These rules do not make v1 devices interoperable with v2.
 
-Migrating a shared v1 secret cannot erase its copies on old devices. No transparent in-place migration is defined. A future migration must explicitly enroll new device keys, establish participant/home policies and deal with existing collection ownership; a fresh hub and explicit readable-data copy is the conservative path until then. Existing conformance/SDK checks primarily test v1; v2 adoption requires the additional work in §18.
+There is no migration from v1: nothing uses it, so a v2 client starts on a fresh hub.
 
 ## 16. Prior art and alternatives considered
 
@@ -1356,7 +1356,6 @@ References for the CRDT parts: Shapiro, Preguiça, Baquero, Zawirski, "Conflict-
 | Q16 | A roster gains one complete statement per change and is copied at every rotation, and an inventory keeps entries for writes no rotating device has seen (§8.3). Is a signed checkpoint needed for long-lived collections? |
 | Q20 | Two devices of one owner changing a collection's sharing in the same moment kill it (§11.7). The note in home makes that unlikely. Measure how often this occurs in practice; the note narrows the race but cannot eliminate it. |
 | Q22 | A device keeps an epoch's superseded writes until the next epoch's inventory is fixed (§9.3). A collection that is never rotated keeps them for good. Is a narrower rule safe, for instance dropping at once what the owner's own writes superseded? |
-| Q23 | Define explicit v1→v2 migration, including owner binding, device enrollment, home/key policy, old-device copies and safe cutover. No in-place upgrade is claimed (§15). |
 | Q25 | A guest who can only look. A read-only credential (Fastmail can make an app password read-only) can't run today's protocol, because even a reader writes. If the owner did the writing (scanning the guest's code and admitting them), a guest could read a list without being able to destroy anything on the hub. |
 | Q26 | A whole hub over IMAP on Fastmail. Measured so far: 40 connections on one app password all get live updates; an append reaches the others in about half a second; 100 appends take 21 s with `MULTIAPPEND`; `QRESYNC` reports removals correctly. Not yet run: every scenario with several devices over IMAP only, the time a key change takes when a whole collection is uploaded one `APPEND` at a time, and a full resync of 100,000 messages (64 s when it was measured over JMAP). |
 | Q29 | Exercise the complete UX over real IMAP with durable storage: automatic future-list sync; original device removed while child keeps access; stale/forking owner; absent admin/member/owner; pending pairing across home rekey/root reset; kill/lost-ack at every export; concurrent password changes; recovery with late old-manager facts. Ensure no admin-accessible box decrypts another member's private home. |

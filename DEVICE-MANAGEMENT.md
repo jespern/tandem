@@ -522,8 +522,7 @@ and claimed/received times, not a fictitious globally trusted wall-clock order.
 
 This is a new wire profile/version. Member registration, certificate validation,
 write signatures, home keys, grants, directory authority and recovery differ from
-v1. Migrating a shared US cannot erase copies already held by old devices; no
-transparent in-place v1 migration is claimed.
+v1. Nothing uses v1, so there is no migration.
 
 The adjacent symbolic tests cover only selected root/manager/device rules,
 commutative registry changes, permanent revocation, password-wrapper conflicts,

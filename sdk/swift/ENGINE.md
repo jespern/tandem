@@ -35,7 +35,7 @@ One `Device` per installation per hub, an actor. Everything it knows is in a `St
 5. Pairing with approval and rejection; revocation with home and list rekeys.
 6. Rotation with the journal and crash points (port the Go engine's crash tests); late writes; garbage collection; healing.
 7. The IMAP binding in place of `MemoryHub`: ~~the invite → join → share → accept → edit path on Stalwart~~ (`EngineOverStalwartTests`, with `TANDEM_IMAP_STALWART=1`); then Fastmail and Gmail.
-8. The app API Liszto uses, with Liszto's v1 → v2 migration (Q23) designed alongside.
+8. The app API Liszto uses.
 
 ## Checking
 
