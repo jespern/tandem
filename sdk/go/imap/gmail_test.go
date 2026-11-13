@@ -573,6 +573,44 @@ func idleSettles(t *testing.T, server *fakeServer) {
 	t.Fatal("IDLE did not settle")
 }
 
+// A server that accepts the connection and then never answers: connecting gives up at the
+// deadline as a lost connection, and watching retries with backoff until it answers again.
+func TestASilentServerTimesOutAndWatchingRetries(t *testing.T) {
+	f := newGmailFixture(t)
+	cfg := f.config("pass word", IdleRestartNever)
+	cfg.ConnectTimeout = 300 * time.Millisecond
+	store, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	f.server.silent.Store(true)
+	short, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var lost *ConnectionError
+	if err := store.EnsureFolder(short); !errors.As(err, &lost) {
+		t.Fatal("not a lost connection:", err)
+	}
+	f.server.silent.Store(false)
+	ctx := testContext(t)
+	wakes, err := store.Watch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	drain(wakes)
+	f.server.silent.Store(true)
+	f.server.disconnectAll()
+	time.Sleep(time.Second) // a few connects time out
+	f.server.silent.Store(false)
+	if !wake(t, wakes, 5*time.Second) {
+		t.Fatal("no invalidation once the server answers again")
+	}
+	if cmds := f.commands(); cmds[len(cmds)-1] != "IDLE" {
+		t.Fatal(cmds)
+	}
+}
+
 func TestReadsRetryOnceAfterTheServerHangsUp(t *testing.T) {
 	f := newGmailFixture(t)
 	ctx := testContext(t)

@@ -10,8 +10,8 @@
 // between the last command and IDLE only on the next command. On Gmail (X-GM-EXT-1) IDLE
 // restarts every 3 s and destroyed messages are moved from All Mail to Trash and expunged.
 // A lost connection is retried with backoff and reported as one invalidation once IDLE
-// runs again. The only timers are the IDLE refresh, Gmail's IDLE restart and the
-// reconnect backoff; nothing reconciles on a timer.
+// runs again. The only timers are the IDLE refresh, Gmail's IDLE restart, the reconnect
+// backoff and the connect deadline; nothing reconciles on a timer.
 package imap
 
 import (
@@ -65,6 +65,9 @@ type Config struct {
 	MaxMessageSize int
 	// ReconnectMin and ReconnectMax bound the reconnect backoff; defaults 1 s and 60 s.
 	ReconnectMin, ReconnectMax time.Duration
+	// ConnectTimeout bounds connecting, the TLS handshake, the greeting, login and selecting
+	// the folder, together; default 30 s. Running out counts as a lost connection.
+	ConnectTimeout time.Duration
 	// Trace receives protocol lines for debugging, each cut at 200 bytes, from several
 	// goroutines. Login credentials are left out.
 	Trace func(string)
@@ -104,7 +107,10 @@ func New(cfg Config) (*Store, error) {
 	if cfg.ReconnectMax == 0 {
 		cfg.ReconnectMax = 60 * time.Second
 	}
-	if cfg.Port < 1 || cfg.Port > 65535 || cfg.MaxMessageSize < 0 || cfg.ReconnectMin < 0 || cfg.ReconnectMax < cfg.ReconnectMin {
+	if cfg.ConnectTimeout == 0 {
+		cfg.ConnectTimeout = 30 * time.Second
+	}
+	if cfg.Port < 1 || cfg.Port > 65535 || cfg.MaxMessageSize < 0 || cfg.ReconnectMin < 0 || cfg.ReconnectMax < cfg.ReconnectMin || cfg.ConnectTimeout < 0 {
 		return nil, errors.New("imap: invalid configuration")
 	}
 	s := &Store{cfg: cfg, sink: newSink()}

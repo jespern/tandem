@@ -383,7 +383,20 @@ func dial(ctx context.Context, cfg *Config) (net.Conn, error) {
 	return nc, nil
 }
 
+// connect dials, logs in and selects the folder, all within cfg.ConnectTimeout: a server that
+// accepts the connection and then stays silent fails as a lost connection, so watching retries
+// with backoff instead of waiting on it for good.
 func (l *link) connect(ctx context.Context) (*conn, error) {
+	bounded, cancel := context.WithTimeout(ctx, l.cfg.ConnectTimeout) // allowed-timer: connect deadline, a safety net against a silent server (§10.3)
+	defer cancel()
+	c, err := l.dialAndLogin(bounded)
+	if err != nil && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		return nil, &ConnectionError{Msg: "no answer within " + l.cfg.ConnectTimeout.String() + " of connecting"} // not wrapping err: a lost connection, not a cancellation
+	}
+	return c, err
+}
+
+func (l *link) dialAndLogin(ctx context.Context) (*conn, error) {
 	nc, err := dial(ctx, l.cfg)
 	if err != nil {
 		return nil, err
