@@ -229,8 +229,8 @@ class HubPassword(unittest.TestCase):
 
     def test_changing_the_password_keeps_the_management_key_and_devices(self):
         h = Hub(); before = h.snapshot()
-        self.assertIsNone(h.change_password("new", "a-guess"))
-        self.assertIsNotNone(h.change_password("new", "hub-password"))
+        self.assertIsNone(h.change_password("new", h.unlock("a-guess")))
+        self.assertIsNotNone(h.change_password("new", h.unlock("hub-password")))
         self.assertTrue(h.password_opens("new"))
         self.assertFalse(h.password_opens("hub-password"))                    # the current capsule, that is
         self.assertTrue(h.can_manage("M0"))                                    # a copied old capsule still opens: no reset
@@ -238,11 +238,41 @@ class HubPassword(unittest.TestCase):
 
     def test_two_changes_at_once_leave_both_until_the_next(self):
         h = Hub()
-        h.change_password("a", "hub-password")
-        h.capsules["c2"] = ("b", frozenset({"c0"}))                            # another device, at the same moment
+        h.change_password("a", h.unlock("hub-password"))
+        h.capsules["c1b"] = ("b", frozenset({"c0"}))                           # another device, at the same moment
         self.assertTrue(h.password_opens("a")); self.assertTrue(h.password_opens("b"))
-        h.change_password("final", "b")
+        h.change_password("final", h.unlock("b"))
         self.assertEqual([h.capsules[c][0] for c in h.current_capsules()], ["final"])
+
+    def test_a_replayed_capsule_stays_replaced_after_cleanup(self):
+        # Sol, 2026-11-13: C0 -> C1 -> C2 with the old ones deleted; a copy of C0 put back must not
+        # count as current. Each capsule names everything it supersedes, not only its parent.
+        h = Hub(); c0 = h.capsules["c0"]
+        h.change_password("second", h.unlock("hub-password")); h.destroy_replaced()
+        h.change_password("third", h.unlock("second")); h.destroy_replaced()
+        self.assertEqual(list(h.capsules), ["c2"])
+        h.capsules["c0"] = c0                                                  # someone appends an old copy
+        self.assertEqual(h.current_capsules(), ["c2"])
+        self.assertFalse(h.password_opens("hub-password"))
+        self.assertFalse(h.password_opens("second"))
+
+    def test_concurrent_changes_are_superseded_through_cleanup(self):
+        h = Hub()
+        h.change_password("a", h.unlock("hub-password"))
+        h.capsules["c1b"] = ("b", frozenset({"c0"}))
+        h.change_password("final", h.unlock("a")); h.destroy_replaced()
+        h.capsules["c0"] = ("hub-password", frozenset()); h.capsules["c1"] = ("a", frozenset({"c0"}))
+        self.assertEqual([h.capsules[c][0] for c in h.current_capsules()], ["final"])
+
+    def test_a_cached_key_survives_a_password_change_elsewhere(self):
+        # Sol, 2026-11-13: a phone caches the key behind Face ID; the laptop changes the password and
+        # deletes the old capsule; the new password is then forgotten. The phone still sets another.
+        h = Hub()
+        phone = h.unlock("hub-password")                                       # cached on the phone only
+        h.change_password("forgotten", h.unlock("hub-password")); h.destroy_replaced()
+        self.assertIsNotNone(h.change_password("remembered", phone))
+        self.assertTrue(h.password_opens("remembered"))
+        self.assertTrue(h.can_manage(phone))
 
     def test_nothing_ever_follows_the_genesis(self):
         # There is no recovery generation to forge or race: a second root is refused, and the
