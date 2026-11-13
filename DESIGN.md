@@ -1041,7 +1041,7 @@ The directory holds whatever name a user gave themselves, so two entries can car
 
 **Admissions.** Every time the owner adds a user to a collection, that is a new **admission**, named by the ID of the roster statement that adds them: the first statement that lists the user after one that doesn't, or after the genesis. A grant belongs to the admission in force at its `at`. Removing someone ends their admission; adding them again starts another.
 
-**Asking.** A device that holds a valid grant (§11.4) for an admission its user hasn't answered doesn't follow the collection yet. It asks its user once, on every device of theirs: "Jesper shared House with you. Add it?" It shows the owner's name as the directory gives it for the genesis's owner, and the collection's name, which it can read from `_meta` (§7.3) now that it holds the key. The offer itself is never written anywhere: it is the grant, kept in the inbox (§11.4), together with the absence of an answer. So no device can write an offer over an answer.
+**Asking.** A device that holds a valid grant (§11.4) for an admission its user hasn't answered doesn't follow the collection yet. It asks its user once, on every device of theirs: "Bob shared House with you. Add it?" It shows the owner's name as the directory gives it for the genesis's owner, and the collection's name, which it can read from `_meta` (§7.3) now that it holds the key. The offer itself is never written anywhere: it is the grant, kept in the inbox (§11.4), together with the absence of an answer. So no device can write an offer over an answer.
 
 **Answering.** An answer is an element added to the membership's `answers` set in home (§6.2): the admission's ID and `a` for add, `n` for no, `l` for leaving later (§11.5). Elements are only ever added, so an answer can't be overwritten or undone by a write that hadn't seen it.
 
@@ -1057,7 +1057,7 @@ The directory holds whatever name a user gave themselves, so two entries can car
 | Lists the user | `a` only | active |
 | Lists the user | `n` or `l`, with or without `a` | left |
 
-Two devices that answer at the same moment can disagree. Then `n` or `l` wins over `a`, whichever arrived first: it is the answer that has already posted a leave notice, and the owner will act on it. The user is told ("You said no to House on your iPad") and can ask the owner to share it again. Nothing appears in a user's lists without their saying so: someone on the hub who calls themselves "Jesper" can share a collection, but not make it show up.
+Two devices that answer at the same moment can disagree. Then `n` or `l` wins over `a`, whichever arrived first: it is the answer that has already posted a leave notice, and the owner will act on it. The user is told ("You said no to House on your iPad") and can ask the owner to share it again. Nothing appears in a user's lists without their saying so: someone on the hub who calls themselves "Bob" can share a collection, but not make it show up.
 
 ### 11.3 Adding someone again
 
@@ -1131,8 +1131,8 @@ Only the owner's fixed inventory or the author's own signing again carries old w
 
 The owner's independently keyed devices share collection access and home, and stay out of each other's way with the note in home (§8.2). A device that is asked to change a collection's sharing while another device's note is there doesn't sign. The note says what that change is, so the device can tell the user.
 
-- **If the change's statement and inventory are on the hub** in the new channel, there is nothing to choose. The device finishes it and says so: "Finishing a change started on Jesper's iPhone: making Alice read-only in House." It checks the new channel against the inventory, copies across from the old channel any listed write that is missing, announces the statement, sends the grants and cleans up, as the first device would have (§11.6). It finishes a change only while the note still names the statement the user was shown, and makes the check of step 4 before announcing.
-- **Otherwise the change never happened**, and the device asks: "Jesper's iPhone started making Alice read-only in House and didn't finish. Do it here, or discard it?" Either way it removes the note, and the key in it, from home and destroys what was uploaded. It removes the note only if it still names the statement the user was shown. For "do it here" it then makes the same change itself, with a new key, and signs only once the removal is on the hub.
+- **If the change's statement and inventory are on the hub** in the new channel, there is nothing to choose. The device finishes it and says so: "Finishing a change started on Bob's iPhone: making Alice read-only in House." It checks the new channel against the inventory, copies across from the old channel any listed write that is missing, announces the statement, sends the grants and cleans up, as the first device would have (§11.6). It finishes a change only while the note still names the statement the user was shown, and makes the check of step 4 before announcing.
+- **Otherwise the change never happened**, and the device asks: "Bob's iPhone started making Alice read-only in House and didn't finish. Do it here, or discard it?" Either way it removes the note, and the key in it, from home and destroys what was uploaded. It removes the note only if it still names the statement the user was shown. For "do it here" it then makes the same change itself, with a new key, and signs only once the removal is on the hub.
 
 A note that names a statement which is **already announced** is left over from a crash between the announcement and the home update. Any device of the owner that sees one adds the key to `keys` and removes that note, without asking: it is housekeeping, not a change to the roster, and two devices doing it do no harm. Otherwise the note would block every later change to sharing (§8.2).
 
@@ -1229,12 +1229,12 @@ The admin's private home records **Pending invite: Alice**, creation/expiry, cre
 | Lost every device | Creator: explicit hub recovery using the saved key. Ordinary member: rejoin as a new participant, ask owners to share lists again; private data without a readable replica is lost. |
 | A device was stolen | People → person → Devices → Remove. Admin unlocks management; surviving member devices rekey home and owners rekey lists. Show remaining rekeys and mailbox credential steps separately. Previously downloaded data stays readable. |
 | Share a list | "Share" → pick people from the hub's People, each as editor or read-only. Someone not on the hub yet first needs a hub invite. |
-| Someone shared a list with you | "Jesper shared House with you. Add it?", once, on all your devices. |
+| Someone shared a list with you | "Bob shared House with you. Add it?", once, on all your devices. |
 | Add someone to the hub | Admin: “Invite someone” → label/connection credential → management password → QR/link. “Pending invite: Alice” appears on all admin devices; accepting creates her participant and first device. Then share selected lists. |
 | On more than one hub | Lists appear together. Each hub has its own participant and device approval; pairing on one does not silently enroll on the others. |
 | Who's on this hub | Hub → People → Alice → Phone, Laptop. Admission/revocation comes from certificates. Proven inviter/claimed names help recognition but do not prove a physical person. |
 | Members | The list's sharing screen shows names and roles. The owner can add people from the hub's People, switch someone between editing and read-only, or remove them. It takes effect at once for the owner; the key change runs in the background and needs the network. |
-| Sharing change started on another device | If it got far enough to finish: "Finishing a change started on Jesper's iPhone: making Alice read-only in House." If not: "Jesper's iPhone started making Alice read-only in House and didn't finish. Do it here, or discard it?" |
+| Sharing change started on another device | If it got far enough to finish: "Finishing a change started on Bob's iPhone: making Alice read-only in House." If not: "Bob's iPhone started making Alice read-only in House and didn't finish. Do it here, or discard it?" |
 | Leave | "Leave list". Gone from all your devices. The owner sees "Alice left House" and confirms. |
 | Removed by the owner | "House is no longer shared with you." Unsent edits are kept (app-specific: Liszto puts them in the Inbox). |
 | A list can't sync any more | "House can't sync any more. Copy it to a new list?" The copy is yours; you share it again (§11.8). |
