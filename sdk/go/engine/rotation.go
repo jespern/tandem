@@ -289,6 +289,14 @@ func (d *Device) sameEpoch(ctx context.Context, cid []byte, edit func(*Statement
 	if note := d.flightNote(cid); note != nil {
 		return nil, nil, nil, &PendingError{*note}
 	}
+	// On the hub first, then here: a statement whose publish failed must not become this
+	// device's head alone. One whose answer was lost comes back with the next sync like any other.
+	if err := d.publish(ctx, cid, epoch, rosterRecord, []*tandem.Write{w}); err != nil {
+		return nil, nil, nil, err
+	}
+	if now = d.collections[string(cid)]; now == nil {
+		return nil, nil, nil, ErrSuperseded
+	}
 	now.statements[string(id)] = stmt{w, next}
 	p, err := onePayload(rosterRecord, w)
 	if err != nil {
@@ -299,7 +307,7 @@ func (d *Device) sameEpoch(ctx context.Context, cid []byte, edit func(*Statement
 	}
 	d.changed(Event{Kind: EventMembers, List: cid})
 	d.changed(Event{Kind: EventLists})
-	return id, epoch, key, d.publish(ctx, cid, epoch, rosterRecord, []*tandem.Write{w})
+	return id, epoch, key, nil
 }
 
 // chain is the counted roster line from the genesis to id.

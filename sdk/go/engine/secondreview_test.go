@@ -197,3 +197,29 @@ func TestSecondReviewADiscardedChangeStaysDiscardedAfterALostAnswer(t *testing.T
 		t.Fatal("the discarded change happened:", r)
 	}
 }
+
+// 7. A same-epoch change whose publish fails leaves nothing behind locally, so a later change
+// doesn't fork the roster.
+func TestSecondReviewAFailedSameEpochChangeLeavesNoTrace(t *testing.T) {
+	w := newBobAndCarol(t)
+	offline := open(t, w.f, w.keys, w.store, failingAppends{w.hub.Connect()})
+	if err := offline.SetRole(bg, Writer, w.carolID, w.list); err == nil {
+		if err := offline.Delete(bg, w.list); err == nil {
+			t.Fatal("offline")
+		}
+	}
+	back := open(t, w.f, w.keys, w.store, w.hub.Connect())
+	syncAll(t, back)
+	if back.IsDeleted(w.list) {
+		t.Fatal("a delete that never left the device didn't happen")
+	}
+	must(t, back.SetRole(bg, Reader, w.carolID, w.list))
+	must(t, back.SetRole(bg, Writer, w.carolID, w.list))
+	if back.IsDead(w.list) {
+		t.Fatal("the roster forked")
+	}
+	syncAll(t, w.carol)
+	if w.carol.IsDeleted(w.list) {
+		t.Fatal("the delete never reached the hub")
+	}
+}
