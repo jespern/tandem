@@ -786,7 +786,7 @@ The core needs six operations:
 | `destroy(ids)` | Remove messages permanently. |
 | `watch(onChange)` | Push notification while connected. |
 
-**All channels share one folder.** Each message carries its channel tag in a header (§10.4), so a client can skip bodies of channels it doesn't follow. One folder means one IDLE connection on IMAP, one change cursor, no folder-creation races and no folder-count limits. More folders would hide nothing: the hub sees the tags either way.
+**All channels share one folder.** Each message carries its channel tag in a header (§10.4), so a client could skip bodies of channels it doesn't follow; the Swift and Go bindings fetch them with `changes`, which keeps one round trip per batch, and a binding may do either. One folder means one IDLE connection on IMAP, one change cursor, no folder-creation races and no folder-count limits. More folders would hide nothing: the hub sees the tags either way.
 
 ### 10.2 JMAP: set aside
 
@@ -847,10 +847,10 @@ Nothing else is in the clear. The hub already knows the append time.
 **Reading a message.** A server, or a mail client that touched the folder, may have stored the body in another transfer encoding or charset than it was appended in. A reader therefore takes three steps:
 
 1. undo the body's transfer encoding (`7bit` and `8bit`: nothing to undo; `quoted-printable`; `base64`);
-2. decode the resulting bytes to text with the `charset` of the `Content-Type` header. If the body was stored in a charset other than `us-ascii`, UTF-16 for instance, skipping this step yields garbage;
-3. remove all whitespace and base64-decode what is left to get the envelope.
+2. decode the resulting bytes to text with the `charset` of the `Content-Type` header. If the body was stored in a charset other than `us-ascii`, UTF-16 for instance, skipping this step yields garbage. Every reader supports at least `us-ascii`, `utf-8`, `utf-16` and `utf-32` (with or without a byte-order mark, and their `be`/`le` forms), `iso-8859-1` and `windows-1252`, compared without case; a body in a charset the reader doesn't know is ignored like any undecodable message;
+3. remove all whitespace, Unicode whitespace and U+FEFF included, and base64-decode what is left (standard alphabet, padding optional, nonzero trailing bits refused) to get the envelope.
 
-The channel tag is the `Tandem-Channel` value, unfolded and trimmed. It is matched byte for byte against the tags a client derives; the same letters in another case are another tag. A message whose body doesn't decode to an envelope is ignored. A message's identity across devices is `H(envelope)`, not its IMAP UID.
+A writer produces exactly the form above: `Date` in RFC 5322 form in UTC, as `Fri, 13 Nov 2026 18:04:05 +0000` (the day without a leading zero), a `Message-ID` of 32 random lowercase hex digits at `tandem.invalid`, and the channel tag as it was derived (lowercase base32, §5.6), so every binding writes the same bytes for the same date and ID. The channel tag is the `Tandem-Channel` value, unfolded and trimmed. It is matched byte for byte against the tags a client derives; the same letters in another case are another tag. A message whose body doesn't decode to an envelope is ignored. A message's identity across devices is `H(envelope)`, not its IMAP UID.
 
 ### 10.5 Plaintext payloads (inside the envelope)
 
