@@ -29,6 +29,12 @@ public actor Device {
     var home: [ID: Record] = [:]
     var collections: [Bytes: CollectionState] = [:]
     var offers: [Bytes: Offer] = [:]
+    /// Pairing claims this admin device received, by request ID (§6.3).
+    var claims: [ID: PairingClaim] = [:]
+    /// Receipts from the directory, by ID (§10.8).
+    var receipts: [ID: ControlObject] = [:]
+    /// This device's own claim, while it waits for the admin (§6.3).
+    var pairing: PendingPairing?
 
     var directoryTag: String { Tandem.directoryTag(directoryKey, hub: pin.hub) }
     var directoryChannelKey: Bytes { Tandem.directoryKey(directoryKey, hub: pin.hub) }
@@ -41,6 +47,7 @@ public actor Device {
             case "genesis": continue
             case "capsule": capsules[try o.id()] = o
             case "home-epoch": homeEpochs[try o.id()] = o
+            case "receipt": receipts[try o.id()] = o
             default: try? registry.add(o)
             }
         }
@@ -56,6 +63,11 @@ public actor Device {
             }
         }
         collections = try Self.loadCollections(store: store, hub: pin.hub, home: home)
+        for (_, data) in try store.values(prefix: "claim.") {
+            guard let j = try? JSON.parse(data), let c = try? PairingClaim.parse(j) else { continue }
+            claims[c.id] = c
+        }
+        pairing = try store.value("pairing.pending").map(PendingPairing.parse)
         for (_, data) in try store.values(prefix: "offer.") {
             guard let j = try? JSON.parse(data), let g = j["grant"], let grant = try? ControlObject.parse(g, expect: "grant"),
                   let key = try? j.bytes("k", count: 32) else { continue }
@@ -142,6 +154,7 @@ public actor Device {
     /// Returns how many messages it applied.
     @discardableResult
     public func sync() async throws -> Int {
+        try await finishApprovals()
         let cursor = try store.value("cursor").map { String(decoding: $0, as: UTF8.self) } ?? ""
         let batch = try await hub.changes(since: cursor)
         try store.transaction {
@@ -162,6 +175,7 @@ public actor Device {
                 }
             }
         }
+        try await followUp()
         return applied
     }
 
@@ -210,6 +224,11 @@ public actor Device {
                   case let .id(g)? = o.fields["genesis"], g == pin.genesis, let id = try? o.id(), capsules[id] == nil
             else { return false }
             capsules[id] = o
+            return try store.putObject(o)
+        case "receipt":
+            guard let o = try? ControlObject.parse(json, expect: "receipt"), let id = try? o.id(), receipts[id] == nil
+            else { return false }
+            receipts[id] = o
             return try store.putObject(o)
         case "home-recovery":
             guard let n = try? Notice.parse(plaintext, type: "home-recovery", fields: ["epoch", "bytes"]),

@@ -9,6 +9,23 @@ public struct MailboxAccount: Equatable, Sendable {
         self.host = host; self.port = port; self.user = user; self.password = password
     }
     var mailbox: Mailbox { Mailbox(host: Bytes(host.lowercased().utf8), port: port, user: Bytes(user.utf8)) }
+
+    /// The `mail` member of a link (§10.8): `{"host","port","user","pass"}`.
+    func json() -> Bytes {
+        JSONWriter.object { m in
+            m.member("host", text: Bytes(host.utf8))
+            m.member("port", int: UInt64(port))
+            m.member("user", text: Bytes(user.utf8))
+            m.member("pass", text: Bytes(password.utf8))
+        }
+    }
+
+    static func parse(_ mail: JSON) throws -> MailboxAccount {
+        guard case let .int(port)? = mail["port"], (1...65535).contains(port) else { throw TandemError.invalid("link: mail port") }
+        return MailboxAccount(host: String(decoding: try mail.text("host"), as: UTF8.self), port: UInt16(port),
+                              user: String(decoding: try mail.text("user"), as: UTF8.self),
+                              password: String(decoding: try mail.text("pass"), as: UTF8.self))
+    }
 }
 
 /// A protocol message that is not a signed control object (§10.8): the key and

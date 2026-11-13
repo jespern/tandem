@@ -47,6 +47,10 @@ extension Device {
             return .applied
         case "grant":
             return try receiveGrant(plaintext, json, me: me)
+        case "pair-claim":
+            return try receiveClaim(plaintext, json)
+        case "pair-release":
+            return try receiveRelease(plaintext, me: me)
         default:
             return .ignored
         }

@@ -108,6 +108,8 @@ public final class Store: @unchecked Sendable {
                 [.text(name), .blob(value)])
     }
 
+    public func removeValue(_ name: String) throws { try run("DELETE FROM values_ WHERE name = ?", [.text(name)]) }
+
     /// Every named value whose name starts with `prefix`.
     public func values(prefix: String) throws -> [(name: String, value: Bytes)] {
         var out: [(String, Bytes)] = []

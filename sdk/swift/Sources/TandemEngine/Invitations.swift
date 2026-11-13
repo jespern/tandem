@@ -15,12 +15,7 @@ public struct InvitationLink: Sendable {
             w.member("hub", b64u: hub)
             w.member("genesis", b64u: genesis)
             w.member("hk", b64u: directoryKey)
-            w.member("mail", json: JSONWriter.object { m in
-                m.member("host", text: Bytes(account.host.utf8))
-                m.member("port", int: UInt64(account.port))
-                m.member("user", text: Bytes(account.user.utf8))
-                m.member("pass", text: Bytes(account.password.utf8))
-            })
+            w.member("mail", json: account.json())
             w.member("s", b64u: secret)
             w.member("invitation", json: inv)
         }
@@ -28,11 +23,9 @@ public struct InvitationLink: Sendable {
 
     public static func parse(_ data: Bytes) throws -> InvitationLink {
         let j = try JSON.parse(data)
-        guard case .int(2)? = j["v"], let mail = j["mail"], case let .int(port)? = mail["port"], (1...65535).contains(port),
-              let inv = j["invitation"] else { throw TandemError.invalid("invitation: not a v2 link") }
-        let account = MailboxAccount(host: String(decoding: try mail.text("host"), as: UTF8.self), port: UInt16(port),
-                                     user: String(decoding: try mail.text("user"), as: UTF8.self),
-                                     password: String(decoding: try mail.text("pass"), as: UTF8.self))
+        guard case .int(2)? = j["v"], let mail = j["mail"], let inv = j["invitation"]
+        else { throw TandemError.invalid("invitation: not a v2 link") }
+        let account = try MailboxAccount.parse(mail)
         return InvitationLink(hub: try j.bytes("hub", count: 32), genesis: try j.bytes("genesis", count: 32),
                               directoryKey: try j.bytes("hk", count: 32), account: account, secret: try j.bytes("s", count: 32),
                               invitation: try ControlObject.parse(inv, expect: "invitation"))
@@ -88,16 +81,7 @@ extension Device {
         let inviteKey = try Control.inviteKey(secret: link.secret, hub: link.hub, invite: inviteID)
         guard Bytes(inviteKey.publicKey.rawRepresentation) == capKey else { throw TandemError.invalid("invitation: the secret doesn't match") }
 
-        // The genesis is in the directory; the link pins its ID.
-        let dirKey = Tandem.directoryKey(link.directoryKey, hub: link.hub), dirTag = Tandem.directoryTag(link.directoryKey, hub: link.hub)
-        var genesis: ControlObject?
-        for m in try await hub.changes(since: "").added where m.channel == dirTag {
-            guard let (_, p) = try? Envelope.open(key: dirKey, hub: link.hub, tag: dirTag, envelope: m.body),
-                  let o = try? ControlObject.parse(p, expect: "genesis"), (try? o.id()) == link.genesis else { continue }
-            genesis = o
-            break
-        }
-        guard let genesis else { throw TandemError.invalid("invitation: the hub's genesis isn't on this mailbox") }
+        let genesis = try await findGenesis(hub: link.hub, genesis: link.genesis, directoryKey: link.directoryKey, on: hub)
         let device = try Device.open(genesis: genesis, directoryKey: link.directoryKey, keys: keys, store: store, hub: hub)
         try await device.sync()
         try await device.admit(invitation: inv, inviteKey: inviteKey, label: label)
