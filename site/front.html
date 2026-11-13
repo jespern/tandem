@@ -53,10 +53,12 @@ On mobile, live updates run while the app is active; it catches up when reopened
 </p>
 <p>
 Tandem adds its own identity and key management above IMAP.
-Each person has a participant record within a hub, with independent signing and
-encryption keys for each approved device. Those devices share an encrypted home,
-so new lists and settings sync automatically.
-A password-protected hub management key approves new devices;
+Each person has a participant record within a hub.
+Devices sign and decrypt with keys kept in the system keychain;
+where the keychain syncs, as on an iPhone and a Mac on one Apple account,
+a new device already has them and needs no pairing.
+A person's devices share an encrypted home, so new lists and settings sync automatically.
+The hub password unlocks hub management, which approves other new devices;
 each collection's owner controls sharing and its encryption keys.
 The mailbox credential alone gives no access to private contents.
 </p>
@@ -142,14 +144,20 @@ Honest devices keep full copies and upload again what was destroyed.
 </li>
 <li>
 <b>Erase what a stolen device already downloaded.</b>
-Its device keys can be revoked, and fresh keys protect future data after rekeying.
+Its keys can be revoked, and fresh keys protect future data after rekeying.
+Devices that share its keychain are cut off too, and make new keys.
 Previously downloaded data remains readable.
 </li>
 <li>
 <b>Recover everyone's private data through the hub admin.</b>
 An ordinary member who loses every device must rejoin and have lists shared again.
 Private data with no readable replica is lost.
-The hub recovery key can recover the creator's own access, not another member's home.
+The hub password can recover the creator's own home, not another member's.
+</li>
+<li>
+<b>Repair a leaked hub password.</b>
+It can be changed, but whoever learned it may have kept the hub's management key.
+A leaked hub password means a new hub.
 </li>
 <li>
 <b>Choose between two conflicting histories of who a collection is shared with.</b>
@@ -174,7 +182,7 @@ it hasn’t shown yet. None of our proofs skip anything: every step is checked.
 This is a draft for review, not a security sign-off.
 </p>
 <p>
-The mechanics are <b>formally checked</b>.
+The mechanics are <a href="https://github.com/jespern/tandem/tree/main/proofs"><b>formally checked</b></a>.
 Machine-checked proofs cover
 how edits merge,
 who may change who a list is shared with and what happens when two changes collide,
@@ -196,6 +204,8 @@ Conformance tests check the real primitives,
 and mail-transport probes check real servers.
 The step-by-step procedures, such as rotating a key after a crash,
 and the mail binding itself are tested rather than proved.
+Development SDKs in Go, Python, TypeScript and Swift implement the protocol core
+and check each other’s signatures and envelopes.
 The complete wire format, a production implementation
 and an independent security review are still to come.
 </p>

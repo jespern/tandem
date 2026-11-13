@@ -46,8 +46,8 @@ Everything lives in one folder of one mail account.
 Keys carve it into private worlds.
 </p>
 <figure>
-<svg class="wide" viewBox="0 0 760 484" role="img" aria-labelledby="locks-title">
-<title id="locks-title">One mailbox holds everything. Its login can add and delete but not read. The directory is readable with the hub key by every participant. Each person's home is readable only by their own devices and holds the keys of the lists they are in. Each list is readable only by its members' devices. Each device signs with its own key.</title>
+<svg class="wide" viewBox="0 0 760 462" role="img" aria-labelledby="locks-title">
+<title id="locks-title">One mailbox holds everything. Its login can add and delete but not read. The directory is readable with the hub key by every participant. Each person's home is readable only by their own devices and holds the keys of the lists they are in. Each list is readable only by its members' devices. Each device signs with a key kept in its system keychain; devices sharing a synced keychain share that key.</title>
 <rect x="10" y="10" width="740" height="414" rx="8" fill="var(--wash)" stroke="var(--ink)" stroke-width="1.25"/>
 <text class="name" x="30" y="38">The mailbox<tspan class="label dim" font-weight="normal">  ·  its login can add and delete messages, never read them</tspan></text>
 <rect x="30" y="54" width="700" height="40" rx="5" fill="var(--paper)" stroke="#8a919e" stroke-width="1.6"/>
@@ -61,12 +61,11 @@ Keys carve it into private worlds.
 <use href="#phone" x="50" y="182" width="15" height="25"/>
 <text class="label" x="77" y="191">Phone</text>
 <use class="k-dev" href="#key" x="77" y="199" width="22" height="12"/>
-<text class="dim" font-size="11" x="102" y="209">own</text>
 <rect class="chip" x="145" y="170" width="96" height="50" rx="4"/>
 <use href="#laptop" x="152" y="184" width="24" height="18"/>
+<path d="M101 205H181" stroke="var(--ink)" stroke-width="1.2" stroke-dasharray="3 3"/>
 <text class="label" x="183" y="191">Laptop</text>
 <use class="k-dev" href="#key" x="183" y="199" width="22" height="12"/>
-<text class="dim" font-size="11" x="208" y="209">own</text>
 <rect class="home" x="270" y="110" width="220" height="122" rx="6"/>
 <use class="k-home" href="#key" x="284" y="125" width="22" height="12"/>
 <text class="name" x="312" y="136">Bob’s home</text>
@@ -76,7 +75,6 @@ Keys carve it into private worlds.
 <use href="#phone" x="290" y="182" width="15" height="25"/>
 <text class="label" x="317" y="191">Phone</text>
 <use class="k-dev" href="#key" x="317" y="199" width="22" height="12"/>
-<text class="dim" font-size="11" x="342" y="209">own</text>
 <rect class="home" x="510" y="110" width="220" height="122" rx="6"/>
 <use class="k-home" href="#key" x="524" y="125" width="22" height="12"/>
 <text class="name" x="552" y="136">Carol’s home</text>
@@ -85,12 +83,10 @@ Keys carve it into private worlds.
 <use href="#phone" x="530" y="182" width="15" height="25"/>
 <text class="label" x="557" y="191">Phone</text>
 <use class="k-dev" href="#key" x="557" y="199" width="22" height="12"/>
-<text class="dim" font-size="11" x="582" y="209">own</text>
 <rect class="chip" x="625" y="170" width="96" height="50" rx="4"/>
 <use href="#tablet" x="635" y="182" width="18" height="24"/>
 <text class="label" x="663" y="191">Tablet</text>
 <use class="k-dev" href="#key" x="663" y="199" width="22" height="12"/>
-<text class="dim" font-size="11" x="688" y="209">own</text>
 <path d="M85 232V266" stroke="var(--red)" stroke-width="1.4"/><circle cx="85" cy="266" r="2.6" fill="var(--red)"/>
 <path d="M200 232V266" stroke="var(--red)" stroke-width="1.4"/><circle cx="200" cy="266" r="2.6" fill="var(--red)"/>
 <path d="M300 232V266" stroke="var(--red)" stroke-width="1.4"/><circle cx="300" cy="266" r="2.6" fill="var(--red)"/>
@@ -126,10 +122,9 @@ Keys carve it into private worlds.
 <rect x="602" y="364" width="36" height="6" rx="1" fill="var(--blue)"/><rect class="slab" x="602" y="372" width="36" height="34" rx="2"/>
 <rect x="646" y="364" width="36" height="6" rx="1" fill="var(--red)"/><rect class="slab" x="646" y="372" width="36" height="34" rx="2"/>
 <rect x="690" y="364" width="36" height="6" rx="1" fill="var(--blue)"/><rect class="slab" x="690" y="372" width="36" height="34" rx="2"/>
-<text class="label" x="30" y="452"><tspan font-weight="bold">Management password</tspan><tspan class="dim">  ·  the admin approves and revokes devices with it; it opens no one’s data</tspan></text>
-<text class="label" x="30" y="474"><tspan font-weight="bold">Recovery key</tspan><tspan class="dim">  ·  kept offline; replaces a lost or stolen management key</tspan></text>
+<text class="label" x="30" y="452"><tspan font-weight="bold">Hub password</tspan><tspan class="dim">  ·  unlocks hub management: approving and revoking devices; it recovers the creator’s home, nobody else’s</tspan></text>
 </svg>
-<svg class="narrow" viewBox="0 0 360 594" role="img" aria-labelledby="locks-title-n">
+<svg class="narrow" viewBox="0 0 360 554" role="img" aria-labelledby="locks-title-n">
 <title id="locks-title-n">The same picture, arranged for a narrow screen.</title>
 <rect x="6" y="10" width="348" height="492" rx="8" fill="var(--wash)" stroke="var(--ink)" stroke-width="1.25"/>
 <text class="name" x="16" y="34">The mailbox</text>
@@ -146,6 +141,7 @@ Keys carve it into private worlds.
 <use class="k-dev" href="#key" x="56" y="173" width="22" height="12"/>
 <rect class="chip" x="104" y="148" width="72" height="44" rx="4"/>
 <use href="#laptop" x="109" y="161" width="22" height="17"/>
+<path d="M80 179H134" stroke="var(--ink)" stroke-width="1.2" stroke-dasharray="3 3"/>
 <text class="small" x="136" y="167">Laptop</text>
 <use class="k-dev" href="#key" x="136" y="173" width="22" height="12"/>
 <rect class="home" x="16" y="214" width="168" height="92" rx="6"/>
@@ -195,14 +191,14 @@ Keys carve it into private worlds.
 <rect x="223.5" y="446" width="36" height="6" rx="1" fill="var(--blue)"/><rect class="slab" x="223.5" y="454" width="36" height="34" rx="2"/>
 <rect x="265" y="446" width="36" height="6" rx="1" fill="#8a919e"/><rect class="slab" x="265" y="454" width="36" height="34" rx="2"/>
 <rect x="306.5" y="446" width="36" height="6" rx="1" fill="var(--blue)"/><rect class="slab" x="306.5" y="454" width="36" height="34" rx="2"/>
-<text class="label" x="6" y="528" font-weight="bold">Management password</text>
-<text class="small dim" x="6" y="545">the admin approves devices; it opens no data</text>
-<text class="label" x="6" y="570" font-weight="bold">Recovery key</text>
-<text class="small dim" x="6" y="587">offline; replaces a lost management key</text>
+<text class="label" x="6" y="528" font-weight="bold">Hub password</text>
+<text class="small dim" x="6" y="545">unlocks hub management; recovers only the creator</text>
 </svg>
 <figcaption>
 Each layer is opened by a different key and held by fewer devices.
-Every device signs with a key that never leaves it, so a message proves which device wrote it.
+Every device signs with a key kept in its system keychain, so a message proves which keychain wrote it.
+Alice’s phone and laptop share one Apple keychain, and so one key (dashed);
+Carol’s Android phone and tablet each have their own.
 A home holds the keys of its person's lists,
 so a list made on the phone appears on the laptop with no invitation.
 </figcaption>
@@ -216,13 +212,14 @@ Removing someone starts the list again under a new key.
 
 <h2 id="pairing">Adding a device</h2>
 <p>
-Alice adds her laptop. Bob, the hub admin, approves it.
+A device that shares Alice’s keychain, such as a new iPhone, already has her keys and just syncs.
+Anything else pairs: here Alice adds an Android tablet, and Bob, the hub admin, approves it.
 </p>
 <figure>
 <svg class="wide" viewBox="0 0 760 730" role="img" aria-labelledby="pairing-title">
-<title id="pairing-title">Alice's phone makes two secrets, L and A, and locks her home key with both. L goes to the laptop by QR code; A goes to the admin, sealed. The laptop sends a claim. If the admin approves, using the management password, the laptop gets a certificate and A, opens the package with L and A, and syncs every list. If the admin rejects, A never leaves the admin and the laptop stays locked out.</title>
+<title id="pairing-title">Alice's phone makes two secrets, L and A, and locks her home key with both. L goes to the tablet by QR code; A goes to the admin, sealed. The tablet sends a claim. If the admin approves, using the hub password, the tablet gets a certificate and A, opens the package with L and A, and syncs every list. If the admin rejects, A never leaves the admin and the tablet stays locked out.</title>
 <use href="#phone" x="92.5" y="12" width="15" height="25"/><text class="name" x="100" y="56" text-anchor="middle">Alice’s phone</text>
-<use href="#laptop" x="268" y="16" width="24" height="18"/><text class="name" x="280" y="56" text-anchor="middle">Alice’s new laptop</text>
+<use href="#tablet" x="271" y="12" width="18" height="24"/><text class="name" x="280" y="56" text-anchor="middle">Alice’s Android tablet</text>
 <text class="name" x="460" y="56" text-anchor="middle">Mailbox</text>
 <use href="#phone" x="642.5" y="12" width="15" height="25"/><text class="name" x="650" y="56" text-anchor="middle">Bob’s phone<tspan class="dim" font-weight="normal"> (admin)</tspan></text>
 <rect x="451" y="68" width="18" height="658" rx="3" fill="var(--wash)"/>
@@ -235,11 +232,11 @@ Alice adds her laptop. Bob, the hub admin, approves it.
 <path class="qr" d="M100 222H276" marker-end="url(#headk)"/>
 <text class="small" x="190" y="215" text-anchor="middle">QR code: <tspan class="L">L</tspan></text>
 <text class="dim" font-size="11" x="190" y="237" text-anchor="middle">never via the mailbox</text>
-<rect class="box" x="195" y="250" width="170" height="70" rx="5"/><text class="step" x="280" y="271" text-anchor="middle">Makes its own keys</text><text class="small" x="280" y="288" text-anchor="middle">signs a claim with <tspan class="L">L</tspan>:</text><text class="small" x="280" y="305" text-anchor="middle">“Laptop, from Alice”</text>
+<rect class="box" x="195" y="250" width="170" height="70" rx="5"/><text class="step" x="280" y="271" text-anchor="middle">Makes its own keys</text><text class="small" x="280" y="288" text-anchor="middle">signs a claim with <tspan class="L">L</tspan>:</text><text class="small" x="280" y="305" text-anchor="middle">“Tablet, from Alice”</text>
 <path class="flow" d="M280 344H646" marker-end="url(#head)"/>
 <circle cx="460" cy="344" r="3.5" fill="var(--blue)"/>
 <text class="small" x="370" y="337" text-anchor="middle">the claim</text>
-<rect class="box" x="555" y="358" width="190" height="124" rx="5"/><text class="step" x="650" y="380" text-anchor="middle">New device from Alice:</text><text class="label" x="650" y="397" text-anchor="middle">Laptop</text><rect x="576" y="407" width="70" height="22" rx="4" fill="var(--blue)"/><text class="btn" x="611" y="422" text-anchor="middle" style="fill:#fff">Approve</text><rect x="654" y="407" width="70" height="22" rx="4" fill="var(--paper)" stroke="var(--ink)"/><text class="btn" x="689" y="422" text-anchor="middle">Reject</text><text class="small" x="650" y="451" text-anchor="middle">management password:</text><text class="small" x="650" y="468" text-anchor="middle">only now. Never sees <tspan class="L">L</tspan>.</text>
+<rect class="box" x="555" y="358" width="190" height="124" rx="5"/><text class="step" x="650" y="380" text-anchor="middle">New device from Alice:</text><text class="label" x="650" y="397" text-anchor="middle">Tablet</text><rect x="576" y="407" width="70" height="22" rx="4" fill="var(--blue)"/><text class="btn" x="611" y="422" text-anchor="middle" style="fill:#fff">Approve</text><rect x="654" y="407" width="70" height="22" rx="4" fill="var(--paper)" stroke="var(--ink)"/><text class="btn" x="689" y="422" text-anchor="middle">Reject</text><text class="small" x="650" y="451" text-anchor="middle">hub password:</text><text class="small" x="650" y="468" text-anchor="middle">only now. Never sees <tspan class="L">L</tspan>.</text>
 <rect x="38" y="380" width="124" height="40" fill="var(--paper)"/>
 <text class="small dim" x="100" y="396" text-anchor="middle">can be offline</text><text class="small dim" x="100" y="412" text-anchor="middle">from here on</text>
 <rect x="186" y="496" width="562" height="224" rx="6" fill="none" stroke="var(--ink)" stroke-width="1"/>
@@ -249,7 +246,7 @@ Alice adds her laptop. Bob, the hub admin, approves it.
 <path class="flow" d="M650 538H284" marker-end="url(#head)"/>
 <circle cx="460" cy="538" r="3.5" fill="var(--blue)"/>
 <text class="small" x="555" y="531" text-anchor="middle">certificate + <tspan class="A">A</tspan></text>
-<text class="dim" font-size="11" x="555" y="553" text-anchor="middle"><tspan class="A">A</tspan> re-sealed to this laptop</text>
+<text class="dim" font-size="11" x="555" y="553" text-anchor="middle"><tspan class="A">A</tspan> re-sealed to this tablet</text>
 <rect class="box" x="192" y="548" width="176" height="50" rx="5"/><text class="step" x="280" y="569" text-anchor="middle"><tspan class="L">L</tspan> + <tspan class="A">A</tspan> open the package</text><text class="small" x="280" y="586" text-anchor="middle">home key: every list syncs</text>
 <path class="flowdim" d="M650 652H284" marker-end="url(#headd)"/>
 <circle cx="460" cy="652" r="3.5" fill="var(--dim)"/>
@@ -262,10 +259,10 @@ Alice adds her laptop. Bob, the hub admin, approves it.
 <rect class="box" x="16" y="10" width="328" height="84" rx="6"/><use href="#phone" x="30" y="17" width="12" height="20"/><text class="small dim" x="54" y="31">Alice’s phone</text><text class="step" x="28" y="54">Add a device</text><text class="small" x="28" y="71">makes <tspan class="L">L</tspan> and <tspan class="A">A</tspan>; locks the home key with both,</text><text class="small" x="28" y="88">uploads it, and <tspan class="A">A</tspan> sealed to the admin key</text>
 <path class="qr" d="M60 96V138" marker-end="url(#headk)"/>
 <text class="small" x="74" y="114">QR code: <tspan class="L">L</tspan></text><text class="dim" font-size="11" x="74" y="130">never via the mailbox; the phone can go offline</text>
-<rect class="box" x="16" y="142" width="328" height="84" rx="6"/><use href="#laptop" x="26" y="151" width="20" height="15"/><text class="small dim" x="54" y="163">Alice’s new laptop</text><text class="step" x="28" y="186">Makes its own keys</text><text class="small" x="28" y="203">signs a claim with <tspan class="L">L</tspan>: “Laptop, from Alice”</text><text class="small" x="28" y="220">and sends it to the admin via the mailbox</text>
+<rect class="box" x="16" y="142" width="328" height="84" rx="6"/><use href="#tablet" x="29" y="147" width="14" height="20"/><text class="small dim" x="54" y="163">Alice’s Android tablet</text><text class="step" x="28" y="186">Makes its own keys</text><text class="small" x="28" y="203">signs a claim with <tspan class="L">L</tspan>: “Tablet, from Alice”</text><text class="small" x="28" y="220">and sends it to the admin via the mailbox</text>
 <path class="flow" d="M60 228V270" marker-end="url(#head)"/>
 <text class="small" x="74" y="254">the claim</text>
-<rect class="box" x="16" y="274" width="328" height="128" rx="6"/><use href="#phone" x="30" y="281" width="12" height="20"/><text class="small dim" x="54" y="295">Bob’s phone (admin)</text><text class="step" x="28" y="318">New device from Alice: Laptop</text><rect x="28" y="330" width="80" height="24" rx="4" fill="var(--blue)"/><text class="btn" x="68" y="346" text-anchor="middle" style="fill:#fff">Approve</text><rect x="116" y="330" width="80" height="24" rx="4" fill="var(--paper)" stroke="var(--ink)"/><text class="btn" x="156" y="346" text-anchor="middle">Reject</text><text class="small" x="28" y="376">needs the management password, only now.</text><text class="small" x="28" y="393">The admin never sees <tspan class="L">L</tspan>.</text>
+<rect class="box" x="16" y="274" width="328" height="128" rx="6"/><use href="#phone" x="30" y="281" width="12" height="20"/><text class="small dim" x="54" y="295">Bob’s phone (admin)</text><text class="step" x="28" y="318">New device from Alice: Tablet</text><rect x="28" y="330" width="80" height="24" rx="4" fill="var(--blue)"/><text class="btn" x="68" y="346" text-anchor="middle" style="fill:#fff">Approve</text><rect x="116" y="330" width="80" height="24" rx="4" fill="var(--paper)" stroke="var(--ink)"/><text class="btn" x="156" y="346" text-anchor="middle">Reject</text><text class="small" x="28" y="376">needs the hub password, only now.</text><text class="small" x="28" y="393">The admin never sees <tspan class="L">L</tspan>.</text>
 <path class="flow" d="M60 404V446" marker-end="url(#head)"/>
 <text class="small" x="70" y="430">certificate + <tspan class="A">A</tspan></text>
 <path class="flowdim" d="M228 404V446" marker-end="url(#headd)"/>
@@ -275,8 +272,8 @@ Alice adds her laptop. Bob, the hub admin, approves it.
 </svg>
 <figcaption>
 The home key is locked by two secrets that travel separately.
-<b style="color:var(--blue)">L</b> goes only by QR code, from Alice's phone to her laptop.
-<b style="color:var(--red)">A</b> reaches the laptop only through the admin's approval.
+<b style="color:var(--blue)">L</b> goes only by QR code, from Alice's phone to her tablet.
+<b style="color:var(--red)">A</b> reaches the tablet only through the admin's approval.
 The admin never holds both, and a stolen QR code alone opens nothing.
 It does let a thief ask for approval as Alice, so the admin's tap still matters.
 </figcaption>
