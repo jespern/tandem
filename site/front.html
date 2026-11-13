@@ -2,6 +2,7 @@
 <a href="#what">What is Tandem?</a>
 <br><a href="#who">Who is it for?</a>
 <br><a href="#why">Why a mailbox?</a>
+<br><a href="#which">Which mail servers work?</a>
 <br><a href="#cant">What can't it do?</a>
 <br><a href="#checked">Has anyone checked it?</a>
 <br><a href="#airforce">Why .airforce?</a>
@@ -45,9 +46,8 @@ and every device ends up with the same state.
 Live updates use <b>IMAP IDLE</b>: the mail server notifies connected devices
 when messages arrive, without polling.
 Our Fastmail transport tests measured about <b>0.5 seconds</b>
-for an appended message to reach another connected client;
-on Gmail it took about 30 seconds,
-or 9 to 12 when the app restarts its wait every few seconds, as it does there.
+for an appended message to reach another connected client.
+Other providers are slower; see <a href="#which">which mail servers work</a>.
 App batching, the network and the provider affect the time an edit takes to appear.
 On mobile, live updates run while the app is active; it catches up when reopened.
 </p>
@@ -94,7 +94,7 @@ Two words: <b>no servers</b>.
 </p>
 <p>
 Three more: not ours, anyway.
-Any standards-compliant mail account works.
+Most mail accounts work.
 There is no relay, no push service and no key server to run,
 and a mailbox you pay for is more predictable
 than infrastructure that shrinks and grows on other people's terms.
@@ -103,6 +103,31 @@ than infrastructure that shrinks and grows on other people's terms.
 Keeping things that aren't mail in a mail account is not a new idea.
 Kolab did it. Apple Notes did it.
 See the <a href="prior-art.html">prior art</a>.
+</p>
+
+<h2 id="which">Which mail servers work?</h2>
+<p>
+Any IMAP server that accepts a password or an app password
+and offers IDLE and UIDPLUS, which most do.
+These have been measured, in November 2026:
+</p>
+<table>
+<thead>
+<tr><th>Service</th><th>Server</th><th>A change reaches other devices in</th><th>Notes</th></tr>
+</thead>
+<tbody>
+<tr><td>Fastmail</td><td>Cyrus IMAP</td><td>about 0.5 s</td><td>40 devices on one app password all got live updates. 100 changes upload in 21 s.</td></tr>
+<tr><td>Gmail</td><td>Google’s own</td><td>about 30 s, or 9–12 s with the app restarting its wait every few seconds</td><td>Needs an app password. Uploads go one at a time, about 1 s each. Deleted messages linger in All Mail until the app removes them there too.</td></tr>
+<tr><td>Self-hosted</td><td>Stalwart</td><td>a few milliseconds, on the same machine</td><td>Allows 16 connections per account, so 16 devices per hub.</td></tr>
+</tbody>
+</table>
+<p>
+Expected to work, not yet measured:
+Dovecot (by default 10 connections per user and address),
+iCloud Mail, Yahoo Mail and most hosts that offer app passwords.
+</p>
+<p>
+Doesn’t work: Outlook.com, which only accepts OAuth sign-ins.
 </p>
 
 <h2 id="cant">What can't it do?</h2>
