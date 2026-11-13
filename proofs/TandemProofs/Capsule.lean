@@ -152,6 +152,90 @@ theorem current_nonempty {W P : List Capsule} (hW : Honest W) (hP : P ⊆ W) (hn
         exact hid (by rw [← hcx]; exact List.mem_map_of_mem hc)
     · exact ih (fun x hx => (List.mem_cons.1 (hP hx)).resolve_left (fun h => hin (h ▸ hx))) hne
 
+/-- Names point only to capsules written before, so nothing names the newest. -/
+theorem names_in_earlier {W : List Capsule} (hW : Honest W) {d : Capsule} (hd : d ∈ W) {n : Nat}
+    (hn : n ∈ d.names) : n ∈ W.map (·.id) := by
+  obtain ⟨b, hb, rfl, -⟩ := (honest_wf hW).2 d hd n hn
+  exact List.mem_map_of_mem hb
+
+/-- Every capsule on the hub is a current one or named by a current one. -/
+theorem below_current {W P : List Capsule} (hW : Honest W) (hP : P ⊆ W) :
+    ∀ c ∈ P, ∃ d ∈ current P, d = c ∨ c.id ∈ d.names := by
+  induction hW generalizing P with
+  | genesis id =>
+    intro c hc
+    have hall : ∀ x ∈ P, x = ⟨id, []⟩ := fun x hx => by simpa using hP hx
+    refine ⟨c, List.mem_filter.2 ⟨hc, ?_⟩, Or.inl rfl⟩
+    rw [List.all_eq_true]; intro x hx; rw [hall x hx]; simp
+  | @change W cur id hW hcur hid ih =>
+    set n : Capsule := ⟨id, supersedes cur⟩
+    have hnot : ∀ e ∈ n :: W, id ∉ e.names := by
+      intro e he hin
+      rcases List.mem_cons.1 he with rfl | he
+      · obtain ⟨x, hx, hxn⟩ := mem_supersedes.1 hin
+        rcases hxn with h | h
+        · exact hid (h ▸ List.mem_map_of_mem (hcur hx))
+        · exact hid (names_in_earlier hW (hcur hx) h)
+      · exact hid (names_in_earlier hW he hin)
+    intro c hc
+    by_cases hnP : n ∈ P
+    · have hncur : n ∈ current P := List.mem_filter.2 ⟨hnP, by
+        rw [List.all_eq_true]; intro e he; simpa using hnot e (hP he)⟩
+      by_cases hcn : c = n
+      · exact ⟨n, hncur, Or.inl hcn.symm⟩
+      set P' := P.filter (· ≠ n)
+      have hP' : P' ⊆ W := fun x hx => by
+        obtain ⟨hx, hxn⟩ := List.mem_filter.1 hx
+        exact (List.mem_cons.1 (hP hx)).resolve_left (by simpa using hxn)
+      obtain ⟨d, hd, hdc⟩ := ih hP' c (List.mem_filter.2 ⟨hc, by simpa using hcn⟩)
+      have hdP' := (List.mem_filter.1 hd).1
+      have hdW := hP' hdP'
+      by_cases hnd : d.id ∈ n.names
+      · refine ⟨n, hncur, Or.inr ?_⟩
+        rcases hdc with rfl | h
+        · exact hnd
+        · exact names_closed (.change cur id hW hcur hid) n List.mem_cons_self d
+            (List.mem_cons_of_mem _ hdW) hnd h
+      · refine ⟨d, List.mem_filter.2 ⟨(List.mem_filter.1 hdP').1, ?_⟩, hdc⟩
+        rw [List.all_eq_true]
+        intro e he
+        by_cases hen : e = n
+        · subst hen; simpa using hnd
+        · have := (List.mem_filter.1 hd).2
+          rw [List.all_eq_true] at this
+          exact this e (List.mem_filter.2 ⟨he, by simpa using hen⟩)
+    · exact ih (fun x hx => (List.mem_cons.1 (hP hx)).resolve_left (fun h => hnP (h ▸ hx))) c hc
+
+/-- **A change from a device holding `MS` leaves exactly one current capsule**, whatever was
+destroyed or put back before: it names the current ones, and through them everything else. -/
+theorem change_leaves_one {W P : List Capsule} (hW : Honest W) (hP : P ⊆ W) {id : Nat}
+    (hid : id ∉ W.map (·.id)) :
+    current (⟨id, supersedes (current P)⟩ :: P) = [⟨id, supersedes (current P)⟩] := by
+  set cP := current P with hcP
+  set n : Capsule := ⟨id, supersedes cP⟩
+  have hcurW : cP ⊆ W := fun x hx => hP (List.mem_filter.1 hx).1
+  have hnew : ∀ e ∈ n :: P, id ∉ e.names := by
+    intro e he hin
+    rcases List.mem_cons.1 he with rfl | he
+    · obtain ⟨x, hx, hxn⟩ := mem_supersedes.1 hin
+      rcases hxn with h | h
+      · exact hid (h ▸ List.mem_map_of_mem (hcurW hx))
+      · exact hid (names_in_earlier hW (hcurW hx) h)
+    · exact hid (names_in_earlier hW (hP he) hin)
+  have hold : ∀ c ∈ P, c.id ∈ n.names := by
+    intro c hc
+    obtain ⟨d, hd, hdc⟩ := below_current hW hP c hc
+    exact mem_supersedes.2 ⟨d, hd, by rcases hdc with rfl | h; exact Or.inl rfl; exact Or.inr h⟩
+  show (n :: P).filter (fun c => (n :: P).all fun d => !d.names.contains c.id) = [n]
+  rw [List.filter_cons_of_pos, List.filter_eq_nil_iff.2]
+  · intro c hc hpc
+    rw [List.all_eq_true] at hpc
+    have := hpc n (by simp)
+    simp [hold c hc] at this
+  · rw [List.all_eq_true]
+    intro e he
+    simpa using hnew e he
+
 /-! ## Examples -/
 
 def c0 : Capsule := ⟨0, []⟩

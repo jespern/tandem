@@ -11,5 +11,10 @@ import TandemProofs.Reissue
 import TandemProofs.VectorLimit
 import TandemProofs.Answers
 import TandemProofs.Capsule
+import TandemProofs.Symbolic
+import TandemProofs.HubPassword
+import TandemProofs.Registry
+import TandemProofs.Pairing
+import TandemProofs.Directory
 import TandemProofs.Encoding
 import TandemProofs.Examples
