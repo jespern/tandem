@@ -6,7 +6,7 @@ import random
 import unicodedata
 import unittest
 
-from owner_model import (META, VECTOR_LIMIT, Device, Hub, OwnerLog, b64u, data_write, dominated, may_destroy, digest, inventory_bytes,
+from owner_model import (META, VECTOR_LIMIT, Device, Hub, OwnerLog, admission, b64u, data_write, dominated, may_destroy, offers, state, digest, inventory_bytes,
                          inventory_hash, needed, owner, receive_grant, record, reissue, report,
                          statement, strict_json, supersedes, sync, write_valid)
 
@@ -125,14 +125,6 @@ class Authority(unittest.TestCase):
         self.assertTrue(log.add(first))
         self.assertFalse(log.add(invalid))
         self.assertTrue(log.frozen)
-
-    def test_how_a_member_came_in_cannot_be_rewritten(self):
-        log = family()
-        join = lambda b: (b["members"].update(G="reader"), b.setdefault("via", {}).update(G="party"))
-        self.assertTrue(log.add(next_statement(log, join)))
-        self.assertFalse(log.add(next_statement(log, lambda b: b["via"].update(G="other"))))
-        self.assertFalse(log.add(next_statement(log, lambda b: b["via"].pop("G"))))
-        self.assertFalse(log.add(next_statement(log, lambda b: b["via"].update(X="party"))))   # not a member
 
     def test_a_deleted_collection_has_no_successors(self):
         log = family()
@@ -597,40 +589,6 @@ class Rotation(unittest.TestCase):
         self.assertEqual(self.phone.step(), "dropped")                         # and the phone cleans up after itself
         self.assertNotIn((s["id"], "K1"), self.hub.channels)
 
-    def test_removing_a_member_closes_their_invite_without_a_second_write(self):
-        # Review (Sol): the phone removes G and is lost before it has closed G's invite in home. The
-        # invite can be used again and again, and G can post the old request again.
-        party = {"id": "party", "maxUses": 5, "closed": False}                 # as home holds it
-        self.assertEqual(self.phone.admit("G", party), "admitted")
-        self.assertEqual(self.phone.admit("G", party), "granted")              # already in: the grant again
-        gone = lambda b: (b["members"].pop("G"), b["via"].pop("G"))
-        self.phone.prepare(gone, fresh_key="K1")
-        self.phone.step(); self.phone.step()                                   # announced; home still says the invite is open
-        self.assertFalse(party["closed"])
-        mac = self.mac()
-        self.assertEqual(mac.admit("G", party), "refused")                     # the old request, posted again
-        self.assertEqual(mac.admit("G2", party), "refused")                    # G under a new identity, same invite
-        again = {"id": "again", "maxUses": 1, "closed": False}
-        self.assertEqual(mac.admit("G", again), "refused")                     # never back in without the owner's word
-        self.assertEqual(mac.admit("G", again, asked=True), "admitted")
-        self.assertEqual(mac.admit("H", again), "refused")                     # uses are counted on the roster
-        self.assertNotIn("G2", mac.log.st[mac.log.head()]["body"]["members"])
-
-    def test_an_invite_stays_closed_when_the_removed_member_comes_back_another_way(self):
-        # Review (Sol): G joins through a reusable writer invite and is removed; the home write that
-        # would close the invite is lost. The owner lets G back in as a reader through a new invite.
-        # The old invite must not open again: G still holds it and could bring in a new identity.
-        party = {"id": "party", "maxUses": 5, "closed": False}
-        self.assertEqual(self.phone.admit("G", party, role="writer"), "admitted")
-        self.phone.prepare(lambda b: (b["members"].pop("G"), b["via"].pop("G")), fresh_key="K1")
-        self.finish()
-        again = {"id": "again", "maxUses": 1, "closed": False}
-        self.assertEqual(self.phone.admit("G", again, role="reader", asked=True), "admitted")
-        self.assertFalse(party["closed"])                                      # home never heard of it
-        mac = self.mac()
-        self.assertEqual(mac.admit("X", party, role="writer"), "refused")
-        self.assertNotIn("X", mac.log.st[mac.log.head()]["body"]["members"])
-
     def test_a_crash_right_after_the_announcement_leaves_no_note_behind(self):
         # Review (Sol): the phone publishes the announcement and dies before it has updated home.
         # The note still names the change. Carrying on with the grants alone would leave the note
@@ -656,6 +614,21 @@ class Rotation(unittest.TestCase):
         self.assertEqual(mac.finish_here(), "announced")
         self.assertIsNone(home["flight"])
         mac.amend(lambda b: b["members"].update(J="reader"))
+
+    def test_sharing_is_the_owners_act_and_adding_again_needs_it_too(self):
+        # §11.1, §11.3: no invite, no request to replay. Someone removed is back only when the
+        # owner shares again, and nobody else can add anyone.
+        self.assertEqual(self.phone.share("G", role="writer"), "shared")
+        self.assertEqual(self.phone.share("G"), "granted")                     # already in: the grant again
+        self.phone.prepare(lambda b: b["members"].pop("G"), fresh_key="K1")
+        self.finish()
+        self.assertNotIn("G", self.log.st[self.log.head()]["body"]["members"])
+        mac = self.mac()
+        self.assertEqual(mac.share("G", role="reader"), "shared")              # the owner, on another device
+        self.assertEqual(mac.log.st[mac.log.head()]["body"]["members"]["G"], "reader")
+        stranger = Device("W", family(), self.hub, {"keys": dict(self.home["keys"]), "flight": None})
+        with self.assertRaises(ValueError):
+            stranger.share("X")
 
     def test_a_change_the_hub_hides_from_another_device_kills_the_collection(self):
         # Fails closed: a withholding hub can stop the collection, never hand it to anyone.
@@ -753,3 +726,82 @@ class Encoding(unittest.TestCase):
         for text in ("QR", "QQ==", "QQ=", "Q", "Q Q", "QQ\n", "+/8", "QUJDRA=="):
             with self.assertRaises(ValueError, msg=text):
                 b64u(text)
+
+
+class Offers(unittest.TestCase):
+    """§11.2–§11.4: sharing from the directory, answered once, on all of the user's devices."""
+
+    def setUp(self):
+        self.log, self.hub, self.home = fixture()
+        self.owner = Device("O", self.log, self.hub, self.home)
+
+    def view(self):
+        """What the member's devices see: the roster, read with the keys their grants carry."""
+        log = family()
+        sync(log, self.hub, {g["epoch"]: g["key"] for g in self.hub.inbox.get("G", [])})
+        sync(log, self.hub, self.home["keys"])
+        return log
+
+    def test_an_offer_can_never_overwrite_an_answer(self):
+        # Review (Sol): the phone answered no while the iPad, which hadn't seen that, wrote "offered"
+        # after it. Offers are no longer written, and answers are only ever added: whatever order
+        # the two devices' home writes arrive in, the answer stands.
+        self.owner.share("G")
+        log = self.view()
+        adm = offers(log, self.hub, "G", set())[0]
+        phone, ipad = {(adm, "n")}, set()                                      # the iPad saw the offer and wrote nothing
+        for merged in (phone | ipad, ipad | phone):
+            self.assertEqual(state(log, "G", merged, self.hub.inbox["G"]), "left")
+            self.assertEqual(offers(log, self.hub, "G", merged), [])
+
+    def test_two_answers_at_once_settle_on_no(self):
+        self.owner.share("G")
+        log = self.view()
+        adm = admission(log, "G", log.head())
+        for answers in ({(adm, "a"), (adm, "n")}, {(adm, "n"), (adm, "a")}, {(adm, "a"), (adm, "l")}):
+            self.assertEqual(state(log, "G", answers), "left")
+        self.assertEqual(state(log, "G", {(adm, "a")}), "active")
+
+    def test_adding_again_is_a_new_offer_and_an_old_grant_is_not(self):
+        self.owner.share("G")
+        first = admission(self.view(), "G", self.log.head())
+        answers = {(first, "n")}
+        old = copy.deepcopy(self.hub.inbox["G"])
+        self.owner.prepare(lambda b: b["members"].pop("G"), fresh_key="K1")   # the owner removes her...
+        for _ in range(12):
+            if self.owner.step() in ("done", "idle"):
+                break
+        self.owner.heal_grants()
+        self.assertEqual(self.hub.inbox["G"], [])                              # ...and her grants go
+        self.assertEqual(state(self.view(), "G", answers), "removed")
+        self.hub.inbox["G"] = copy.deepcopy(old)                              # someone posts the old grant again
+        self.assertEqual(offers(self.view(), self.hub, "G", answers), [])
+        self.owner.share("G")                                                  # and later shares with her again
+        log = self.view()
+        again = offers(log, self.hub, "G", answers)
+        self.assertEqual(len(again), 1)
+        self.assertNotEqual(again[0], first)
+        self.assertEqual(state(log, "G", answers, self.hub.inbox["G"]), "offered")
+
+    def test_a_first_grant_deleted_before_it_was_read_comes_back(self):
+        # Review (Sol): she doesn't know the collection exists, so she can't ask for its key.
+        self.owner.share("G")
+        self.hub.inbox["G"] = []                                               # destroyed before she read it
+        self.assertEqual(offers(self.view(), self.hub, "G", set()), [])
+        mac = Device("O", family(), self.hub, self.home)                       # any device of the owner
+        mac.heal_grants()
+        self.assertEqual(len(offers(self.view(), self.hub, "G", set())), 1)
+        mac.heal_grants()                                                      # healing twice sends nothing more
+        self.assertEqual(len(self.hub.inbox["G"]), 1)
+
+    def test_only_the_latest_grant_stays(self):
+        self.owner.share("G")
+        self.owner.prepare(demote, fresh_key="K1")
+        for _ in range(12):
+            if self.owner.step() in ("done", "idle"):
+                break
+        self.owner.heal_grants()
+        for uid in ("O", "W", "R", "G"):
+            box = self.hub.inbox.get(uid, [])
+            self.assertEqual(len(box), 1, uid)
+            self.assertEqual(box[0]["epoch"], self.log.epoch(self.log.head()))

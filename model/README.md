@@ -12,14 +12,16 @@ exact epoch identity, committed snapshot inventories, dead collections (two
 signed successors of one statement) and how every member learns of one,
 deterministic signing again, crash-resumable key changes, the owner's
 devices coordinating through a note in home (including a randomized run of
-three devices, crashes and decisions), the part of an invitation the roster
-decides (uses, and that a removal closes the invite behind it), the strict
-reading of JSON and base64url, field names compared as bytes, and which of
-two redundant hub messages may be destroyed.
+three devices, crashes and decisions), sharing as the owner's own act, the strict
+reading of JSON and base64url, field names compared as bytes, which of
+two redundant hub messages may be destroyed, and sharing's offers and answers:
+admissions, answers that only accumulate, re-offers after a removal, and
+grants that the owner's devices keep and heal (`Offers` in the tests).
 Keys and signatures are symbols: a user ID stands for the user's key. It does
 not test cryptographic implementations, mail bindings, durable filesystem
-writes, pairing, inbox encryption, the invite channel and its signatures,
-or a production client.
+writes, pairing, inbox encryption, the hub directory, or a production client.
+The hub-bound derivations and invite proofs are checked with real cryptography
+in `conformance/` (Python and Apple CryptoKit).
 
 The reference implementation is elsewhere: a Go SDK and device engine, Lean
 proofs and a scenario harness on the `testbed` branch, and real-crypto and
