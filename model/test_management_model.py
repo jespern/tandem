@@ -22,6 +22,15 @@ class Administration(unittest.TestCase):
         self.h.add_revocation(self.h.revoke(alice))
         self.assertEqual(self.h.home_recipients(alice.member), set())
 
+    def test_revoking_first_device_preserves_member_group_and_its_other_device(self):
+        self.h.add_certificate(self.phone)
+        group = self.creator
+        first = self.h.source_certificate(group, "laptop")
+        self.h.add_revocation(self.h.revoke(first))
+        self.assertEqual(self.h.creator, group)
+        self.assertFalse(self.h.current_device(group, "laptop"))
+        self.assertTrue(self.h.current_device(group, "phone"))
+
     def test_two_devices_enroll_concurrently_without_forking_the_hub(self):
         tablet = self.h.enroll(self.creator, "tablet", "laptop")
         ids = set()
@@ -157,6 +166,69 @@ class Administration(unittest.TestCase):
             self.assertEqual(h.snapshot().id, expected)
 
 
+class MemberInitiatedPairing(unittest.TestCase):
+    def setUp(self):
+        self.h = Hub()
+        self.alice = self.h.join("aimee-phone"); self.h.add_certificate(self.alice)
+        self.delegation = self.h.pair(self.alice.member, "aimee-phone")
+        self.h.add_delegation(self.delegation)
+
+    def test_member_creates_pairing_without_admin_password(self):
+        self.assertEqual(self.delegation.signer, "aimee-phone")
+        self.assertFalse(self.h.current_device(self.alice.member, "laptop"))
+
+    def test_admin_approves_claim_without_an_additional_phone_signature(self):
+        cert = self.h.approve_pairing(self.delegation, "laptop", self.delegation.invite_key)
+        self.assertIsNotNone(cert)
+        self.assertTrue(self.h.add_certificate(cert))
+        self.assertTrue(self.h.current_device(self.alice.member, "laptop"))
+        self.assertNotEqual(cert.approver, "aimee-phone")
+        self.assertEqual(self.h.home_recipients(self.alice.member), {"aimee-phone", "laptop"})
+
+    def test_admin_without_bearer_claim_cannot_enroll_as_aimee(self):
+        self.assertIsNone(self.h.approve_pairing(self.delegation, "evil", "admin-key"))
+
+    def test_bearer_without_admin_authority_cannot_enroll(self):
+        self.assertIsNone(self.h.approve_pairing(self.delegation, "laptop", self.delegation.invite_key,
+                                               manager="aimee-phone"))
+
+    def test_source_revocation_blocks_old_pairing_link(self):
+        self.h.add_revocation(self.h.revoke(self.alice))
+        self.assertIsNone(self.h.approve_pairing(self.delegation, "laptop", self.delegation.invite_key))
+
+    def test_old_generation_link_is_not_reusable_after_management_reset(self):
+        self.h.add_root(self.h.recover())
+        self.assertIsNone(self.h.approve_pairing(self.delegation, "laptop", self.delegation.invite_key))
+
+    def test_routine_password_change_keeps_pending_pairing_usable(self):
+        self.h.add_wrapper(self.h.rewrap("new-password"))
+        cert = self.h.approve_pairing(self.delegation, "laptop", self.delegation.invite_key)
+        self.assertIsNotNone(cert)
+        self.assertTrue(self.h.add_certificate(cert))
+
+    def test_expiry_stops_pending_approval(self):
+        self.assertIsNone(self.h.approve_pairing(self.delegation, "laptop", self.delegation.invite_key,
+                                               now=self.delegation.expires))
+
+    def test_delegation_cannot_be_retargeted_to_another_member(self):
+        cert = self.h.approve_pairing(self.delegation, "laptop", self.delegation.invite_key)
+        bad = replace(cert, member=self.h.creator)
+        bad = replace(bad, consent_for=bad.request_id)
+        self.assertFalse(self.h.add_certificate(bad))
+
+    def test_certified_child_survives_later_source_revocation(self):
+        cert = self.h.approve_pairing(self.delegation, "laptop", self.delegation.invite_key)
+        self.h.add_certificate(cert)
+        self.h.add_revocation(self.h.revoke(self.alice))
+        self.assertTrue(self.h.current_device(self.alice.member, "laptop"))
+
+    def test_old_delegated_claim_omitted_at_cut_needs_renewal(self):
+        cert = self.h.approve_pairing(self.delegation, "laptop", self.delegation.invite_key)
+        cut = self.h.revoke(self.alice)
+        self.h.add_revocation(cut); self.assertTrue(self.h.add_certificate(cert))
+        self.assertFalse(self.h.current_device(self.alice.member, "laptop"))
+
+
 class PasswordAndRecovery(unittest.TestCase):
     def test_rewrap_preserves_manager_devices_and_root(self):
         h = Hub(); old_root, old_state = h.current, h.snapshot()
@@ -189,7 +261,7 @@ class PasswordAndRecovery(unittest.TestCase):
         self.assertFalse(h.add_root(forged)); self.assertEqual(h.current, old)
         self.assertFalse(h.frozen)
 
-    def test_recovery_replaces_manager_and_preserves_creator_member_id(self):
+    def test_recovery_replaces_manager_and_preserves_creator_member_record(self):
         h = Hub(); member = h.creator
         root = h.recover(); self.assertTrue(h.add_root(root))
         self.assertTrue(h.can_manage("M1")); self.assertFalse(h.can_manage("M0"))

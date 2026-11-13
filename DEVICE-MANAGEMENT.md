@@ -25,29 +25,49 @@ password and recovery key. A member need not know another hub's password.
 
 An ordinary member can request device addition/removal. This proposal makes the
 hub admin approve both security actions; a local "forget device" is not a
-cryptographic revocation. Aimee approves a new device's binding to her identity,
-and the admin approves its admission to the hub. For the hub creator's own new
-device these approvals are one person's ceremony.
+cryptographic revocation. Aimee authorizes pairing by creating a QR/link on her
+existing device.
+The admin approves the resulting laptop request; Aimee has no second approval
+or code-comparison step. For the creator's own device, the creator does both.
 
 The hub administrator **cannot** mint a replacement device for an existing
 member without that member's authorization, decrypt their private home, grant
 themselves someone else's list, or change a collection roster without its owner.
 Mailbox administration already allows denial of service, not impersonation.
 
-To make these boundaries concrete, member identities and device authorization
-are scoped to a hub. The app can present one personal profile and all lists
-together, but it holds a distinct member identity on each hub. Enrolling a
-phone on one hub does not enroll it on another; each hub's admin must approve.
+Members are ordinary records that group approved device keys, scoped to a hub.
+There is **no separate personal identity key**, identity password or personal
+identity-recovery chain. The app can present one profile and all lists together;
+each hub has its own member record. Enrolling a phone on one hub does not enroll it on another; each hub's admin must approve.
 Removing it is also tracked separately on every hub. This deliberately replaces
 the draft's automatic enrollment through homes that list other hub credentials.
 Merely discovering credentials for another hub does not authorize a device there.
 
-Only the hub creator gets identity/data recovery through the hub recovery key,
+Only the hub creator gets recovery of their member access and data through the
+hub recovery key,
 as described in §8. A hub recovery key does not recover another member's private
 keys. A member who loses every device has to join as a new member and have lists
 shared again; private data with no readable replica is lost. Optional personal
 recovery is a separate future design, not secretly implemented by giving the
 hub admin decryption power.
+
+### Required continuous sync between paired devices
+
+One participant/member record has several device keypairs. Lists are owned by
+and shared with that record; signatures authenticate the particular device.
+Pairing admits the laptop to Aimee's existing record and transfers access to her
+shared encrypted home. It does not take a one-time snapshot of her permissions.
+
+When her phone creates a list, its membership, key and metadata are written into
+that same home. The laptop receives them through ordinary sync, with no new
+invitation or admin approval. The same applies when another owner shares a new
+list with Aimee. An admitted owner device acts for the existing owner record;
+pairing does not turn one list into multiple independent owners.
+
+The record is ordinary persistent bookkeeping, with no separate personal root
+key, identity password or identity-recovery chain. Removing one device retires
+that key and rotates exposed home/list keys; the surviving devices continue as
+the same participant, retaining their lists, roles and metadata.
 
 ## 2. Keys
 
@@ -60,7 +80,7 @@ ChaCha20-Poly1305. New `tandem/hubmgmt1/` labels deliberately avoid v1 compatibi
 | `RKs`, `RKa` | HKDF(RS, empty, `tandem/hubmgmt1/recovery-sign` / `recovery-agree`, 32) |
 | Stable hub authority ID | pub(RKs), pinned from setup/invitation; independent of mailbox credentials |
 | `MS`, management seed, 32 bytes | OS random; password-encrypted capsule and independent HPKE recovery box |
-| `MKs`, management signing key | HKDF(MS, empty, `tandem/hubmgmt1/manager-sign`, 32) |
+| Management signing/agreement keys | HKDF(MS, empty, `tandem/hubmgmt1/manager-sign` / `manager-agree`, 32); both public keys are recovery-certified |
 | Device signing/agreement keys | Independently random on each installation; this-device-only storage, never copied during pairing |
 | Home key | Random per member and home epoch; HPKE boxes to that member's admitted devices |
 | Collection epoch key | Random as in the draft; distributed to admitted member devices |
@@ -69,10 +89,14 @@ No home or collection key is derivable from the hub password, MS, or HubK.
 MS is not a universal data-decryption key. The creator may explicitly seal their
 own home key to RKa for their personal recovery; other members never do so.
 
-A member anchor binds the hub authority ID, their first device signing key and
-a random member nonce. The member ID hashes those values. The initial device
-proves possession of its own keys. A subsequent device certificate needs both
-hub-manager authorization and that member's authorization (§5). Device IDs are
+A **member registration record** binds the hub authority ID, first admitted
+device keys and enrollment reference. Its content hash is the stable member
+record ID used by lists, home and pairing; it is an identifier, not a credential.
+The initial device proves possession of its own keys and the admin admits it.
+Subsequent device certificates refer to the same record and require the
+member-initiated pairing delegation plus admin approval (§5). Removing the first
+device does not remove the record or give that old key special authority.
+Device IDs are
 random 8-byte dot namespaces; certificates bind the full signing and agreement
 keys and are themselves named by full hashes. Colliding IDs never select keys
 by arrival order. Certificates and signatures bind the hub authority ID.
@@ -100,8 +124,8 @@ unlimited offline guessing; no UI retry limit protects it.
 Use ChaCha20-Poly1305 with a fresh random 12-byte nonce. AAD binds the purpose,
 hub authority ID, recovery certificate ID, wrapper revision and parent-set hash,
 KDF profile, salt and nonce, with fixed widths/length prefixes. The plaintext
-holds MS and its recovery-certificate ID. After decrypting, derive MKs and check
-its public key against the recovery certificate. Independently HPKE-seal MS to
+holds MS and its recovery-certificate ID. After decrypting, derive both manager keys and check
+their public halves against the recovery certificate. Independently HPKE-seal MS to
 RKa with a distinct purpose label and the same hub/certificate binding.
 
 The manager signs wrapper metadata and ciphertext. The first wrapper is
@@ -113,7 +137,7 @@ inputs rather than randomized signature bytes.
 **Routine change:** enter the current password, decrypt MS, choose a new
 password, generate a fresh salt/nonce, persist the exact new wrapper and signed
 replacement, publish it, verify durable delivery, then clean up obsolete copies.
-All devices subsequently use the current wrapper. Personal identities, device
+All devices subsequently use the current wrapper. Member records, device
 keys, home keys and collection keys do not change. No re-enrollment is needed.
 
 **Forgot password, no suspected compromise:** RS opens MS's independent recovery
@@ -122,7 +146,7 @@ box. Rewrap that same MS. Erase RS from the application after the operation.
 **Concurrent changes:** keep both maximal signed wrappers and report that the
 change needs finishing. Unlock either valid one and explicitly publish a new
 wrapper naming both. No arbitrary password wins by hash or wall clock, and no
-identity/list is killed by this credential conflict.
+member record/list is killed by this credential conflict.
 
 Old ciphertext plus the old password still reveals MS. Deletion does not erase
 captured copies. Routine password change is not a security reset. Suspected
@@ -131,8 +155,8 @@ password/MS compromise requires §8 and a fresh MS, not another wrapper.
 ## 4. Recovery authority and the device registry
 
 A recovery certificate binds hub authority ID, previous certificate ID,
-generation exactly predecessor + 1, manager public key, bootstrap commitments,
-permitted mailbox descriptors, and the immutable creator member anchor. Genesis
+generation exactly predecessor + 1, both manager public keys, bootstrap commitments,
+permitted mailbox descriptors, and the immutable creator member registration. Genesis
 also fixes RKa. RKs signs it; the new MKs proves possession over that exact
 certificate. The recovery key is never encrypted under the management password.
 A compromised manager cannot replace it or certify a different manager.
@@ -153,7 +177,7 @@ alias. Revocations included in the offline recovery checkpoint are retained thro
 that reset. The recovery operator must gather surviving replicas and review
 that cut: a receiver cannot merge excluded old-manager facts back into the new
 generation to compensate for an incomplete checkpoint. Concurrent device
-additions and concurrent removals do not create competing identity histories.
+additions and concurrent removals do not create competing device registries.
 
 Each certificate has an **issuance snapshot**, the exact known certificate and
 revocation IDs against which member authorization was checked. A valid new
@@ -186,58 +210,121 @@ collection key rotations still use their own serialized announcement procedure.
 IMAP is not a signed compare-and-swap service. Cached clients may be stale, and
 a fresh client shown only old metadata cannot prove freshness.
 
-## 5. Enrollment and pending invitations
+## 5. Member-initiated pairing and the admin's approval
 
-The admin creates a named pending invitation, stored in their private home and
-visible across all their devices. It contains invite ID, intended person/device,
-creation time, expiry, requested member ID if applicable, and resulting
-certificate IDs. Default expiry is 24 hours, adjustable at creation. Cancellation
-stops an unapproved enrollment; it does not revoke a device already admitted.
-Mail credentials exposed in a link outlive link expiry until the provider revokes
-them.
+**The required experience:** Aimee opens "Add a device" on her enrolled phone,
+creates a QR/link and opens it on her laptop. The laptop obtains connection and
+pairing information there, generates independent keys, and submits its claim.
+The admin sees **"New device from Aimee: Laptop — Approve / Reject"**. There is
+no preliminary admin invitation, additional Aimee approval or six-digit comparison.
+The laptop says "Waiting for the hub admin" and shows private data after approval.
+"Enrolled" is recorded only after that approval, so Reject remains meaningful.
 
-An ordinary hub link can preauthorize a **new member** through an invite-key
-capability. The manager signs its purpose, hub/root certificate, invite ID and
-invite public key. The bearer signs the exact first-device keys with that invite
-key and proves their own keys; this is a bounded delegation, not a manager key.
-The validator must refuse this capability type for an existing member identity. Its member ID must derive from that new member's own first device;
-it cannot claim an existing member ID. Forwarded links may admit unexpected new
-members but grant them no collection. Do not promise cryptographic single-use
-without an admin response; show multiple claims on one invite for review.
+Aimee creates a pending pairing record in her own encrypted home. It contains a
+random token ID, intended device label, creation time, expiry, staged-package
+references and outcomes. The admin's private home records the arriving claim,
+not a copy of her secret link. Both histories sync across their respective
+devices. The default expiry is 24 hours, adjustable at creation; it bounds honest
+pending claims, not leaked mail credentials. Already approved certificates do
+not expire because the link expired.
 
-For **another device of an existing member**, use this ceremony:
+### 5.1 What the phone prepares
 
-1. The new device opens the invitation in the trusted native app and generates
-   its own signing and agreement keys. It signs a request bound to the invite,
-   hub, member ID and both public keys. An HPKE challenge/response proves
-   possession of the agreement private key.
-2. An existing admitted device of that member approves those exact keys. Compare
-   a six-digit code bound to the invite, keys and a signed fresh challenge, as
-   in the current pairing flow. A matching name alone is not approval. The proof
-   is bound to the current hub recovery certificate and issuance snapshot.
-3. The admin enters the hub password on an admin device, verifies the member's
-   approval and current revocations, then signs the target device certificate.
-   For their own new device the admin's existing device supplies both approvals.
-   Aimee never has to know the hub password.
-4. An existing device of the member HPKE-seals their home key and needed grant
-   authorizations to the newly admitted device. The admin supplies no private
-   data key and cannot read that transfer. Delivery is retained/retried; no
-   member device online means the certificate may be approved but data transfer
-   remains pending. The creator's offline recovery path is the exception in §8.
-5. Private activity records enrollment, and all admin devices derive the pending
-   invite's status from the verified certificate. Members track their own device
-   state in their private homes. No private device key, RS or MS is in a QR/link.
+The phone generates two independent random 32-byte secrets, `L` and `A`:
 
-The old device and admin need not be online simultaneously: signed requests and
-approvals persist. Final admin approval requires the password after the target
-keys are known; do not cache MS for days to make a pending invite work. Two
-properly authorized concurrent approvals may admit two devices from one invite;
-show both and let the admin revoke an unintended one. This is not a fork winner.
+- `L` goes only in the QR/link. An invite signing key is derived from L using
+  HKDF with a pairing-specific purpose label and token ID. Its public key goes
+  in a **delegation** signed by the existing phone's device key.
+- `A` is HPKE-sealed to the current management agreement key. Unlocking MS lets
+  the admin open A, but not L. There is no home key in that gate box.
+- The phone seals a small bootstrap bundle under
+  `HKDF(L || A, tokenID, "tandem/hubmgmt1/pair-package", 32)`, using
+  ChaCha20-Poly1305 and a fresh random 12-byte nonce. It contains this member's
+  current shared home-epoch key and the necessary grant authorizations/metadata
+  for continuous sync, including lists created or shared after pairing. It never
+  contains another device's signing private key.
+
+All inputs bind hub authority ID, root-certificate ID, member ID, source device
+certificate, token ID and expiry. The phone's signed delegation additionally
+binds the derived invite public key, package ciphertext hash, gate-box hash and
+permitted purpose **one existing member's device enrollment requests**. It cannot
+change the member record, grant hub management authority or authorize another hub.
+Use separate HPKE purpose labels for the gate and the eventual release.
+
+The QR/link carries L, hub descriptor/credential, directory key, pinned member record
+and hub authority, token ID, delegation and package references (or the compact
+encrypted package). It never carries plaintext home keys, MS, RS or A. The phone
+uploads/retains the signed delegation, encrypted package and gate box before
+showing the link. This stages data delivery; it gives the laptop everything
+needed for the ceremony without keeping the phone online for final approval.
+
+### 5.2 Laptop claim and admin decision
+
+1. Laptop opens the QR/link in the trusted native app, verifies its member/hub
+   pins and delegation, generates its own signing/agreement keypair, and proves
+   possession. The link's invite key signs the exact target keys, device label,
+   token/delegation ID, current root and issuance context. The laptop's signing
+   key also signs the claim; an HPKE challenge proves agreement-key possession.
+   This replaces a second signature from the phone over the now-known keys.
+2. Send the claim and opaque package/gate references to the admin's admitted
+   device inboxes, encrypted to their device keys. Admin devices can display
+   "New device from Aimee: Laptop" while MS is locked. They verify the source
+   member certificate, signed delegation and claim; they never receive L.
+3. **Approve:** admin enters the hub password. Re-sync, check expiry, source
+   device admission/current revocations, root generation and prior token uses.
+   Certify the exact target keys with MKs, including the delegation/claim hashes
+   and member record ID. Open A with the management agreement key and HPKE-seal
+   it to that exact laptop agreement key. The release binds the certificate ID,
+   delegation, package ciphertext hash and target keys. No copy of A is released
+   to a requester without a matching approved device certificate.
+4. Persist the exact signed certificate and encrypted release before export.
+   Publish the certificate before the release. Lost acknowledgements retry the
+   same bytes. If interrupted after certification, a surviving admin device
+   finishes the persisted release, or unlocks MS to reconstruct it; no indefinite
+   cache of unlocked management keys is needed.
+5. Laptop verifies the certificate/release, opens A, combines it with L and opens
+   the staged bundle. Its lists and personal metadata then sync. It retains its
+   new device keys and current home/grant material and discards pairing secrets.
+   Signed completion receipts update Aimee's and the admin's private histories.
+
+**Reject:** record and send the admitted admin device's signed rejection, keep A
+unreleased, and stop that claim's retries. Rejection is a negative workflow
+receipt, not a device revocation or management authority grant. A valid later
+manager-signed certificate takes precedence over a concurrent rejection receipt.
+Once certified, removal requires the normal revocation/rekey procedure; a UI
+rejection cannot withdraw a completed enrollment. Deduplicate claims/outcomes.
+
+Aimee can cancel a pending pairing from an admitted device. Honest admins refuse
+cancelled/expired claims at final approval. The creator cancels their own link the
+same way. Revoke a certificate separately if approval already happened. Mailbox
+credentials leaked in any QR/link still require provider revocation.
+
+**Link security trade-off.** The link is a bearer delegation: anyone who captures
+it can request enrollment as Aimee. Without the comparison ceremony we cannot
+cryptographically distinguish her intended laptop from another link holder.
+Admin approval is still required, and L alone cannot open the staged private
+bundle. The admin, having A, must not receive or log L: capture of the link plus
+management access supplies both factors and defeats that separation. Tell users
+to treat the link as sensitive; never put it into the directory, admin log or
+notification. Multiple claims on one token are shown together. Honest admins
+approve one intended claim; concurrently approved claims are both real devices
+and need explicit revocation if unintended, not an arbitrary mailbox-order winner.
+
+If home keys rotate after the package was staged, old bootstrap keys cannot
+promise current access. Refresh the package from an admitted member device or
+deliver the new home key to the approved laptop through normal sync. This may
+wait for a member device to reconnect, but asks for no second pairing ceremony.
+An old-root delegation is invalid after management recovery; issue a fresh link.
 
 No permanent biometric shortcut or persisted unlocked MS is defined. Unlock for
-one explicit action or displayed batch, and release/wipe buffers on completion,
+one explicit action or displayed batch, then release/wipe buffers on completion,
 cancellation, backgrounding or lock. Malware present during password entry can
 steal MS. Managed runtimes cannot promise perfect memory erasure.
+
+An ordinary invitation for a **new member** remains separate. It may preauthorize
+new-member admission through a manager-signed, purpose-limited invitation key;
+it cannot reuse this path to claim an existing member ID. Its bounded delegation
+and forwarding risks still require explicit wire validation.
 
 ## 6. Collection authority and historical writes
 
@@ -270,8 +357,8 @@ of service would require a separate owner-control/co-signing or checkpoint
 protocol, and is not claimed here. A copied collection/new offer must be issued
 by a currently admitted owner device, not merely carry a historical owner name.
 
-User directory identity/device bindings carry manager certificates and required
-member proofs. Device-written presence hints are not identity authority. Private
+Directory member/device bindings carry manager certificates and required
+member proofs. Device-written presence hints are not membership authority. Private
 home epochs pin device floors and use random keys, fixed inventories and retained
 old-channel announcements; there is no shared US from which a removed device
 can derive new home keys.
@@ -343,7 +430,7 @@ A manager-only compromise cannot forge the member approvals necessary to read
 an existing member's private data. It can admit lookalike new members, revoke
 people and deny service; an owner fooled into sharing with a lookalike has made
 a real disclosure. Compromise of both an individual's device and the management
-key is stronger; require clean-device recovery and review that member's identity.
+key is stronger; require clean-device recovery and review that member's approved devices.
 
 A client deliberately shown only old valid root metadata may remain deceived
 until it receives the reset. No signed timestamp proves absolute freshness here.
@@ -384,13 +471,12 @@ and claimed/received times, not a fictitious globally trusted wall-clock order.
 1. Creator invites Aimee as a new member, shares two of five lists, and receives
    her acceptance receipts. She chooses no management password and saves no hub
    recovery key. Her device cannot read the other three lists.
-2. Creator creates pending invitations for their phone and laptop, both visible
-   across existing devices. Each generates its own keys; the creator approves
-   the exact request and unlocks the hub password to certify it. Member-approved
-   key delivery gives identical list/metadata access without copying private
-   device keys. Requests can wait offline; approval need not last for the life
-   of the invitation. Aimee's additional device needs Aimee's approval plus the
-   hub admin's approval, not disclosure of the hub password to her.
+2. Aimee creates a pairing QR/link on her enrolled phone and opens it on her
+   laptop. The admin receives "New device from Aimee: Laptop — Approve / Reject".
+   Approval with the hub password releases the staged access package. Aimee has
+   no second approval/code-comparison step and never learns the hub password.
+   The creator adds their own devices using the same flow and approves their
+   own request. Pending/completed states appear across the relevant devices.
 3. Creator removes their lost phone with the hub password. The app carries out
    §7, showing incomplete rekeys/provider revocation honestly. Aimee requests
    the corresponding action for her phone. Removing a device on one hub does
@@ -401,14 +487,15 @@ and claimed/received times, not a fictitious globally trusted wall-clock order.
 
 ## 11. Verification and implementation boundary
 
-This is a new wire profile/version. Member identity, certificate validation,
+This is a new wire profile/version. Member registration, certificate validation,
 write signatures, home keys, grants, directory authority and recovery differ from
 v1. Migrating a shared US cannot erase copies already held by old devices; no
 transparent in-place v1 migration is claimed.
 
 The adjacent symbolic tests cover only selected root/manager/device rules,
 commutative registry changes, permanent revocation, password-wrapper conflicts,
-member-consent binding and the fixed-snapshot device cutoff. The model treats
+member-consent binding and the fixed-snapshot device cutoff, plus delegated
+pairing requests. The model treats
 initial admission as directly manager-signed; the optional new-member invite
 capability and its delegation proof are not modelled. They are not proof
 of this entire design. Real-crypto probes checked Argon2id wrapping, rewrapping,
@@ -437,7 +524,15 @@ proposed mail protocol.
 ### Local checks for this proposal
 
 Run `python3 -B -m unittest discover -s model -p 'test_management_model.py'`.
-The 31 new symbolic tests pass, including 100 randomized registry deliveries.
+The 43 new symbolic tests pass, including 100 randomized registry deliveries.
+The 11 real-crypto pairing-gate tests pass with
+`python -B -m unittest discover -s conformance -p 'test_pairing_gate.py'`
+in the conformance environment. They exercise L/A separation, exact recipient
+and certificate binding, package integrity, the deliberate bearer-link risk,
+a list key created after pairing syncing through the shared home, and a rekey
+that preserves laptop access while excluding the old home key.
+They use the existing Python wire primitives and do not test Swift or the full
+enrollment controller.
 The 51 collection-model tests on this branch's base (`3f601c6`) also pass.
 Those are historical collection checks, not validation of the new complete wire
 profile. The proposed architecture still needs an independent security review

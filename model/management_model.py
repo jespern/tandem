@@ -13,8 +13,20 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def member_id(hub, first_device, nonce):
-    return digest(["member", hub, first_device, nonce])
+@dataclass(frozen=True)
+class MemberRegistration:
+    """Bookkeeping group of admitted device keys; no independent private key."""
+    hub: str
+    first_device: str
+    enrollment: str
+
+    @property
+    def id(self):
+        return digest(["member-registration", asdict(self)])
+
+
+def member_record_id(hub, first_device, enrollment):
+    return MemberRegistration(hub, first_device, enrollment).id
 
 
 @dataclass(frozen=True)
@@ -34,6 +46,22 @@ class Root:
 
 
 @dataclass(frozen=True)
+class PairingDelegation:
+    root: str
+    member: str
+    source: str
+    token: str
+    invite_key: str
+    package: str
+    expires: int
+    signer: str
+
+    @property
+    def id(self):
+        return digest(["pairing-delegation", asdict(self)])
+
+
+@dataclass(frozen=True)
 class Certificate:
     root: str
     member: str
@@ -44,11 +72,12 @@ class Certificate:
     issued_revocations: frozenset[str]
     signer: str
     consent_for: str = ""
+    delegation: str | None = None
 
     @property
     def request_id(self):
         return digest(["request", self.root, self.member, self.device, self.enrollment,
-                       self.source, self.approver, sorted(self.issued_revocations)])
+                       self.source, self.approver, sorted(self.issued_revocations), self.delegation])
 
     @property
     def id(self):
@@ -95,8 +124,9 @@ class Wrapper:
 class Hub:
     def __init__(self, key="offline-root", manager="M0", creator_device="laptop"):
         self.key = key
-        self.creator = member_id(key, creator_device, "creator")
+        self.creator = member_record_id(key, creator_device, "creator")
         self.roots, self.children, self.certificates, self.revocations, self.wrappers = {}, {}, {}, {}, {}
+        self.delegations = {}
         self.current, self.frozen = None, False
         self.genesis = Root(None, 0, manager, creator_device, key)
         if not self.add_root(self.genesis):
@@ -131,7 +161,7 @@ class Hub:
             self.frozen = True
         if root.parent is None or root.parent == self.current:
             self.current = root.id
-        # Offline recovery's sole identity exception is the immutable creator.
+        # Offline recovery's sole member-record recovery exception is the immutable creator.
         cert = Certificate(root.id, self.creator, root.creator_device, "root-bootstrap",
                            None, self.key, root.old_revocations, root.manager)
         cert = replace(cert, consent_for=cert.request_id)
@@ -213,8 +243,8 @@ class Hub:
         return next(c for c in self.certificates.values()
                     if c.member == member and c.device == device and self.active(snapshot, c))
 
-    def join(self, device, nonce="invitation", signer=None):
-        cert = Certificate(self.current, member_id(self.key, device, nonce), device, nonce,
+    def join(self, device, enrollment="invitation", signer=None):
+        cert = Certificate(self.current, member_record_id(self.key, device, enrollment), device, enrollment,
                            None, device, self.snapshot().revocations, signer or self.roots[self.current].manager)
         return replace(cert, consent_for=cert.request_id)
 
@@ -240,12 +270,21 @@ class Hub:
             return False
         if cert.source is None:
             # A manager can introduce a new member, not rename their key as Aimee's.
-            if cert.member != member_id(self.key, cert.device, cert.enrollment) or cert.approver != cert.device:
+            if cert.member != member_record_id(self.key, cert.device, cert.enrollment) or cert.approver != cert.device:
                 return False
         else:
             source = self.certificates.get(cert.source)
-            if (source is None or source.member != cert.member or source.device != cert.approver
+            if (source is None or source.member != cert.member
                     or source.root not in roots):
+                return False
+            expected_approver = source.device
+            if cert.delegation is not None:
+                delegation = self.delegations.get(cert.delegation)
+                if (delegation is None or delegation.root != cert.root
+                        or delegation.member != cert.member or delegation.source != cert.source):
+                    return False
+                expected_approver = delegation.invite_key
+            if cert.approver != expected_approver:
                 return False
             if source.root != cert.root and source.id not in root.old_certificates:
                 return False
@@ -253,6 +292,32 @@ class Hub:
                 return False
         self.certificates[cert.id] = cert
         return True
+
+    def pair(self, member, source_device, token="pairing", invite_key="pair-secret-key", package="opaque-package", expires=100):
+        source = self.source_certificate(member, source_device)
+        return PairingDelegation(self.current, member, source.id, token, invite_key,
+                                 package, expires, source_device)
+
+    def add_delegation(self, delegation):
+        source = self.certificates.get(delegation.source)
+        if (source is None or source.member != delegation.member or source.device != delegation.signer
+                or source.root != delegation.root):
+            return False
+        self.delegations[delegation.id] = delegation
+        return True
+
+    def approve_pairing(self, delegation, device, claim_signer, now=0, manager=None):
+        manager = manager or self.roots[self.current].manager
+        source = self.certificates.get(delegation.source)
+        if (not self.can_manage(manager) or delegation.id not in self.delegations
+                or delegation.root != self.current or now >= delegation.expires
+                or claim_signer != delegation.invite_key or source is None
+                or not self.active(self.snapshot(), source)):
+            return None
+        cert = Certificate(self.current, delegation.member, device, delegation.token,
+                           delegation.source, claim_signer, self.snapshot().revocations,
+                           manager, delegation=delegation.id)
+        return replace(cert, consent_for=cert.request_id)
 
     def revoke(self, cert, retained=None, signer=None):
         if retained is None:
