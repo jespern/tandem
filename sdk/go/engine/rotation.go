@@ -75,6 +75,8 @@ type rotationJournal struct {
 	what                  string
 	step                  int
 	noteWritten           bool
+	// noteAttempted: the note's append was tried; it may be on the hub even if its answer never came (§10.3, "Lost answers").
+	noteAttempted bool
 }
 
 func (j *rotationJournal) json() ([]byte, error) {
@@ -82,12 +84,15 @@ func (j *rotationJournal) json() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	note := uint64(0)
-	if j.noteWritten {
-		note = 1
+	flag := func(b bool) uint64 {
+		if b {
+			return 1
+		}
+		return 0
 	}
 	return tandem.NewJSONObject().B64u("c", j.cid).B64u("parent", j.parent).B64u("old", j.oldEpoch).B64u("stmt", p).
-		B64u("k", j.key).B64u("inv", j.inventory).Text("what", j.what).Int("step", uint64(j.step)).Int("note", note).Bytes(), nil
+		B64u("k", j.key).B64u("inv", j.inventory).Text("what", j.what).Int("step", uint64(j.step)).Int("note", flag(j.noteWritten)).
+		Int("attempted", flag(j.noteAttempted)).Bytes(), nil
 }
 
 func parseRotationJournal(data, hub []byte) (*rotationJournal, error) {
@@ -116,7 +121,8 @@ func parseRotationJournal(data, hub []byte) (*rotationJournal, error) {
 		return nil, err
 	}
 	note, _ := j.Integer("note")
-	r.step, r.noteWritten = int(step), note == 1
+	attempted, _ := j.Integer("attempted")
+	r.step, r.noteWritten, r.noteAttempted = int(step), note == 1, attempted == 1
 	return r, nil
 }
 
@@ -509,6 +515,10 @@ func (d *Device) runRotation(ctx context.Context, start *rotationJournal) error 
 					return fail("journal: statement")
 				}
 				note := FlightNote{Parent: j.parent, Statement: j.id, Key: j.key, Members: s.Members, What: j.what, Device: d.deviceName()}
+				j.noteAttempted = true
+				if err := d.saveRotation(&j); err != nil {
+					return err
+				}
 				if err := d.setHome(ctx, name, "flight", note.json()); err != nil {
 					return err
 				}
@@ -827,8 +837,10 @@ func (d *Device) Resume(ctx context.Context) error {
 				j.step = max(j.step, 3)
 			}
 		case !j.noteWritten:
-			// Nothing but the journal left the device; usable only if nothing moved meanwhile.
-			if c == nil || note != nil || !headIsParent {
+			// Nothing but the journal left the device, unless the note's append was tried: then a
+			// note that isn't in home was discarded by another device, and the note in home
+			// outweighs this device's record (§11.6). Usable only if nothing moved meanwhile.
+			if c == nil || note != nil || !headIsParent || j.noteAttempted {
 				if err := d.clearOwnNote(ctx, j.cid, j.id); err != nil {
 					return err
 				}

@@ -168,3 +168,32 @@ func (c *lostAnswers) Append(ctx context.Context, channel string, body []byte) (
 	}
 	return id, err
 }
+
+// 5. The note's append lands but its answer is lost; Bob's Mac discards the change; when the
+// iPhone resumes, it must take the missing note as the discard it is, not write the note again
+// and announce.
+func TestSecondReviewADiscardedChangeStaysDiscardedAfterALostAnswer(t *testing.T) {
+	w := newBobAndCarol(t)
+	lossy := &lostAnswers{MemoryConn: w.hub.Connect()}
+	phone := open(t, w.f, w.keys, w.store, lossy)
+	syncAll(t, phone)
+	lossy.lose.Store(true)
+	if err := phone.RemoveMember(bg, w.carolID, w.list); err == nil {
+		t.Fatal("the answer was lost")
+	}
+	mac := open(t, w.f, w.keys, nil, w.hub.Connect())
+	syncAll(t, mac)
+	pending := mac.PendingChange(w.list)
+	if pending == nil {
+		t.Fatal("no pending change")
+	}
+	must(t, mac.Discard(bg, w.list, pending))
+	restarted := open(t, w.f, w.keys, w.store, w.hub.Connect())
+	if err := restarted.Resume(bg); !errors.Is(err, ErrSuperseded) {
+		t.Fatal("the user is told:", err)
+	}
+	syncAll(t, w.carol)
+	if r := w.carol.Role(w.list); r != Writer {
+		t.Fatal("the discarded change happened:", r)
+	}
+}
