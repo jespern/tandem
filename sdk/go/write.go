@@ -226,10 +226,17 @@ func RecordPayload(record []byte, writes []*Write) ([]byte, error) {
 		}
 		ws[i] = w.toJSON()
 	}
-	return json.Marshal(struct {
+	// Not HTML-escaped: `<`, `>` and `&` in a field name are written as themselves, as the other SDKs write them.
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(struct {
 		Rec    string      `json:"rec"`
 		Writes []writeJSON `json:"writes"`
-	}{B64u(record), ws})
+	}{B64u(record), ws}); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), nil
 }
 
 func parseDot(j JSON) (Dot, error) {

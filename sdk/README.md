@@ -2,9 +2,10 @@
 
 Four native **v2 protocol cores**, with an event-driven session API and the complete
 control-object formats (DESIGN §10.8), checked against shared vectors. Swift and Go have IMAP
-bindings ([`TandemIMAP`](swift/README.md#imap), [`sdk/go/imap`](go/README.md)). Swift has the
-production device engine, `TandemEngine` ([INTEGRATING.md](swift/INTEGRATING.md)); a Go engine is
-being built. `interop/interop.py` runs devices on different engines against one hub. The v1
+bindings ([`TandemIMAP`](swift/README.md#imap), [`sdk/go/imap`](go/README.md)). Swift and Go have
+production device engines: `TandemEngine` ([INTEGRATING.md](swift/INTEGRATING.md)) and
+[`sdk/go/engine`](go/engine/README.md). `interop/interop.py` runs Swift and Go devices on one hub, in
+every pairing. The v1
 implementations on `testbed` are separate.
 
 | Language | Runtime | Changes arrive as | Runtime dependencies |

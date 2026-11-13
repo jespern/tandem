@@ -65,6 +65,6 @@ Everything the Swift engine does except what is Apple-specific, with the Swift t
 
 ## What is left
 
-- An IMAP `PushStore` in Go (the Swift SDK has `TandemIMAP`); until then the engine runs on `MemoryHub` or an app's own binding.
+- Nothing for IMAP: `sdk/go/imap` is the binding. `cmd/tandem-device` drives one device over stdin/stdout for `interop/interop.py`, which runs Swift and Go devices on one Stalwart hub in every pairing (all scenarios pass).
 - What the Swift engine also lacks: restoring a wiped hub (§12.4) beyond record-by-record healing; another admin finishing a certified pairing whose release never went out; keeping a removed member's replica for 30 days and then dropping it (§11.6); runs against Stalwart, Fastmail and Gmail.
 - The core's `RecordPayload` writes with `encoding/json`, which escapes `<`, `>` and `&` in field names and so spells some record payloads differently from the Python and Swift writers. Readers accept both and nothing signs or compares those bytes across devices; worth aligning with `JSONObject` all the same.
