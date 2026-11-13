@@ -30,13 +30,16 @@ public actor Device {
     var inventories: [ID: Inventory] = [:]
     var home: [ID: Record] = [:]
     var collections: [Bytes: CollectionState] = [:]
-    var offers: [Bytes: Offer] = [:]
+    /// Grants delivered to this participant, by grant ID (§11.4).
+    var offers: [ID: Offer] = [:]
     /// Pairing claims this admin device received, by request ID (§6.3).
     var claims: [ID: PairingClaim] = [:]
     /// Receipts from the directory, by ID (§10.8).
     var receipts: [ID: ControlObject] = [:]
     /// This device's own claim, while it waits for the admin (§6.3).
     var pairing: PendingPairing?
+    /// Tests stop a key change here (§11.6's crash points).
+    var crashPoint: String?
 
     var directoryTag: String { Tandem.directoryTag(directoryKey, hub: pin.hub) }
     var directoryChannelKey: Bytes { Tandem.directoryKey(directoryKey, hub: pin.hub) }
@@ -69,7 +72,7 @@ public actor Device {
                                               heads: heads.isEmpty ? nil : heads, inventories: inventories)
             }
         }
-        collections = try Self.loadCollections(store: store, hub: pin.hub, home: home)
+        collections = try Self.loadCollections(store: store, hub: pin.hub, home: home, inventories: inventories)
         for (_, data) in try store.values(prefix: "claim.") {
             guard let j = try? JSON.parse(data), let c = try? PairingClaim.parse(j) else { continue }
             claims[c.id] = c
@@ -79,7 +82,7 @@ public actor Device {
             guard let j = try? JSON.parse(data), let g = j["grant"], let grant = try? ControlObject.parse(g, expect: "grant"),
                   let key = try? j.bytes("k", count: 32) else { continue }
             let o = Offer(grant: grant, key: key)
-            offers[o.collection] = o
+            offers[try grant.id()] = o
             var c = collections[o.collection] ?? CollectionState(id: o.collection)
             c.keys[o.epoch] = key
             collections[o.collection] = c

@@ -6,16 +6,37 @@ struct CollectionState: Sendable {
     let id: Bytes                                   // 16
     var statements: [ID: (write: Write, statement: Statement)] = [:]
     var genesis: ID?
+    /// Epoch starts seen in their parent epoch's channel (§11.6 step 4). Until then a start is a draft (§9.4).
+    var announced: Set<ID> = []
     var keys: [ID: Bytes] = [:]                     // epoch-start statement ID → epoch key
     var records: [Bytes: Record] = [:]
 
     var owner: ID? { genesis.flatMap { statements[$0]?.statement.owner?.uid } }
 
-    /// The statement no other statement follows: this epoch's roster head (no rotation yet: one line).
-    var head: ID? {
-        let parents = Set(statements.values.map(\.write.ref))
-        return statements.keys.filter { !parents.contains($0) }.max { statements[$0]!.statement.n < statements[$1]!.statement.n }
+    /// Whether `id` starts an epoch: its commitment differs from its parent's.
+    func startsEpoch(_ id: ID) -> Bool {
+        guard let s = statements[id] else { return false }
+        guard let p = statements[s.write.ref] else { return id == genesis }
+        return p.statement.commit != s.statement.commit
     }
+
+    /// A statement counts toward the roster unless it is an epoch start not yet announced.
+    func counts(_ id: ID) -> Bool { id == genesis || !startsEpoch(id) || announced.contains(id) }
+
+    func successors(of id: ID) -> [ID] {
+        statements.filter { $0.key != id && $0.value.write.ref == id && counts($0.key) }.map(\.key)
+            .sorted { $0.lexicographicallyPrecedes($1) }
+    }
+
+    /// The roster's head: the one line of counted statements from the genesis (§9.4).
+    var head: ID? {
+        guard var current = genesis else { return nil }
+        while let next = successors(of: current).first, successors(of: current).count == 1 { current = next }
+        return current
+    }
+
+    /// Two counted successors of one statement: the collection is dead (§9.4).
+    var dead: Bool { statements.keys.contains { counts($0) && successors(of: $0).count > 1 } }
 
     /// The epoch a statement belongs to: the first statement back along the chain with the same commitment (§8.3).
     func epoch(of id: ID) -> ID? {
@@ -25,6 +46,21 @@ struct CollectionState: Sendable {
             current = s.write.ref
         }
         return nil
+    }
+
+    /// The epoch `epoch` was replaced by: an announced start whose parent is in it.
+    func successorEpochs(of epoch: ID) -> [ID] {
+        statements.keys.filter { startsEpoch($0) && announced.contains($0) && self.epoch(of: statements[$0]!.write.ref) == epoch }
+    }
+
+    /// Whether `ancestor` is on the chain before `id`.
+    func precedes(_ ancestor: ID, _ id: ID) -> Bool {
+        var current = statements[id]?.write.ref
+        while let c = current, let s = statements[c] {
+            if c == ancestor { return true }
+            current = s.write.ref
+        }
+        return false
     }
 }
 
@@ -102,12 +138,22 @@ extension Device {
         }.sorted { $0.id.lexicographicallyPrecedes($1.id) }
     }
 
+    /// This participant's role in a list now, or nil if the roster doesn't list it (removed, or never added).
+    public func role(list cid: Bytes) -> Statement.Role? {
+        guard let me, let c = collections[cid], let head = c.head else { return nil }
+        return c.statements[head]?.statement.members.first { $0.uid == me.participant }?.role
+    }
+
+    /// Whether a list can't sync any more: two successors of one roster statement (§9.4).
+    public func isDead(list cid: Bytes) -> Bool { collections[cid]?.dead ?? false }
+
     func writeRecord(_ cid: Bytes, record: Bytes, field: Bytes, op: Op, value: Bytes = [], element: Bytes? = nil) async throws {
-        guard let me, var c = collections[cid], let head = c.head, let epoch = c.epoch(of: head), c.keys[epoch] != nil
-        else { throw TandemError.invalid("device: no such list, or no key for it yet") }
+        guard let me, var c = collections[cid], !c.dead, let head = c.head, let epoch = c.epoch(of: head), c.keys[epoch] != nil
+        else { throw TandemError.invalid("device: no such list, no key for its current epoch yet, or it can't sync any more") }
         guard let member = c.statements[head]?.statement.members.first(where: { $0.uid == me.participant }),
               member.role != .reader, record != Self.meta || member.role == .owner
         else { throw TandemError.invalid("device: this participant may not write here") }
+        guard exposure(cid).isEmpty else { throw TandemError.invalid("device: waiting for the list's owner to change its key") }
         var writes: [Write] = []
         if record == Self.meta, c.records[record]?.value(Bytes("_name".utf8)) == nil {
             writes.append(try signRecord(c, me: me, record: record, field: Bytes("_name".utf8), op: .assign,
@@ -145,8 +191,31 @@ extension Device {
         let tag = Tandem.collectionTag(key: key, hub: pin.hub, epoch: epoch)
         let envelope = try Envelope.seal(key: key, hub: pin.hub, kind: 1, tag: tag, plaintext: try recordPayload(record: record, writes: writes))
         let id = try await hub.append(channel: tag, body: envelope)
-        try store.noteMessage(id: id, channel: tag, hash: H(envelope))
-        try store.markApplied(id)
+        try store.transaction {
+            try store.noteMessage(id: id, channel: tag, hash: H(envelope))
+            try store.markApplied(id)
+            try store.noteContents(message: id, record: record, writes: try writes.map { try $0.id() })
+        }
+    }
+
+    /// Members whose devices a known revocation cut but the current epoch's floors don't reflect (§6.4): until the
+    /// owner changes the key, nothing new goes out under the exposed one.
+    func exposure(_ cid: Bytes) -> [ID] {
+        guard let c = collections[cid], let head = c.head, let s = c.statements[head]?.statement else { return [] }
+        return s.members.filter { m in
+            guard let floor = registry.snapshots[m.floor] else { return false }
+            return registry.revs.values.contains { r in
+                registry.certificate(r.target)?.participant == m.uid && registry.revocationValidity(r.id).isValid
+                    && !floor.revocations.contains(r.id)
+            }
+        }.map(\.uid)
+    }
+
+    /// Lists this participant owns whose key must change because a member's device was revoked (§6.4 step 3).
+    public func listsNeedingRekey() -> [Bytes] {
+        guard let me else { return [] }
+        return collections.values.filter { $0.owner == me.participant && !$0.dead && !exposure($0.id).isEmpty }.map(\.id)
+            .sorted { $0.lexicographicallyPrecedes($1) }
     }
 
     // MARK: Learning of lists from home (§6.2)
@@ -162,12 +231,14 @@ extension Device {
                 else { continue }
                 c.keys[e] = k
             }
+            // The key of a change still in flight, so this device can finish or discard it (§11.7).
+            if let note = r.value(Bytes("flight".utf8)).flatMap(FlightNote.parse) { c.keys[note.statement] = note.key }
             collections[cid] = c
         }
     }
 
     /// Collections as the store holds them: memberships from home, statements and records from their writes.
-    static func loadCollections(store: Store, hub: Bytes, home: [ID: Record]) throws -> [Bytes: CollectionState] {
+    static func loadCollections(store: Store, hub: Bytes, home: [ID: Record], inventories: [ID: Inventory]) throws -> [Bytes: CollectionState] {
         var out: [Bytes: CollectionState] = [:]
         for (_, r) in home {
             guard let name = r.value(Bytes("_name".utf8)), name.starts(with: Bytes("membership:".utf8)),
@@ -176,25 +247,49 @@ extension Device {
             for element in r.elements(Bytes("keys".utf8)) {
                 if let j = try? JSON.parse(element), let e = try? j.bytes("epoch", count: 32), let k = try? j.bytes("k", count: 32) { c.keys[e] = k }
             }
+            if let note = r.value(Bytes("flight".utf8)).flatMap(FlightNote.parse) { c.keys[note.statement] = note.key }
             for row in try store.writes(scope: cid, record: Roster.record) {
                 guard case let .record(state) = try Kind1.parse(row.payload, hub: hub, scope: cid), var w = state.writes.first,
                       let st = try? Statement.parse(w.value) else { continue }
                 if w.ref == Bytes(repeating: 0, count: 32) { w.scope = Roster.zeroScope; c.genesis = try w.id() }
                 c.statements[try w.id()] = (w, st)
             }
+            for (name, _) in try store.values(prefix: "ann." + cid.hex + ".") {
+                if let id = Bytes(hex: String(name.dropFirst(4 + 32 + 1))) { c.announced.insert(id) }
+            }
             for record in try store.records(scope: cid) where record != Roster.record {
-                var rec = try Record(hub: hub, scope: cid, id: record)
-                let entries = try store.writes(scope: cid, record: record).compactMap { row -> Entry? in
-                    guard case let .record(state) = try Kind1.parse(row.payload, hub: hub, scope: cid), let w = state.writes.first,
-                          let s = c.statements[w.ref] else { return nil }
-                    return try Entry(w, epoch: row.epoch, epochNumber: s.statement.keyN)
-                }
-                try rec.merge(entries)
-                c.records[record] = rec
+                c.records[record] = try loadData(store: store, hub: hub, c: c, record: record, inventories: inventories)
             }
             out[cid] = c
         }
         return out
+    }
+
+    /// A record of a collection rebuilt from the stored writes the current epoch keeps (§11.6, "Moving over"):
+    /// those written in it and those its inventory lists.
+    static func loadData(store: Store, hub: Bytes, c: CollectionState, record: Bytes, inventories: [ID: Inventory]) throws -> Record {
+        var rec = try Record(hub: hub, scope: c.id, id: record)
+        let current = c.head.flatMap(c.epoch(of:))
+        let entries = try store.writes(scope: c.id, record: record).compactMap { row -> Entry? in
+            guard case let .record(state) = try Kind1.parse(row.payload, hub: hub, scope: c.id), let w = state.writes.first,
+                  let s = c.statements[w.ref] else { return nil }
+            let e = try Entry(w, epoch: row.epoch, epochNumber: s.statement.keyN)
+            guard let current, e.epoch != current else { return e }
+            return inventories[current]?.entries[record]?.contains(e.id) == true ? e : nil
+        }
+        try rec.merge(entries)
+        return rec
+    }
+
+    /// Change to the current epoch's state once its inventory is here; until then keep the old one.
+    func moveCollection(_ cid: Bytes) throws {
+        guard let c = collections[cid], let head = c.head, let current = c.epoch(of: head),
+              current == c.genesis || inventory(current) != nil else { return }
+        var moved = c
+        for record in try store.records(scope: cid) where record != Roster.record {
+            moved.records[record] = try Self.loadData(store: store, hub: pin.hub, c: c, record: record, inventories: inventories)
+        }
+        collections[cid] = moved
     }
 
     // MARK: Collection channels
@@ -208,51 +303,92 @@ extension Device {
 
     func applyCollection(_ m: Message, cid: Bytes, epoch: ID, key: Bytes) throws -> Outcome {
         guard let (kind, plaintext) = try? Envelope.open(key: key, hub: pin.hub, tag: m.channel, envelope: m.body), kind == 1,
-              case let .record(state)? = try? Kind1.parse(plaintext, hub: pin.hub, scope: cid)
+              let parsed = try? Kind1.parse(plaintext, hub: pin.hub, scope: cid)
         else { return .ignored }
-        var any = false
+        guard case let .record(state) = parsed else {
+            guard case let .inventory(f) = parsed else { return .ignored }
+            guard let s = collections[cid]?.statements[epoch]?.statement, let commitment = s.snapshot else { return .waiting }
+            guard try receiveFragment(f, epoch: epoch, commitment: commitment) else { return .ignored }
+            try moveCollection(cid)
+            return .applied
+        }
+        var any = false, moved = false
+        var applied: [Bytes] = []
         for var w in state.writes {
             if state.record == Roster.record {
                 if w.ref == Bytes(repeating: 0, count: 32) { w.scope = Roster.zeroScope }   // a genesis is signed with zero scope (§7.1)
-                switch try acceptStatement(w, cid: cid) {
-                case .applied: any = true
+                switch try acceptStatement(w, cid: cid, channel: epoch) {
+                case .applied: any = true; moved = true; applied.append(try w.id())
                 case .waiting: return .waiting
-                case .ignored: continue
+                case .ignored: if collections[cid]?.statements[try w.id()] != nil { applied.append(try w.id()) }
                 }
             } else {
                 switch dataWriteValidity(w, cid: cid, epoch: epoch) {
                 case .valid:
-                    guard var c = collections[cid], let s = c.statements[w.ref] else { continue }
+                    guard var c = collections[cid], let s = c.statements[w.ref], let source = c.epoch(of: w.ref) else { continue }
+                    let id = try w.id()
+                    try store.putWrite(id: id, scope: cid, record: state.record, epoch: source,
+                                       payload: try recordPayload(record: state.record, writes: [w]))
                     var r = try c.records[state.record] ?? Record(hub: pin.hub, scope: cid, id: state.record)
-                    try r.merge([try Entry(w, epoch: epoch, epochNumber: s.statement.keyN)])
+                    try r.merge([try Entry(w, epoch: source, epochNumber: s.statement.keyN)])
                     c.records[state.record] = r
                     collections[cid] = c
-                    try store.putWrite(id: try w.id(), scope: cid, record: state.record, epoch: epoch,
-                                       payload: try recordPayload(record: state.record, writes: [w]))
+                    applied.append(id)
                     any = true
                 case .pending: return .waiting
                 case .invalid: continue
                 }
             }
         }
+        try store.noteContents(message: m.id, record: state.record, writes: applied)
+        if moved { try moveCollection(cid) }
         return any ? .applied : .ignored
     }
 
-    /// One roster statement (§8.2): the genesis of this collection, or a successor in the same epoch by its owner.
-    func acceptStatement(_ w: Write, cid: Bytes) throws -> Outcome {
+    /// One roster statement (§8.2): the genesis, a same-epoch successor, or an epoch start by the owner. An epoch start
+    /// seen in its parent epoch's channel is announced; seen only in its own, it is a draft (§9.4, §11.6).
+    func acceptStatement(_ w: Write, cid: Bytes, channel: ID) throws -> Outcome {
         guard w.record == Roster.record, w.field == Roster.field, w.op == .assign, w.element == nil, w.context.isEmpty, w.base.isEmpty,
               let s = try? Statement.parse(w.value) else { return .ignored }
         let id = try w.id()
-        guard var c = collections[cid], c.statements[id] == nil else { return .ignored }
+        guard var c = collections[cid] else { return .ignored }
+        if let known = c.statements[id] {
+            // Already held: an epoch start now seen in its parent's channel is announced.
+            if c.startsEpoch(id), !c.announced.contains(id), c.epoch(of: known.write.ref) == channel {
+                c.announced.insert(id)
+                collections[cid] = c
+                try store.setValue("ann." + cid.hex + "." + id.hex, [1])
+                return .applied
+            }
+            return .ignored
+        }
+        var floorsToCheck: [(ID, ID)] = []   // (snapshot, floor) pairs the signer must extend
         if w.ref == Bytes(repeating: 0, count: 32) {
             guard s.isGenesis, Roster.collectionID(genesis: id) == cid, s.owner?.uid == w.author else { return .ignored }
         } else {
             guard let parent = c.statements[w.ref] else { return .waiting }
-            guard s.n == parent.statement.n + 1, !parent.statement.deleted, w.author == c.owner, s.owner?.uid == c.owner,
-                  s.commit == parent.statement.commit, s.keyN == parent.statement.keyN, s.snapshot == parent.statement.snapshot
-            else { return .ignored }   // epoch changes come with rotation (§11.6)
+            let p = parent.statement
+            guard s.n == p.n + 1, !p.deleted, w.author == c.owner, s.owner?.uid == c.owner, s.nonce == nil else { return .ignored }
+            let before = Dictionary(uniqueKeysWithValues: p.members.map { ($0.uid, $0) })
+            if s.commit == p.commit {
+                // Same epoch (§8.2): key, snapshot and every kept floor unchanged; nobody removed or lowered.
+                guard s.keyN == p.keyN, s.prev == p.prev, s.snapshot == p.snapshot else { return .ignored }
+                for m in p.members {
+                    guard let now = s.members.first(where: { $0.uid == m.uid }), now.floor == m.floor,
+                          rank(now.role) >= rank(m.role) else { return .ignored }
+                }
+            } else {
+                // A new epoch: next counter, a fresh commitment, an inventory, nobody added.
+                guard s.keyN == p.keyN + 1, s.prev == p.commit, s.snapshot != nil,
+                      !c.statements.values.contains(where: { $0.statement.commit == s.commit }),
+                      s.members.allSatisfy({ before[$0.uid] != nil }) else { return .ignored }
+                if let oldFloor = p.owner?.floor { floorsToCheck.append((w.authorization, oldFloor)) }
+                if let newFloor = s.owner?.floor { floorsToCheck.append((w.authorization, newFloor)) }
+            }
         }
-        switch registry.authorizes(snapshot: w.authorization, certificate: w.certificate) {
+        let ok = Validity.all([registry.authorizes(snapshot: w.authorization, certificate: w.certificate)]
+                              + floorsToCheck.map { registry.extends($0.0, floor: $0.1) })
+        switch ok {
         case .pending: return .waiting
         case .invalid: return .ignored
         case .valid: break
@@ -261,25 +397,54 @@ extension Device {
         else { return .ignored }
         c.statements[id] = (w, s)
         if w.ref == Bytes(repeating: 0, count: 32) { c.genesis = id }
+        let starts = c.startsEpoch(id)
+        if starts, c.epoch(of: w.ref) == channel { c.announced.insert(id) }
         collections[cid] = c
-        try store.putWrite(id: id, scope: cid, record: Roster.record, epoch: c.epoch(of: id) ?? id,
-                           payload: try recordPayload(record: Roster.record, writes: [w]))
+        try store.transaction {
+            try store.putWrite(id: id, scope: cid, record: Roster.record, epoch: c.epoch(of: id) ?? id,
+                               payload: try recordPayload(record: Roster.record, writes: [w]))
+            if c.announced.contains(id) { try store.setValue("ann." + cid.hex + "." + id.hex, [1]) }
+        }
         return .applied
     }
 
-    /// A data write (§8.3 rule 1): under a valid statement of this very epoch that lists its author as owner or writer
-    /// (owner only for `_meta`), by an admitted keychain whose snapshot extends the author's floor.
+    func rank(_ r: Statement.Role) -> Int { r == .owner ? 3 : r == .writer ? 2 : 1 }
+
+    /// A data write in the channel of `epoch` (§8.3): rule 1, written under a counted statement of this very epoch
+    /// that lists its author as owner or writer, by an admitted keychain extending the author's floor, and not late in a
+    /// replaced epoch; or rule 2, an earlier write this epoch's inventory carries.
     func dataWriteValidity(_ w: Write, cid: Bytes, epoch: ID) -> Validity {
         guard let c = collections[cid] else { return .pending([]) }
         guard let s = c.statements[w.ref] else { return .pending([w.ref]) }
-        guard c.epoch(of: w.ref) == epoch, w.hub == pin.hub else { return .invalid("another epoch") }
+        guard w.hub == pin.hub, let source = c.epoch(of: w.ref) else { return .invalid("another hub") }
+        guard c.counts(w.ref), c.counts(source) else { return .invalid("a draft authorizes nothing") }
         guard let member = s.statement.members.first(where: { $0.uid == w.author }), member.role != .reader,
               w.record != Self.meta || member.role == .owner else { return .invalid("not a writer here") }
-        let ok = Validity.all([registry.authorizes(snapshot: w.authorization, certificate: w.certificate),
-                               registry.extends(w.authorization, floor: member.floor)])
+        var checks = [registry.authorizes(snapshot: w.authorization, certificate: w.certificate)]
+        if source == epoch {
+            checks.append(registry.extends(w.authorization, floor: member.floor))
+            checks.append(dataLateness(w, c: c, epoch: epoch))
+        } else {
+            guard c.precedes(w.ref, epoch) || w.ref == epoch else { return .invalid("not from an earlier epoch of this chain") }
+            guard let inv = inventory(epoch) else { return .pending([epoch]) }
+            guard let id = try? w.id(), inv.entries[w.record]?.contains(id) == true else { return .invalid("not carried into this epoch") }
+        }
+        let ok = Validity.all(checks)
         guard ok.isValid else { return ok }
         guard let cert = registry.certificate(w.certificate), cert.participant == w.author,
               (try? w.verify(publicKey: cert.sign)) != nil else { return .invalid("bad signature") }
         return .valid
+    }
+
+    /// A write in an epoch a later one replaced counts only if that one's inventory carries it (§8.3, §11.6).
+    func dataLateness(_ w: Write, c: CollectionState, epoch: ID) -> Validity {
+        let next = c.successorEpochs(of: epoch)
+        guard !next.isEmpty, let id = try? w.id() else { return .valid }
+        var missing: [ID] = []
+        for e in next {
+            guard let inv = inventory(e) else { missing.append(e); continue }
+            if inv.entries[w.record]?.contains(id) == true { return .valid }
+        }
+        return missing.isEmpty ? .invalid("late write in a replaced epoch") : .pending(missing)
     }
 }

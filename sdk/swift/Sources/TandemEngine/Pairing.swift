@@ -412,6 +412,8 @@ extension Device {
         guard self.me != nil, registry.activity(self.me!.certificate).isValid else { return }
         try await refreshAuth()
         if homeNeedsRotation(self.me!) { try await rotateHome() }
+        try await takeGrantedKeys()
+        try await settleAnnouncedNotes()
         guard let me else { return }
         for (name, cert) in try store.values(prefix: "pairing.done.") {
             guard let token = Bytes(hex: String(name.dropFirst("pairing.done.".count))), currentHomeEpoch != nil else { continue }

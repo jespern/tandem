@@ -28,6 +28,9 @@ public final class Store: @unchecked Sendable {
         CREATE INDEX IF NOT EXISTS writes_record ON writes (scope, record);
         CREATE TABLE IF NOT EXISTS journal (step TEXT PRIMARY KEY, bytes BLOB NOT NULL);
         CREATE TABLE IF NOT EXISTS held (id TEXT PRIMARY KEY, channel TEXT NOT NULL, body BLOB NOT NULL);
+        CREATE TABLE IF NOT EXISTS contents (message TEXT NOT NULL, record BLOB NOT NULL, write BLOB NOT NULL,
+            PRIMARY KEY (message, write));
+        CREATE INDEX IF NOT EXISTS messages_channel ON messages (channel);
         """
 
     /// Open (or create) the store at `path`; ":memory:" for tests.
@@ -151,7 +154,30 @@ public final class Store: @unchecked Sendable {
     public func markApplied(_ id: String) throws { try run("UPDATE messages SET applied = 1 WHERE id = ?", [.text(id)]) }
 
     public func forgetMessages(_ ids: [String]) throws {
-        for id in ids { try run("DELETE FROM messages WHERE id = ?", [.text(id)]) }
+        for id in ids {
+            try run("DELETE FROM messages WHERE id = ?", [.text(id)])
+            try run("DELETE FROM contents WHERE message = ?", [.text(id)])
+        }
+    }
+
+    /// The hub messages known in one channel, oldest first.
+    public func messages(channel: String) throws -> [String] {
+        var out: [String] = []
+        try run("SELECT id FROM messages WHERE channel = ? ORDER BY rowid", [.text(channel)]) { out.append(Self.text($0, 0)) }
+        return out
+    }
+
+    /// Record which writes a kind-1 message carries, for garbage collection (§10.7, §11.6 step 6).
+    public func noteContents(message: String, record: Bytes, writes: [Bytes]) throws {
+        for w in writes {
+            try run("INSERT OR IGNORE INTO contents (message, record, write) VALUES (?, ?, ?)", [.text(message), .blob(record), .blob(w)])
+        }
+    }
+
+    public func contents(message: String) throws -> [(record: Bytes, write: Bytes)] {
+        var out: [(Bytes, Bytes)] = []
+        try run("SELECT record, write FROM contents WHERE message = ?", [.text(message)]) { out.append((Self.blob($0, 0), Self.blob($0, 1))) }
+        return out
     }
 
     /// Hub message IDs holding an envelope with this hash (§10.3: own messages are known by hash).

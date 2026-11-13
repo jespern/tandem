@@ -15,13 +15,15 @@ extension Device {
 
     /// Add `participant` to a list this participant owns, as a writer or reader, in the current epoch, and send them a grant.
     public func share(list cid: Bytes, with participant: ID, role: Statement.Role, name: String = "") async throws {
-        guard role != .owner, let me, var c = collections[cid], c.owner == me.participant, let head = c.head,
+        guard role != .owner, let me, var c = collections[cid], !c.dead, c.owner == me.participant, let head = c.head,
               let current = c.statements[head], let epoch = c.epoch(of: head), let key = c.keys[epoch]
         else { throw TandemError.invalid("share: not a list this participant owns") }
+        if let note = flightNote(cid) { throw ChangeError.pending(note) }
         guard !current.statement.members.contains(where: { $0.uid == participant }) else { return }
         let floor = try await publishedSnapshot(of: participant)
         var next = current.statement
         next.n += 1
+        next.nonce = nil   // only a genesis has one (§10.8)
         next.members.append(.init(uid: participant, role: role, name: Bytes(name.utf8), floor: floor))
         next.members.sort { $0.uid.lexicographicallyPrecedes($1.uid) }
         var w = Write(hub: pin.hub, certificate: me.certificate, authorization: me.auth, scope: cid, record: Roster.record,
@@ -80,10 +82,10 @@ extension Device {
               let certificate = try? json.bytes("certificate", count: 32), certificate == me.certificate,
               let key = try? json.bytes("k", count: 32), grant.fields["key"] == .id(Tandem.commit(key))
         else { return .ignored }
-        let offer = Offer(grant: grant, key: key)
-        guard offers[offer.collection] == nil || offers[offer.collection]!.admission != offer.admission else { return .ignored }
-        offers[offer.collection] = offer
-        try store.setValue("offer." + offer.collection.hex, plaintext)
+        let offer = Offer(grant: grant, key: key), id = try grant.id()
+        guard offers[id] == nil else { return .ignored }
+        offers[id] = offer
+        try store.setValue("offer." + id.hex, plaintext)
         var c = collections[offer.collection] ?? CollectionState(id: offer.collection)
         c.keys[offer.epoch] = key
         collections[offer.collection] = c
@@ -108,11 +110,29 @@ extension Device {
     /// Lists shared with this participant that it hasn't answered (§11.2): ID, name and owner.
     public func pendingOffers() -> [(list: Bytes, name: String?, owner: ID)] {
         guard let me else { return [] }
-        return offers.values.compactMap { o -> (Bytes, String?, ID)? in
-            guard offerValidity(o, me: me).isValid, answer(to: o) == nil, let c = collections[o.collection], let owner = c.owner
-            else { return nil }
-            return (o.collection, c.records[Self.meta]?.value(Bytes("name".utf8)).map { String(decoding: $0, as: UTF8.self) }, owner)
+        let open = Set(offers.values.filter { offerValidity($0, me: me).isValid && answer(to: $0) == nil }.map(\.collection))
+        return open.compactMap { cid -> (Bytes, String?, ID)? in
+            guard let c = collections[cid], let owner = c.owner else { return nil }
+            return (cid, c.records[Self.meta]?.value(Bytes("name".utf8)).map { String(decoding: $0, as: UTF8.self) }, owner)
         }.sorted { $0.0.lexicographicallyPrecedes($1.0) }
+    }
+
+    /// Valid grants for a list, latest epoch first.
+    func validOffers(_ cid: Bytes, me: Me) -> [Offer] {
+        let c = collections[cid]
+        return offers.values.filter { $0.collection == cid && offerValidity($0, me: me).isValid }
+            .sorted { (c?.statements[$0.epoch]?.statement.keyN ?? 0) > (c?.statements[$1.epoch]?.statement.keyN ?? 0) }
+    }
+
+    /// Keys of later epochs for lists this participant accepted: into home once their grants check out (§11.4).
+    func takeGrantedKeys() async throws {
+        guard let me else { return }
+        for o in offers.values where answer(to: o) == UInt8(ascii: "a") && offerValidity(o, me: me).isValid {
+            let name = "membership:" + B64u.encode(o.collection), element = Self.keyElement(epoch: o.epoch, key: o.key)
+            guard !homeElements(name, field: "keys").contains(element) else { continue }
+            try await addHome(name, field: "keys", element: element)
+            try moveCollection(o.collection)
+        }
     }
 
     func answer(to o: Offer) -> UInt8? {
@@ -122,7 +142,7 @@ extension Device {
 
     /// Add a shared list (§11.2): record the answer and the key in home, so every device of this participant follows it.
     public func accept(list cid: Bytes) async throws {
-        guard let me, let o = offers[cid], offerValidity(o, me: me).isValid, let c = collections[cid], let owner = c.owner,
+        guard let me, let o = validOffers(cid, me: me).first(where: { answer(to: $0) == nil }), let c = collections[cid], let owner = c.owner,
               case let .id(at)? = o.grant.fields["at"], let member = c.statements[at]?.statement.members.first(where: { $0.uid == me.participant })
         else { throw TandemError.invalid("accept: no valid offer for that list") }
         let membership = "membership:" + B64u.encode(cid)
