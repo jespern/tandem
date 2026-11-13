@@ -8,7 +8,7 @@ One `Device` per installation per hub, an actor. Everything it knows is in a `St
 
 | Layer | Type | Spec | State |
 |---|---|---|---|
-| Mail binding | `TandemIMAP.IMAPStore: PushStore` (Network.framework, no dependencies), `MemoryHub` for tests | §10.1–10.4 | IMAP client in progress on `swift/imap`; `MemoryHub` **done** (push, removals, hiding and dropping as a hostile hub) |
+| Mail binding | `TandemIMAP.IMAPStore: PushStore` (Network.framework, no dependencies), `MemoryHub` for tests | §10.1–10.4 | **Done**: IMAP binding (30 tests; Stalwart integration with `TANDEM_IMAP_STALWART=1`, ~2 ms push on loopback; `testSessionEndToEnd` flaky about 1 in 4, being fixed on `swift/imap`); `MemoryHub` (push, removals, hiding and dropping as a hostile hub) |
 | Password stretching | `Argon2id` and BLAKE2b in the core, pure Swift; `Control.openCapsule`/`sealCapsule` | §6.7 | **Done**: 1.2–1.4 s and 1.1 GB at the real profile in release; over a minute in debug, so the 1 GiB tests skip under `TANDEM_SKIP_ARGON2_GIB=1` and `sdk/check.py` runs them optimized |
 | Registry | `Registry`: certificates, revocations, snapshots, floors | §6.9 | **Done**, tested against the vectors and the Lean attacks |
 | Durable state | `Store`: values, control objects, message index, writes, journal; SQLite from the SDK (`import SQLite3`, a system library), WAL with full synchronous commits | §11.6 journal rules | **Done** (tables and transactions; the engine decides what goes in them) |
