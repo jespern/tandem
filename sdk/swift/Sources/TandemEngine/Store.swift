@@ -27,6 +27,7 @@ public final class Store: @unchecked Sendable {
             epoch BLOB NOT NULL, payload BLOB NOT NULL);
         CREATE INDEX IF NOT EXISTS writes_record ON writes (scope, record);
         CREATE TABLE IF NOT EXISTS journal (step TEXT PRIMARY KEY, bytes BLOB NOT NULL);
+        CREATE TABLE IF NOT EXISTS held (id TEXT PRIMARY KEY, channel TEXT NOT NULL, body BLOB NOT NULL);
         """
 
     /// Open (or create) the store at `path`; ":memory:" for tests.
@@ -180,6 +181,22 @@ public final class Store: @unchecked Sendable {
         try run("SELECT DISTINCT record FROM writes WHERE scope = ?", [.blob(scope)]) { out.append(Self.blob($0, 0)) }
         return out
     }
+
+    // MARK: Held messages (§8.3): readable, but waiting for something they depend on
+
+    public func hold(_ m: Message) throws {
+        try run("INSERT OR IGNORE INTO held (id, channel, body) VALUES (?, ?, ?)", [.text(m.id), .text(m.channel), .blob(m.body)])
+    }
+
+    public func held() throws -> [Message] {
+        var out: [Message] = []
+        try run("SELECT id, channel, body FROM held ORDER BY rowid", []) {
+            out.append(Message(id: Self.text($0, 0), channel: Self.text($0, 1), body: Self.blob($0, 2)))
+        }
+        return out
+    }
+
+    public func release(_ id: String) throws { try run("DELETE FROM held WHERE id = ?", [.text(id)]) }
 
     // MARK: Journal (§11.6)
 

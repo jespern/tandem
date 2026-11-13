@@ -11,11 +11,11 @@ final class DeviceTests: XCTestCase {
         let hub = MemoryHub()
         let keys = DeviceKeys()
         let f = try Founder.found(account: account, keys: keys, label: "Mac")
-        let creator = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, store: try Store(path: ":memory:"),
+        let creator = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try Store(path: ":memory:"),
                                       hub: await hub.connect())
         try await creator.publish(f)
         let messages = await hub.messages
-        XCTAssertEqual(messages.count, 5)   // genesis, certificate, snapshot, recovery box; the inbox delivery
+        XCTAssertEqual(messages.count, 6)   // genesis, certificate, snapshot, recovery box; the home epoch; the inbox delivery
 
         let reader = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, store: try Store(path: ":memory:"),
                                      hub: await hub.connect())
@@ -34,9 +34,10 @@ final class DeviceTests: XCTestCase {
     func testTheHubPasswordUnlocksManagement() async throws {
         try XCTSkipIf(ProcessInfo.processInfo.environment["TANDEM_SKIP_ARGON2_GIB"] == "1", "TANDEM_SKIP_ARGON2_GIB=1")
         let hub = MemoryHub()
-        var f = try Founder.found(account: account, keys: DeviceKeys(), label: "Mac")
+        let keys = DeviceKeys()
+        var f = try Founder.found(account: account, keys: keys, label: "Mac")
         f.capsule = try Founder.capsule(password: "correct horse battery staple", pin: f.pin, managementSeed: f.managementSeed)
-        let creator = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, store: try Store(path: ":memory:"),
+        let creator = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try Store(path: ":memory:"),
                                       hub: await hub.connect())
         try await creator.publish(f)
         let reader = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, store: try Store(path: ":memory:"),
@@ -50,16 +51,17 @@ final class DeviceTests: XCTestCase {
     /// A crash after journalling, before or between appends, resumes with the same bytes and no duplicates.
     func testPublishingResumesWithoutDuplicates() async throws {
         let hub = MemoryHub()
-        let f = try Founder.found(account: account, keys: DeviceKeys(), label: "Mac")
+        let keys = DeviceKeys()
+        let f = try Founder.found(account: account, keys: keys, label: "Mac")
         let store = try Store(path: ":memory:")
-        let device = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, store: store, hub: await hub.connect())
+        let device = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: store, hub: await hub.connect())
         try await device.publish(f)
         // Simulate the crash: the journal survived, the step ran again.
         let envelopes = await hub.messages.map { ($0.channel, $0.body) }
         try store.setJournal("found", Device.pack(envelopes))
         try await device.publish(f)
         let count = await hub.messages.count
-        XCTAssertEqual(count, 5)
+        XCTAssertEqual(count, 6)
         XCTAssertNil(try store.journal("found"))
     }
 

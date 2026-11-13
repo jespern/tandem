@@ -13,7 +13,7 @@ One `Device` per installation per hub, an actor. Everything it knows is in a `St
 | Registry | `Registry`: certificates, revocations, snapshots, floors | §6.9 | **Done**, tested against the vectors and the Lean attacks |
 | Durable state | `Store`: values, control objects, message index, writes, journal; SQLite from the SDK (`import SQLite3`, a system library), WAL with full synchronous commits | §11.6 journal rules | **Done** (tables and transactions; the engine decides what goes in them) |
 | Hub authority | genesis pin, directory channel, capsule unlock, profiles | §5.3, §6.6–6.8, §10.8 | Founding **done** (`Founder`: genesis, creator certificate, snapshot, first home epoch, inbox delivery, recovery box); `Founder.capsule` and `Device.unlock` **done**. `Device` publishes a founding (journal first, no duplicates on resume) and syncs the directory channel into its registry **done** |
-| Homes | home epochs (several heads), home records, recovery box | §6.2, §10.8 | To do |
+| Homes | home epochs (several heads), home records, recovery box | §6.2, §10.8 | First epoch **done**: home keys through the inbox, home-epoch starts in their channel, verified home writes merged and stored, `setHome`/`addHome`/`homeValue`; a second installation on a synced keychain finds its identity and shares the home. Rekeying and joining heads to do |
 | Collections | roster chain (statement JSON v2), epochs, inventories, data writes, merge, grants, answers, leave, key requests | §7–9, §11 | To do; port `testbed:sdk/go/device` (rotate.go, resign.go, ops.go) |
 | Flows | create hub, accept invitation, pair (both sides), approve/reject, revoke, share, rotate | §6.1–6.4, §11, §13 | To do |
 | Sync | change feed → dispatch by channel tag → hold/validate/merge; publish, debounce, garbage collection, healing | §10.7, §12 | To do |
@@ -30,7 +30,7 @@ One `Device` per installation per hub, an actor. Everything it knows is in a `St
 
 1. ~~Registry~~.
 2. ~~`MemoryHub` and `Store`; a `Device` that founds a hub, with its capsule, and another that reads it and unlocks management~~.
-3. Collections end to end on one participant's two devices: create a list, write records, see them on the other device.
+3. ~~Home on one participant's two installations~~. Collections end to end on one participant's two devices: create a list, write records, see them on the other device.
 4. Invitations: a second participant joins; sharing, answering, grants, leave.
 5. Pairing with approval and rejection; revocation with home and list rekeys.
 6. Rotation with the journal and crash points (port the Go engine's crash tests); late writes; garbage collection; healing.
