@@ -54,6 +54,8 @@ idles on a second one). It uses QRESYNC when offered, otherwise `UID SEARCH ALL`
 MULTIAPPEND and LITERAL+ for batch appends, and on Gmail (`X-GM-EXT-1`) restarts IDLE
 every 3 s (`idleRestart`) and moves destroyed messages from All Mail to Trash. A lost
 connection is retried with backoff and reported as an invalidation once IDLE runs again.
+Every IDLE starts with a NOOP in the same write: Stalwart reports a change made between
+the last command and IDLE only on the next command, not when IDLE starts.
 IDs are `<uidvalidity>.<uid>`; after a UIDVALIDITY change, `changes` reports every known
 ID as removed and the folder's messages as new. Its only timers are the IDLE refresh,
 Gmail's IDLE restart and reconnect backoff, marked `allowed-timer:` for the SDK check.

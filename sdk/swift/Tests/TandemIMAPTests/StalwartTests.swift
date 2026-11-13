@@ -54,7 +54,7 @@ func within<T: Sendable>(_ limit: Duration, _ operation: @escaping @Sendable () 
         group.addTask { try await operation() }
         group.addTask { try await Task.sleep(for: limit); throw Timeout() }
         defer { group.cancelAll() }
-        return try await group.next()!
+        do { return try await group.next()! } catch is CancellationError { throw Timeout() }
     }
 }
 

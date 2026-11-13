@@ -44,7 +44,7 @@ actor Connection {
     private var framer = Framer()
     private var reader: Task<Void, Never>?
     private var serial = 0
-    private var tag: String?
+    private var tag: String?, noopTag: String?
     private var collecting = false, selecting = false
     private var collected: [Untagged] = []
     private var done: Status?, doneWaiter: CheckedContinuation<Status, any Error>?
@@ -100,6 +100,7 @@ actor Connection {
         case .continuation:
             if let waiter = plusWaiter { plusWaiter = nil; waiter.resume() } else { pluses += 1 }
         case .tagged(let t, let status):
+            if t == noopTag { noopTag = nil; return }
             guard t == tag else { throw IMAPError.protocol("unexpected tag \(t)") }
             tag = nil
             if let waiter = plusWaiter { plusWaiter = nil; waiter.resume(throwing: Connection.rejection(status)) }
@@ -203,11 +204,17 @@ actor Connection {
         return Result(status: status, untagged: untagged)
     }
 
-    /// Starts IDLE (RFC 2177) and returns once the server has accepted it.
+    /// Starts IDLE (RFC 2177) and returns once the server has accepted it. A NOOP goes in
+    /// the same write: Stalwart reports a change made between the last command and IDLE
+    /// only on the next command, not when IDLE starts, and it would stay unseen until then.
     func idle() async throws {
+        if let failure { throw failure }
+        serial += 1
+        let noop = "T\(serial)"
         let t = try begin(collecting: false, selecting: false)
-        log("C: ", Bytes("\(t) IDLE".utf8))
-        try await transport.send(Bytes("\(t) IDLE\r\n".utf8))
+        noopTag = noop
+        log("C: ", Bytes("\(noop) NOOP".utf8)); log("C: ", Bytes("\(t) IDLE".utf8))
+        try await transport.send(Bytes("\(noop) NOOP\r\n\(t) IDLE\r\n".utf8))
         try await waitPlus()
     }
 
