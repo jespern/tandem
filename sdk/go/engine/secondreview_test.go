@@ -83,6 +83,35 @@ func TestSecondReviewAKeyFromHomeDoesntDisplaceTheListKey(t *testing.T) {
 	}
 }
 
+// 2. After Alice's phone rekeyed her home without the tablet, the tablet starts a branch of its
+// own (a start and a child of it) from the old head and sends the phone the key: neither start
+// enters her home.
+func TestSecondReviewARevokedKeychainCantBranchTheHome(t *testing.T) {
+	w := newSecondWorld(t, true)
+	syncAll(t, w.phone) // rekeys home without the tablet
+	tablet := me(t, w.tablet)
+	oldHead := w.tablet.HomeHeads()[0]
+	var oldKey []byte
+	func() { defer w.tablet.read()(); oldKey = w.tablet.homeKeys[string(oldHead)] }()
+	k := bytes.Repeat([]byte{4}, 32)
+	et := try(HomeEpochStart(w.f.Pin, w.aliceID, 9, [][]byte{oldHead}, k, [][]byte{tablet.Certificate}, tablet.Certificate, tablet.Auth, nil, tablet.Keys))
+	et2 := try(HomeEpochStart(w.f.Pin, w.aliceID, 10, [][]byte{oid(et)}, k, [][]byte{tablet.Certificate}, tablet.Certificate, tablet.Auth, nil, tablet.Keys))
+	oldTag := tandem.HomeTag(oldKey, w.f.Pin.Hub, w.aliceID, oldHead)
+	for _, start := range []*tandem.Control{et, et2} {
+		rawAppend(t, w.hub, oldTag, try(tandem.Seal(oldKey, w.f.Pin.Hub, tandem.KindRequest, oldTag, try(cjson(start)))))
+	}
+	phoneCert := w.phone.Registry().Certificate(me(t, w.phone).Certificate)
+	for _, e := range []*tandem.Control{et, et2} {
+		rawAppend(t, w.hub, tandem.InboxTag(w.aliceID, w.f.Pin.Hub),
+			try(tandem.SealInbox(w.f.Pin.Hub, w.aliceID, phoneCert.Agree, homeKeyNotice(oid(e), k).JSON())))
+	}
+	syncAll(t, w.phone)
+	defer w.phone.read()()
+	if w.phone.homeEpochs[string(oid(et))] != nil || w.phone.homeEpochs[string(oid(et2))] != nil {
+		t.Fatal("a revoked keychain's branch entered the home")
+	}
+}
+
 // Liveness and crash safety
 
 type bobAndCarol struct {

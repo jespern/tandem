@@ -263,6 +263,14 @@ func (d *Device) acceptHomeEpoch(o *tandem.Control, me *Me) (outcome, error) {
 }
 
 func (d *Device) takeHomeEpoch(o *tandem.Control, id []byte) error {
+	// Starts held aside come in with their accepted child, and only then (§10.8).
+	for _, p := range fset(o, "parents") {
+		if held := d.heldStarts[string(p)]; held != nil && d.homeEpochs[string(p)] == nil {
+			if err := d.takeHomeEpoch(held, p); err != nil {
+				return err
+			}
+		}
+	}
 	d.homeEpochs[string(id)] = o
 	delete(d.heldStarts, string(id))
 	if _, err := d.store.PutObject(o); err != nil {
@@ -282,6 +290,10 @@ func (d *Device) takeHomeEpoch(o *tandem.Control, id []byte) error {
 }
 
 func (d *Device) homeEpochValidity(o *tandem.Control, me *Me) Validity {
+	return d.homeEpochValidityAt(o, me, 0)
+}
+
+func (d *Device) homeEpochValidityAt(o *tandem.Control, me *Me, depth int) Validity {
 	signer, auth := fid(o, "signer"), fid(o, "auth")
 	if !bytes.Equal(fid(o, "hub"), d.pin.Hub) || !bytes.Equal(fid(o, "genesis"), d.pin.Genesis) ||
 		!bytes.Equal(fid(o, "participant"), me.Participant) || signer == nil || auth == nil {
@@ -296,15 +308,21 @@ func (d *Device) homeEpochValidity(o *tandem.Control, me *Me) Validity {
 		return invalid("not signed by a keychain of this participant")
 	}
 	for _, p := range fset(o, "parents") {
-		// A parent known only as a start held aside comes in with its child.
-		if d.homeEpochs[string(p)] == nil {
-			if held := d.heldStarts[string(p)]; held != nil && d.homeEpochValidity(held, me).IsValid() {
-				d.takeHomeEpoch(held, p)
-			}
-		}
+		// A parent known only as a start held aside is checked here, but taken only with an
+		// accepted child (takeHomeEpoch): checking a start must not take anything in.
 		parent := d.homeEpochs[string(p)]
 		if parent == nil {
-			return pending(p)
+			held := d.heldStarts[string(p)]
+			if held == nil {
+				return pending(p)
+			}
+			if depth >= 64 {
+				return invalid("home epoch chain too deep")
+			}
+			if v := d.homeEpochValidityAt(held, me, depth+1); !v.IsValid() {
+				return v
+			}
+			parent = held
 		}
 		checks = append(checks, d.registry.Extends(auth, fid(parent, "auth")))
 	}
