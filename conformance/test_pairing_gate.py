@@ -25,7 +25,7 @@ class Package:
     signature: bytes
 
     def signature_input(self):
-        return (b"TANDEM-PAIR-DELEGATION-HUBMGMT1" + self.context + self.token
+        return (b"TANDEM-PAIR-DELEGATION-V2" + self.context + self.token
                 + self.invite_public + sha(self.payload) + sha(self.gate))
 
     @property
@@ -42,32 +42,32 @@ class Claim:
     possession_signature: bytes
 
     def signature_input(self, package):
-        return (b"TANDEM-PAIR-CLAIM-HUBMGMT1" + package.id + self.signing
+        return (b"TANDEM-PAIR-CLAIM-V2" + package.id + self.signing
                 + self.agreement + lp(self.label.encode("utf-8")))
 
 
 def _pair_key(link_share, approval_share, token):
-    return kdf(link_share + approval_share, token, b"tandem/hubmgmt1/pair-package")
+    return kdf(link_share + approval_share, token, b"tandem/v2/pair-package")
 
 
 def _stage(phone, manager_public, context, bootstrap):
     link_share, approval_share, token, nonce = (os.urandom(n) for n in (32, 32, 16, 12))
     invite = ed25519.Ed25519PrivateKey.from_private_bytes(
-        kdf(link_share, token, b"tandem/hubmgmt1/pair-sign"))
+        kdf(link_share, token, b"tandem/v2/pair-sign"))
     payload = nonce + ChaCha20Poly1305(_pair_key(link_share, approval_share, token)).encrypt(
         nonce, bootstrap, context)
-    gate = hpke_seal(manager_public, approval_share, b"tandem/hubmgmt1/pair-gate", context + sha(payload))
+    gate = hpke_seal(manager_public, approval_share, b"tandem/v2/pair-gate", context + sha(payload))
     package = Package(token, context, payload, gate, pub(invite), b"")
     return link_share, replace(package, signature=phone.sign(package.signature_input()))
 
 
 def _claim(package, link_share, signing, agreement, label="Laptop"):
     invite = ed25519.Ed25519PrivateKey.from_private_bytes(
-        kdf(link_share, package.token, b"tandem/hubmgmt1/pair-sign"))
+        kdf(link_share, package.token, b"tandem/v2/pair-sign"))
     claim = Claim(pub(signing), pub(agreement), label, b"", b"")
     data = claim.signature_input(package)
     return replace(claim, invite_signature=invite.sign(data),
-                   possession_signature=signing.sign(b"TANDEM-PAIR-POP-HUBMGMT1" + data))
+                   possession_signature=signing.sign(b"TANDEM-PAIR-POP-V2" + data))
 
 
 def _approve(package, claim, manager_private, expected_phone, expected_context, certificate_id):
@@ -77,18 +77,18 @@ def _approve(package, claim, manager_private, expected_phone, expected_context, 
     data = claim.signature_input(package)
     if (not strict_verify(package.invite_public, claim.invite_signature, data)
             or not strict_verify(claim.signing, claim.possession_signature,
-                                 b"TANDEM-PAIR-POP-HUBMGMT1" + data)):
+                                 b"TANDEM-PAIR-POP-V2" + data)):
         raise InvalidSignature
-    share = hpke_open(manager_private, package.gate, b"tandem/hubmgmt1/pair-gate",
+    share = hpke_open(manager_private, package.gate, b"tandem/v2/pair-gate",
                       package.context + sha(package.payload))
     binding = package.context + package.id + certificate_id + claim.signing + claim.agreement
-    return hpke_seal(claim.agreement, share, b"tandem/hubmgmt1/pair-release", binding)
+    return hpke_seal(claim.agreement, share, b"tandem/v2/pair-release", binding)
 
 
 def _finish(package, link_share, release, target_private, signing_public, certificate_id):
     target = pub(x25519.X25519PrivateKey.from_private_bytes(target_private))
     binding = package.context + package.id + certificate_id + signing_public + target
-    share = hpke_open(target_private, release, b"tandem/hubmgmt1/pair-release", binding)
+    share = hpke_open(target_private, release, b"tandem/v2/pair-release", binding)
     return ChaCha20Poly1305(_pair_key(link_share, share, package.token)).decrypt(
         package.payload[:12], package.payload[12:], package.context)
 
@@ -119,7 +119,7 @@ class PairingGate(unittest.TestCase):
             ChaCha20Poly1305(key).decrypt(self.package.payload[:12], self.package.payload[12:], self.context)
 
     def test_admin_share_without_link_does_not_open_private_bootstrap(self):
-        share = hpke_open(self.manager, self.package.gate, b"tandem/hubmgmt1/pair-gate",
+        share = hpke_open(self.manager, self.package.gate, b"tandem/v2/pair-gate",
                           self.context + sha(self.package.payload))
         with self.assertRaises(InvalidTag):
             ChaCha20Poly1305(_pair_key(bytes(32), share, self.package.token)).decrypt(
@@ -144,8 +144,8 @@ class PairingGate(unittest.TestCase):
         # Current device membership/policy is checked in the symbolic model.
         # Rekey boxes are sent only to the surviving device's agreement key.
         binding = self.context + next_epoch + self.certificate
-        box = hpke_seal(pub(self.agreement), next_home, b"tandem/hubmgmt1/home-box", binding)
-        laptop_home = hpke_open(self.private, box, b"tandem/hubmgmt1/home-box", binding)
+        box = hpke_seal(pub(self.agreement), next_home, b"tandem/v2/home-box", binding)
+        laptop_home = hpke_open(self.private, box, b"tandem/v2/home-box", binding)
         new_list_key, nonce = os.urandom(32), os.urandom(12)
         update = ChaCha20Poly1305(next_home).encrypt(nonce, new_list_key, binding)
         self.assertEqual(ChaCha20Poly1305(laptop_home).decrypt(nonce, update, binding), new_list_key)

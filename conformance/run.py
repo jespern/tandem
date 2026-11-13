@@ -17,6 +17,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--mail', action='store_true', help='start and remove a disposable Stalwart Docker container')
     parser.add_argument('--require-cryptokit', action='store_true', help='fail instead of skipping when Apple CryptoKit is unavailable')
+    parser.add_argument('--require-libsodium', action='store_true', help='fail instead of skipping when libsodium is unavailable')
     parser.add_argument('--verbose', action='store_true')
     args = parser.parse_args()
     if importlib.util.find_spec('cryptography') is None:
@@ -25,6 +26,7 @@ def main():
     if args.require_cryptokit and not available:
         parser.error('--require-cryptokit needs macOS and the Swift toolchain')
     os.environ['TANDEM_TEST_MAIL'] = '1' if args.mail else '0'
+    os.environ['TANDEM_REQUIRE_LIBSODIUM'] = '1' if args.require_libsodium else '0'
     if args.mail:
         if not shutil.which('docker'):
             parser.error('--mail needs Docker')

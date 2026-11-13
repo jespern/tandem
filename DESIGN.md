@@ -1,6 +1,6 @@
 # Tandem: encrypted, shared, real-time collections over a mailbox
 
-Status: **participant/device architecture draft**, 2026-11-13. This revision adopts one participant record per person per hub, independently keyed devices, and password-gated hub management. It incorporates the current working draft's IMAP-only transport, directory and grow-only admission answers. The implemented shared-secret v1 is a different protocol. This draft calls the incompatible successor **v2**; its management-object encodings and migration remain unfinished (§18). The model and crypto tests cover selected mechanisms, not a complete implementation or security sign-off.
+Status: **participant/device architecture draft**, 2026-11-13. This revision adopts one participant record per person per hub, keypairs kept in the system keychain, and hub management unlocked by a hub password. It incorporates the current working draft's IMAP-only transport, directory and grow-only admission answers. The implemented shared-secret v1 is a different protocol. This draft calls the incompatible successor **v2**; its management-object encodings and migration remain unfinished (§18). The model and crypto tests cover selected mechanisms, not a complete implementation or security sign-off.
 
 This document is self-contained. It assumes no knowledge of the app that motivated it (Liszto, a to-do app; §17) and is written so that independent reviewers can check it for soundness. The words MUST, SHOULD and MAY are used in the sense of RFC 2119.
 
@@ -14,10 +14,10 @@ Tandem is a protocol for keeping **collections of records** in sync across many 
 - Every piece of data is an **encrypted, signed message** in one folder of the hub. The hub sees opaque ciphertext, sizes and timing, nothing else.
 - **Who can read a collection** is decided by who holds its key, not by the hub. **Who may change what** is decided by signatures checked on every device.
 - Records merge **without coordination** (they are CRDTs: conflict-free replicated data types), so devices work offline and in any order, and every device converges on the same state.
-- A **participant** is an automatically created record within one hub. Their approved devices have independent signing/agreement keys and share one encrypted **home**. Lists created or accepted on one device appear on the others without another invitation (§6). There is no personal identity key or personal management password.
+- A **participant** is an automatically created record within one hub. Their keys live in the system keychain, so a new phone has them; the devices share one encrypted **home**. Lists created or accepted on one device appear on the others without another invitation (§6). There is no personal identity key or password.
 - Every collection has **one owner**, fixed when it is created, who alone decides membership, roles and key changes. Other members are writers or readers.
-- A member creates a pairing QR/link on an enrolled device and opens it on the new device. The **hub admin approves** the request using the hub management password. Approval releases access to the member's home, including future lists. No second member confirmation or comparison code is required (§6.3).
-- Creating a hub asks for its management password and an offline recovery-key backup. Joining through a **hub invite** creates the newcomer's participant record and first-device admission; members choose no extra password. Collections are shared with people from the hub directory. Removing a device rotates exposed home/list keys as well as retiring its certificate (§6.4). Content edits work offline; administration and sharing changes need the network.
+- A member creates a pairing QR/link on an enrolled device and opens it on the new device. The **hub admin approves** the request with the hub password. Devices that share a keychain need no pairing at all. Approval releases access to the member's home, including future lists. No second member confirmation or comparison code is required (§6.3).
+- Creating a hub asks its creator to choose a **hub password**. Joining through a **hub invite** creates the newcomer's participant record and first-device admission; members are asked for no password. Collections are shared with people from the hub directory. Removing a device rotates exposed home/list keys as well as retiring its certificate (§6.4). Content edits work offline; administration and sharing changes need the network.
 
 The trade-off, accepted on purpose: anyone holding the hub credential can **delete or withhold** data (availability), even for collections they can't read. Honest devices hold full replicas and re-upload what was destroyed (§12). Tandem is meant for hubs shared by people who trust each other not to vandalise: a household, friends, a small team.
 
@@ -32,10 +32,10 @@ The trade-off, accepted on purpose: anyone holding the hub credential can **dele
 3. **Multi-user sharing.** A collection can be private (one user) or shared with other users, each with a role. A shared collection can become private again.
 4. **End-to-end confidentiality and integrity.** The hub operator, and hub-credential holders who aren't members of a collection, can't read it or forge changes to it.
 5. **Attribution.** Every change is signed by an admitted device key, bound to its participant record and immutable authorization snapshot. The UI can show “Alice added this”; details identify the particular device. A display name is not proof of a physical person.
-6. **Device loss.** Revoke an individual device while surviving devices keep the same participant, lists and settings (§6.4). The hub recovery key can recover the creator's access, not another member's private data. Ordinary members with no surviving device rejoin as new participants. Conflicting collection histories still require copying (§11.8).
+6. **Device loss.** A new or replaced device that shares the keychain has the keys already. A stolen device's key is revoked; the user's other devices that share it make a new one (§6.4). The hub password can recover the creator's access, not another member's private data. A member who loses the keychain too rejoins as a new participant. Conflicting collection histories still require copying (§11.8).
 7. **No infrastructure of our own.** Any standards-compliant mail account works as the hub. No relay, no push service, no key server.
-8. **Portable.** Uses X25519, Ed25519, HKDF-SHA-256, ChaCha20-Poly1305 and HPKE, plus Argon2id for management-password wrapping. Argon2id requires an additional implementation on Apple platforms; the old CryptoKit conformance tests do not validate this new profile.
-9. **Friendly UX.** Set a management password and save a recovery key when creating a hub. Joining members have no such setup. Pair by QR/link and one admin approval; regular list use and automatic device sync need no management password (§13). The link is a sensitive bearer delegation (§6.3).
+8. **Portable.** Uses widely available primitives (X25519, Ed25519, HKDF-SHA-256, ChaCha20-Poly1305, HPKE) so that SDKs in other languages can interoperate, plus Argon2id for the hub password. Apple's CryptoKit covers all but Argon2id, which apps take from a library such as libsodium (decided 2026-11-13).
+9. **Friendly UX.** Choose one hub password when creating a hub; nobody who joins needs one. A new phone that shares the keychain just works. Other devices pair by QR/link and one admin approval; regular list use needs no hub password (§13). The link is a sensitive bearer delegation (§6.3).
 
 ### 1.2 Non-goals
 
@@ -60,10 +60,10 @@ The trade-off, accepted on purpose: anyone holding the hub credential can **dele
 |---|---|
 | **Hub** | One mail account that every participant's devices can log in to over IMAP, with one shared credential or with one each (§13.1). |
 | **Binding** | How Tandem's abstract storage operations map onto a mail protocol. Version 2 has one binding, IMAP (§10.3). |
-| **User / participant / member record** | A person's stable record within one hub. Its content hash is the participant ID (`uid`); it groups independently keyed approved devices. It has no personal identity secret (§6.1). “Member” also means a participant listed in a collection roster. |
+| **User / participant / member record** | A person's stable record within one hub. Its content hash is the participant ID (`uid`); it groups the approved keychain keypairs of their devices. It has no personal identity secret (§6.1). “Member” also means a participant listed in a collection roster. |
 | **Hub admin** | Someone able to unlock the hub management seed using its password. Approves device enrollment/revocation; gains no access to other participants' private homes or list-owner powers. |
-| **Recovery key** | Offline random hub recovery secret, saved at hub creation. Replaces compromised management authority; can recover only the creator's own participant data (§6.8). |
-| **Device** | One installation with its own Ed25519 and X25519 keypairs, random dot namespace and manager-signed admission certificate. Private device keys are never copied. |
+| **Hub password** | Chosen by whoever creates a hub. Entered on any device, it opens the admin capsule on the hub and with it the hub's management (§6.7). It can be changed, but a leaked one means a new hub (§6.8). |
+| **Device** | One installation with its own random dot namespace and durable HLC. Its Ed25519/X25519 pair and admission certificate belong to its keychain and may be shared with other installations through platform keychain sync (§5.3). |
 | **Home** | A participant's private, epoch-keyed channel on one hub, shared continuously by all their approved devices. Holds memberships, list keys, settings and private activity. |
 | **Inbox** | A stable per-participant channel. Each HPKE envelope addresses one specific admitted device agreement key; there is no shared private inbox key. |
 | **Collection** | A set of records shared by a group of members (Liszto: a list). Has a stable **collection ID** and a sequence of **epochs**. |
@@ -160,7 +160,7 @@ The core never depends on the binding: it sees the six operations of §10.1. Ver
 | Signatures | Ed25519 | RFC 8032 |
 | Key agreement | X25519 | RFC 7748 |
 | Public-key sealing | HPKE, base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305 | RFC 9180 |
-| Management-password KDF | Argon2id v0x13, bounded profile (§6.7) | RFC 9106 |
+| Hub-password hash | Argon2id, version 0x13, one fixed profile (§6.7) | RFC 9106 |
 | Randomness | OS CSPRNG | |
 
 There is exactly one suite per protocol version. A new suite means a new protocol version (§15); there is no negotiation.
@@ -170,7 +170,7 @@ There is exactly one suite per protocol version. A new suite means a new protoco
 - `||` concatenation. Integers are unsigned big-endian. `u8`, `u16`, `u32`, `u64` are their byte widths.
 - `lp(x)` = `u32(len(x)) || x` (length-prefixed bytes).
 - `H(x)` = SHA-256(x).
-- `KDF(ikm, salt, info, L)` = HKDF-SHA-256, output `L` bytes. `info` strings are ASCII with separate `tandem/v2/` data and `tandem/hubmgmt1/` management namespaces (§5.3).
+- `KDF(ikm, salt, info, L)` = HKDF-SHA-256, output `L` bytes. `info` strings are ASCII and begin with `tandem/v2/`.
 - `b64u` = base64url without padding (RFC 4648 §5). Every value has one spelling: text with padding, with a character outside the alphabet, or with unused bits that aren't zero is invalid (§10.5).
 - `b32` = RFC 4648 base32, lowercase, no padding.
 
@@ -178,27 +178,26 @@ There is exactly one suite per protocol version. A new suite means a new protoco
 
 | Material | Creation and storage |
 |---|---|
-| `RS`, hub recovery secret | 32 random bytes at hub creation; offline backup, erased after confirmation |
-| `RKs`, `RKa` | `KDF(RS, "", "tandem/hubmgmt1/recovery-sign", 32)` and `…/recovery-agree`; signing/agreement keys |
-| `hubID` | Full 32-byte `pub(RKs)`, pinned at setup/invitation. Mail credentials and host names are not authority identifiers |
-| `MS`, hub management seed | 32 random bytes; password-encrypted capsule and independent HPKE recovery box to RKa (§6.7) |
-| `MKs`, `MKa` | `KDF(MS, "", "tandem/hubmgmt1/manager-sign", 32)` and `…/manager-agree`; both recovery-certified |
-| `DKs`, `DKa` | Independently random device signing/agreement private keys on each installation; this-device-only storage, never copied |
-| `HK` | Random per participant home epoch; HPKE-sealed only to admitted devices of that participant; optional creator-only recovery box to RKa |
+| Hub password | Chosen by the creator at hub creation, at least 12 code points (§6.7); never stored on the hub. Stretched with Argon2id into the capsule key (§6.7) |
+| `MS`, hub management seed | 32 random bytes at hub creation. Kept on the hub only inside the **admin capsule**, sealed under a key stretched from the hub password (§6.7) |
+| `MKs`, `MKa` | `KDF(MS, "", "tandem/v2/manager-sign", 32)` and `…/manager-agree`: the management signing and agreement keys |
+| `hubID` | `pub(MKs)`, 32 bytes, fixed by the hub's genesis and pinned at setup, invitation and pairing. Mail credentials and host names are not authority identifiers |
+| `DKs`, `DKa` | Random signing and agreement private keys, one pair per **keychain**: kept in the system keychain as an item that syncs to the user's other devices where the platform does that (iCloud Keychain), so a new phone has them. Never sent anywhere else (§6.3) |
+| `HK` | Random per participant home epoch; HPKE-sealed only to admitted device keys of that participant; for the creator also to `MKa` (§6.8) |
 | `K(c,e)` | Random collection epoch key; member homes and device-specific grants |
 | `L`, `A` | Independent random 32-byte pairing link and admin-gate secrets (§6.3) |
 | Hub invite secret `s` | Random 32-byte bearer secret, signing key derived with a distinct new-member purpose label (§13.1) |
-| `HubK` | Random 32-byte directory key from authenticated hub creation; carried in invites/pairing and participant homes |
+| `HubK` | Random 32-byte directory key from hub creation; carried in invites and pairing and kept in participant homes |
 
-No home or collection key is derived from MS, the management password or HubK. The management seed is not a universal data key. There is no `US`, shared user signing key or shared private agreement key.
+No home or collection key is derived from the hub password, MS or HubK. The management seed is not a universal data key: it can open the creator's home (§6.8) and nobody else's. There is no `US`, shared user signing key or shared private agreement key.
 
 **Participant ID:** `uid` is the full hash of the immutable registration record binding hubID, first-device public keys and an enrollment reference. That reference must be available before computing the registration/certificate, avoiding a self-reference. The first device proves possession; its administrator admits it. Revoking it does not delete the participant or give that original key special authority. A new hub has a separate registration even for the same person (§6.5).
 
-**Device ID:** 8 random bytes, certified alongside the full device signing/agreement public keys, used only as the dot namespace (§9.1). Certificates have full 32-byte content IDs. A namespace never selects a public key; a write explicitly names its certificate. Same-dot writes remain distinct by write ID. A restore never clones private device keys or a dot namespace. If the durable HLC is lost, generate fresh device keys/namespace and enroll again rather than risk issuing the same dot twice.
+**Device ID:** 8 random bytes per **installation**, used only as the dot namespace (§9.1). It is not part of a certificate: several installations that share a keychain share one keypair and one certificate, and each has its own device ID. It is kept with the HLC, this-device-only and never synced, so a restored or new phone picks a fresh one. A write names its certificate explicitly; a device ID never selects a key. Same-dot writes remain distinct by write ID. If the durable HLC is lost, the installation picks a fresh device ID; its keys stay as they are.
 
-**Hub identity and storage location:** the stable cryptographic hubID is independent of the IMAP descriptor. All signatures, envelopes, scopes, policies and boxes bind hubID. Recovery-signed root metadata authorizes permissible descriptors without credentials; credentials merely connect to that mailbox. Copying metadata into a different mailbox cannot authorize relocation. Changing permitted locations needs RS (§6.8), an explicit cost of pinning hub authority independently of the provider.
+**Hub identity and storage location:** the stable cryptographic hubID is independent of the IMAP descriptor. All signatures, envelopes, scopes, policies and boxes bind hubID. The genesis, signed with `MKs`, names the permitted descriptors without credentials; credentials merely connect to that mailbox. Copying metadata into a different mailbox cannot authorize relocation. Moving a hub to another mailbox is a management action, signed with `MKs` after entering the hub password.
 
-Management labels use the proposal namespace `tandem/hubmgmt1/`; data-envelope labels below use `tandem/v2/`. Neither is compatible with shared-secret v1. The remaining management-object encodings must be frozen together before interoperability tests (§18).
+All labels use `tandem/v2/`, which is not compatible with shared-secret v1. The remaining management-object encodings must be frozen together before interoperability tests (§18).
 
 ### 5.4 Message encryption
 
@@ -234,7 +233,7 @@ Each write (§9.1) is signed over this exact byte string (independent of JSON fo
 
 ```
 sigInput = "TANDEM-WRITE-V2"                 (15 ASCII bytes)
-        || hubID (32)                        # pinned recovery public key
+        || hubID (32)                        # pub(MKs), the hub's identity (§5.3)
         || scopeID (16)                      # collection ID, or the user's home scope (§6.2); zero in a genesis
         || recordID (16)
         || lp(fieldName UTF-8)               # empty for a delete
@@ -255,7 +254,7 @@ vv(x)    = u16(n) || n × ( deviceID (8) || u64(millis) || u16(counter) )   # so
 
 **Identity.** A write is identified by its write ID, and a roster statement by the write ID of its write. Ed25519 signing may be randomized (Apple's CryptoKit is), so one `sigInput` can carry different valid signatures from repeated signing of one device's exact input. Two writes with one write ID are one write, whichever signature arrived first. Devices deduplicate by write ID and never compare signatures to decide whether two writes are the same. A device that retries a publish reuses the signed message it stored. Hub messages are a different matter: they are identified by `H(envelope)` (§10.4).
 
-**Who signs.** Data, home/profile writes, roster statements and grants carry a signature by the acting device's **DKs**. Look up the exact referenced certificate; verify the device public key, hub, participant, certified dot namespace and immutable source snapshot. A signature alone proves device possession, not current permission. Missing proofs hold the object; arrival order never selects a key. Manager/root controls have their distinct authorities (§6.7–6.9).
+**Who signs.** Data, home/profile writes, roster statements and grants carry a signature by the acting device's **DKs**. Look up the exact referenced certificate; verify the device public key, hub, participant and immutable source snapshot. The write signature binds the installation’s dot namespace; the certificate does not (§5.3). A signature alone proves device possession, not current permission. Missing proofs hold the object; arrival order never selects a key. Manager/root controls have their distinct authorities (§6.7–6.9).
 
 The signature covers the statement a write was made under, not the epoch it is stored in, so a write can be re-encrypted into later epochs during rotation (§11.6) without losing its author's signature.
 
@@ -263,7 +262,7 @@ Signatures live **inside** the ciphertext, so message contents tell the hub noth
 
 **Verification is strict and the same everywhere.** Whether a write is valid must not depend on which library checked it, or two honest clients could disagree and diverge. A verifier MUST reject a signature whose `S` is not below the group order, MUST reject a public key or `R` that isn't a canonical point encoding, MUST reject a small-order public key, and MUST check the plain equation `[S]B = R + [k]A`. RFC 8032 §5.1.7 permits either that or the cofactored form; Tandem fixes the choice. Libraries that verify in batches or with the cofactored equation accept signatures the others reject and MUST NOT be used.
 
-Other signed objects (grants, key requests, leave notices and pairing challenges) use their own `TANDEM-…-V2` prefixes, given where they're defined, so a signature can never be replayed as a different kind of object.
+Other signed objects (grants, key requests, leave notices and pairing challenges) use their own `TANDEM-…-V2` prefixes, so a signature can never be replayed as a different kind of object. Those prefixes are fixed with the objects' encodings (Q28); none is defined yet.
 
 ### 5.6 Channels and tags
 
@@ -289,15 +288,15 @@ AEAD AAD and signed inputs bind the cryptographic hubID. Home/collection epoch s
 
 ## 6. Participants, devices and hub management
 
-One participant record groups a person's approved devices within a hub. Each device has independent keys; they share home/list access continuously. The participant record is bookkeeping, not another private key, global identity, personal password or recovery chain.
+One participant record groups a person's approved keychains within a hub. Each keychain has its own keys, shared by the devices that sync it; they all share home and list access continuously. The participant record is bookkeeping, not another private key, global identity, personal password or recovery chain.
 
 ### 6.1 When the participant is created
 
 A client works locally before sync. No participant identity or management key is created merely by installing the app or enabling local storage.
 
-**Creating a hub:** connect the dedicated mailbox and explicitly create the hub; generate RS, MS, HubK and first-device keys; set the hub management password; save the offline recovery key and mailbox/setup details. Create the immutable creator participant registration and recovery genesis, then admit its first device and initialize its private home. Journal exact signed setup objects before export. A mailbox that is unreachable or appears empty is not proof that a new authority may replace an existing one. Conflicting independent roots/directories must be shown as distinct authorities, not silently merged.
+**Creating a hub:** connect the dedicated mailbox and explicitly create the hub; ask the creator for a hub password; generate MS, HubK and the first keychain's keys; suggest keeping the password with the mailbox details. Create the immutable creator participant registration and the genesis, publish the admin capsule (§6.7), then admit the first keychain and initialize the creator's private home. Journal exact signed setup objects before export. A mailbox that is unreachable or appears empty is not proof that a new authority may replace an existing one. Conflicting independent roots/directories must be shown as distinct authorities, not silently merged.
 
-**Accepting a hub invitation:** the trusted app verifies the pinned hub authority and new-member invitation capability. It generates device keys and a durable enrollment reference, then creates a participant registration as part of the claim. The registration is pending until its complete first-admission proof verifies; restart/retry reuses that registration and exact claim. The manager-signed invitation preauthorizes this new-member admission (§13.1), so accepting it needs no second admin tap. That capability cannot name an existing participant. The participant then initializes their private home and directory profile. No personal management password or hub recovery-key backup is asked for.
+**Accepting a hub invitation:** the trusted app verifies the pinned hub authority and new-member invitation capability. It generates device keys and a durable enrollment reference, then creates a participant registration as part of the claim. The registration is pending until its complete first-admission proof verifies; restart/retry reuses that registration and exact claim. The manager-signed invitation preauthorizes this new-member admission (§13.1), so accepting it needs no second admin tap. That capability cannot name an existing participant. The participant then initializes their private home and directory profile. Nobody but the creator chooses a hub password.
 
 **Pairing:** an existing member creates the link. The new device attaches to that member's existing registration (§6.3); it must not create a second person or clone another device's private keys. Revoking the first device leaves the participant and remaining devices intact. Joining another hub creates a separate participant there (§6.5).
 
@@ -343,6 +342,9 @@ The `membership` rows are what the reference SDK writes. The `hubinvite`, `pairi
 
 ### 6.3 Adding a device
 
+**Devices that share a keychain need nothing.** A device's keypair lives in the system keychain (§5.3). Where the keychain syncs between a user's devices, a new or replaced iPhone, or another Mac on the same Apple account, already holds the keypair: it is the same participant with the same certificate. It picks a fresh device ID, opens the home with its keys, and syncs. No pairing, no admin approval. Everything below is for a device that doesn't share the keychain: another platform, or another account on the same platform.
+
+
 **The required experience:** Alice opens "Add a device" on her enrolled phone,
 creates a QR/link and opens it on her laptop. The laptop obtains connection and
 pairing information there, generates independent keys, and submits its claim.
@@ -366,16 +368,16 @@ The phone generates two independent random 32-byte secrets, `L` and `A`:
 - `L` goes only in the QR/link. An invite signing key is derived from L using
   HKDF with a pairing-specific purpose label and token ID. Its public key goes
   in a **delegation** signed by the existing phone's device key.
-- `A` is HPKE-sealed to the current management agreement key. Unlocking MS lets
-  the admin open A, but not L. There is no home key in that gate box.
+- `A` is HPKE-sealed to the management agreement key `MKa`. Unlocking the admin
+  capsule lets the admin open A, but not L. There is no home key in that gate box.
 - The phone seals a small bootstrap bundle under
-  `HKDF(L || A, tokenID, "tandem/hubmgmt1/pair-package", 32)`, using
+  `HKDF(L || A, tokenID, "tandem/v2/pair-package", 32)`, using
   ChaCha20-Poly1305 and a fresh random 12-byte nonce. It contains this member's
   current shared home-epoch key and the necessary grant authorizations/metadata
   for continuous sync, including lists created or shared after pairing. It never
   contains another device's signing private key.
 
-All inputs bind hub authority ID, root-certificate ID, member ID, source device
+All inputs bind hub authority ID, genesis ID, member ID, source device
 certificate, token ID and expiry. The phone's signed delegation additionally
 binds the derived invite public key, package ciphertext hash, gate-box hash and
 permitted purpose **one existing member's device enrollment requests**. It cannot
@@ -384,7 +386,7 @@ Use separate HPKE purpose labels for the gate and the eventual release.
 
 The QR/link carries L, hub descriptor/credential, directory key, pinned member record
 and hub authority, token ID, delegation and package references (or the compact
-encrypted package). It never carries plaintext home keys, MS, RS or A. The phone
+encrypted package). It never carries plaintext home keys, the hub password, MS or A. The phone
 uploads/retains the signed delegation, encrypted package and gate box before
 showing the link. This stages data delivery; it gives the laptop everything
 needed for the ceremony without keeping the phone online for final approval.
@@ -394,15 +396,15 @@ needed for the ceremony without keeping the phone online for final approval.
 1. Laptop opens the QR/link in the trusted native app, verifies its member/hub
    pins and delegation, generates its own signing/agreement keypair, and proves
    possession. The link's invite key signs the exact target keys, device label,
-   token/delegation ID, current root and issuance context. The laptop's signing
+   token/delegation ID, genesis and issuance context. The laptop's signing
    key also signs the claim; an HPKE challenge proves agreement-key possession.
    This replaces a second signature from the phone over the now-known keys.
 2. Send the claim and opaque package/gate references to the admin's admitted
    device inboxes, encrypted to their device keys. Admin devices can display
-   "New device from Alice: Laptop" while MS is locked. They verify the source
+   "New device from Alice: Laptop" without the hub password. They verify the source
    member certificate, signed delegation and claim; they never receive L.
-3. **Approve:** admin enters the hub password. Re-sync, check expiry, source
-   device admission/current revocations, root generation and prior token uses.
+3. **Approve:** the admin unlocks the admin capsule (§6.7). Re-sync, check expiry,
+   source device admission and current revocations, and prior token uses.
    Certify the exact target keys with MKs, including the delegation/claim hashes
    and member record ID. Open A with the management agreement key and HPKE-seal
    it to that exact laptop agreement key. The release binds the certificate ID,
@@ -411,8 +413,7 @@ needed for the ceremony without keeping the phone online for final approval.
 4. Persist the exact signed certificate and encrypted release before export.
    Publish the certificate before the release. Lost acknowledgements retry the
    same bytes. If interrupted after certification, a surviving admin device
-   finishes the persisted release, or unlocks MS to reconstruct it; no indefinite
-   cache of unlocked management keys is needed.
+   finishes the persisted release, or unlocks the capsule to reconstruct it.
 5. Laptop verifies the certificate/release, opens A, combines it with L and opens
    the staged bundle. Its lists and personal metadata then sync. It retains its
    new device keys and current home/grant material and discards pairing secrets.
@@ -445,12 +446,6 @@ If home keys rotate after the package was staged, old bootstrap keys cannot
 promise current access. Refresh the package from an admitted member device or
 deliver the new home key to the approved laptop through normal sync. This may
 wait for a member device to reconnect, but asks for no second pairing ceremony.
-An old-root delegation is invalid after management recovery; issue a fresh link.
-
-No permanent biometric shortcut or persisted unlocked MS is defined. Unlock for
-one explicit action or displayed batch, then release/wipe buffers on completion,
-cancellation, backgrounding or lock. Malware present during password entry can
-steal MS. Managed runtimes cannot promise perfect memory erasure.
 
 An ordinary invitation for a **new member** remains separate. It may preauthorize
 new-member admission through a manager-signed, purpose-limited invitation key;
@@ -459,13 +454,15 @@ and forwarding risks still require explicit wire validation.
 
 ### 6.4 Removing a device and losing every device
 
-The member requests removal; the admin approves with the hub password. For the
-creator's own phone this is one action on a surviving admin device.
+The member requests removal; the admin approves after unlocking the admin capsule.
+For the creator's own phone this is one action on a surviving admin device.
+
+**Removing a key removes every device that shares it.** A certificate is for a keychain's keypair, so revoking a stolen iPhone's key also cuts off the user's other devices that sync that keychain. They then make a new keypair and are admitted again: by pairing from a device outside the keychain, or, with none, by the admin as for a new keychain of that participant. **First the stolen device must be removed from the platform account** (on Apple, from the Apple account, for instance with Find My). Otherwise the keychain syncs the new keypair to the thief as well. The app says so before it makes the new keypair.
 
 1. Sign and publish an irrevocable device revocation. Stop new deliveries to it.
 2. Surviving devices of that member rotate their private home key, sealing it
    only to remaining admitted devices. The admin cannot do this without their
-   participation. The founder may use RS recovery if no device remains.
+   participation. The creator may use the hub password if no device remains (§6.8).
 3. Owners rotate every affected collection with fresh keys, inventories and
    device floors. Those owners need no hub password, only an admitted owner
    device. Devices that learn of an unreflected revocation queue new outgoing
@@ -482,11 +479,11 @@ Security revocation is not remote erasure or a directory-entry deletion.
 
 For owner-controlled lists, the removal action can authorize a displayed batch of rekeys on the acting owner device; other owner devices follow its existing journal/home-note procedure (§11.6–11.7). Other collection owners must finish their own changes. Devices must not all independently sign automatic roster successors when one revocation arrives. Until a required rotation is complete, show “Waiting for list owner” and queue outgoing content once the exposed key is known.
 
-If an ordinary member loses every device, the admin cannot reconstruct their home or impersonate their old participant. They join as a new participant and have shared lists shared again; private data with no readable replica is lost. If no trusted old participant device can sign, a hub password is insufficient. The creator alone can use the hub recovery key and explicit creator home-recovery boxes (§6.8). A broken device whose keys were securely erased can simply be replaced by pairing; a missing device with uncertain exposure should be revoked.
+**Losing every device.** Where the keychain syncs, a member who replaces every device keeps their keys: the new phone has them (§6.3). A member who loses the keychain too, for instance by moving to another platform with no device left, can't be given their old participant back by the admin, who can't reconstruct their home or impersonate them. They join as a new participant and have shared lists shared again; private data with no readable replica is lost. The creator alone can be recovered with the hub password (§6.8). A missing device with uncertain exposure should be revoked; a broken one whose keychain lives on elsewhere needs nothing.
 
 ### 6.5 Several hubs
 
-Each hub has its own participant record, home, device keys and admission decisions. One app can present the lists together, with one live IMAP connection per hub. Pairing on one hub does not authorize admission on another. A client may discover a reference to another hub, but its admin still approves device enrollment there; discovering mailbox credentials is insufficient. Removal/recovery is also tracked per hub. This trades one global identity and one-scan automatic admission everywhere for independent hub authority and revocable device keys.
+Each hub has its own participant record, home, device keys and admission decisions. One app can present the lists together, with one live IMAP connection per hub. Pairing on one hub does not authorize admission on another. A client may discover a reference to another hub, but its admin still approves enrollment there; discovering mailbox credentials is insufficient. A keychain that syncs carries its keypair to every hub the user is on, and each hub keeps its own certificate for it. Removal/recovery is also tracked per hub. This trades one global identity and one-scan automatic admission everywhere for independent hub authority and revocable device keys.
 
 ### 6.6 Directory and admission authority
 
@@ -496,120 +493,33 @@ The app shows **People**, with **Devices** underneath each person. Directory mem
 
 All participants can learn names, participant/device bindings and enrollment/revocation facts. They gain no home or collection keys from the directory. A former participant may retain HubK; excluding them from raw mailbox traffic also needs provider credential revocation. Signed registry objects and their full proof dependencies are retained/restored even if a profile says someone left. Absence of a directory entry is not evidence that a device was revoked or a hub is unused.
 
-### 6.7 Management password and its changes
+### 6.7 The hub password
 
-Generate MS randomly, then wrap it. Do not derive the signing key directly from
-the password. The initial KDF profile is Argon2id version 0x13: 65,536 KiB,
-3 passes, 4 lanes, 16 random salt bytes, 32 output bytes. This is RFC 9106's
-second recommended profile, chosen over its 2 GiB profile for mobile memory use.
-Benchmarking on supported platforms remains required. Select fixed profile IDs;
-never accept arbitrary untrusted resource parameters or silently weaken them.
+The hub's management key lives **on the hub**, in an **admin capsule**: `MS` sealed with ChaCha20-Poly1305 under a key stretched from the hub password, signed with `MKs` and kept in the directory beside the genesis. Anyone on the hub can read the capsule and try passwords against it offline; the stretching is what makes each try expensive.
 
-Password text is NFC-normalized UTF-8, case preserved, spaces preserved, no
-trimming, maximum 1,024 bytes after normalization. Confirm new passwords and
-encourage a generated multiword passphrase. The encrypted capsule permits
-unlimited offline guessing; no UI retry limit protects it.
+**Stretching.** `CK = Argon2id(password, salt, m = 1 GiB, t = 3, p = 1, 32 bytes)`, Argon2id version 0x13, with a random 16-byte salt stored in the capsule. That is one fixed profile, the only one a v2 client accepts, so a capsule can't be written with weaker settings. It has one lane because libsodium's `crypto_pwhash`, the usual Argon2id on phones, always uses one; the cost is that a device can't spread the work over its cores, so the time it spends buys less work than four lanes would. It takes about 1.2 s on an Apple M5 and a few seconds on a recent phone, and needs 1 GiB of memory while it runs. The capsule is `salt || nonce || ChaCha20-Poly1305(key, nonce, MS, aad)`, with `key = KDF(CK, hubID, "tandem/v2/admin-capsule", 32)`, a random 12-byte nonce and `aad = "TANDEM-ADMIN-CAPSULE-V2" || hubID || salt`. Implementations use a library for Argon2id, since CryptoKit has none: libsodium's `crypto_pwhash` with `ALG_ARGON2ID13`, an opslimit of 3 and a memlimit of 2^30 bytes computes `CK`. `conformance/fixtures/tandem-v2-capsule.json` is a vector at this profile, checked against both libsodium and Python's `cryptography`.
 
-Use ChaCha20-Poly1305 with a fresh random 12-byte nonce. AAD binds the purpose,
-hub authority ID, recovery certificate ID, wrapper revision and parent-set hash,
-KDF profile, salt and nonce, with fixed widths/length prefixes. The plaintext
-holds MS and its recovery-certificate ID. After decrypting, derive both manager keys and check
-their public halves against the recovery certificate. Independently HPKE-seal MS to
-RKa with a distinct purpose label and the same hub/certificate binding.
+**The password.** Chosen by the creator. It is hashed as NFC-normalized UTF-8, with case and spaces kept and nothing trimmed. When a password is chosen, at hub creation or a change, it must have at least 12 Unicode code points and at most 1,024 bytes after normalization. That is code points, not the characters a person sees: Swift's `String.count` gives 4 for 👩‍💻👩‍💻👩‍💻👩‍💻, which has 12 code points and is long enough. Unlocking never checks the length; whatever is typed is normalized and tried. The app suggests a generated passphrase of six words. Stretching makes each guess cost a second or more of a strong machine and a gigabyte of memory, so an attacker with one graphics card tries tens per second, not billions; a six-word passphrase is out of reach. It doesn't save a password from a list of common ones: those fall in hours. The app says so when the password is chosen.
 
-The manager signs wrapper metadata and ciphertext. Recovery genesis fixes the
-manager keys before the first wrapper/recovery box is created. A replacement names all known current wrappers
-as parents, has revision one above its greatest parent, and wraps the same MS.
-Parents are sorted/unique, missing ancestry is held, and IDs hash signature
-inputs rather than randomized signature bytes.
+**Entering it.** Typing the hub password on any device opens the capsule, derives `MKs` and `MKa`, and checks that `pub(MKs)` is the `hubID` the device pinned. That device can then administer the hub. It MAY keep `MS` in the system keychain behind device authentication (Face ID, a passcode), on that device only and never synced, so that later approvals ask for that rather than the password. It keeps `MS`, not `CK`, because `CK` opens one capsule and stops working once the password is changed elsewhere. A device that keeps `MS` is as good as the password to whoever takes it over, whatever the password is changed to, so the app asks first, and the admin can forget it again on that device. A stolen device that keeps it is a leaked password (§6.8).
 
-**Routine change:** enter the current password, decrypt MS, choose a new
-password, generate a fresh salt/nonce, persist the exact new wrapper and signed
-replacement, publish it, verify durable delivery, then clean up obsolete copies.
-All devices subsequently use the current wrapper. Member records, device
-keys, home keys and collection keys do not change. No re-enrollment is needed.
+The hub password is asked for to create hub invitations, approve enrollments, revoke keys, move the hub and change the password. It is not asked for to create, edit or share lists, or to sync.
 
-**Forgot password, no suspected compromise:** RS opens MS's independent recovery
-box. Rewrap that same MS. Erase RS from the application after the operation.
+**Changing it.** A device that holds `MS`, from the password or from its keychain, writes a new capsule under the new password. The new capsule names, by ID, every capsule it supersedes: the current ones and every capsule they name. Once the new one is on the hub, the device destroys the old ones. Devices use any capsule that no other names. Because the names are carried forward, a copy of a destroyed capsule put back on the hub is still named and never becomes current again; the cost is one more ID in each capsule per change. Two changes at the same moment leave two, each opening with its own password, until the next change names both. Changing the password is not a reset: anyone who copied the old capsule and knows the old password still opens it (§6.8).
 
-**Concurrent changes:** keep both maximal signed wrappers and report that the
-change needs finishing. Unlock either valid one and explicitly publish a new
-wrapper naming both. No arbitrary password wins by hash or wall clock, and no
-member record/list is killed by this credential conflict.
+### 6.8 If the hub password leaks or is forgotten, and the creator's recovery
 
-Old ciphertext plus the old password still reveals MS. Deletion does not erase
-captured copies. Routine password change is not a security reset. Suspected
-password/MS compromise requires §6.8 and a fresh MS, not another wrapper.
+**Leaked password.** Whoever knows the hub password and has read the capsule can admit devices, revoke keys and invite people. They can recover the creator’s home and the list keys it contains (§6.8). They cannot read another member’s private home or act for that existing member: admitting keys to a non-creator participant needs that participant’s own authorization (§6.9). Collection ownership remains fixed. Still, the hub's management can't be trusted any more, and changing the password doesn't take the management key back. The creator makes a **new hub** and copies the lists across, and people join it, as with a dead list (§11.8).
 
-The password is requested for creating management invitations, approving enrollment, revoking devices and changing the password. It is not requested for ordinary list creation, editing, owner sharing or normal sync. No permanent biometric shortcut or unlocked MS cache is defined: unlock for an explicit action/displayed batch, then release/wipe buffers on completion, lock, backgrounding or cancellation. Malware during password entry can steal MS; managed runtimes cannot guarantee perfect erasure.
+**Forgotten password.** A device that keeps `MS` in its keychain can set a new password without the old one, even if the password was changed elsewhere since it stored it. With no such device, the hub's management is lost: lists keep syncing and members keep working, but nobody can admit, revoke or invite. The way back is a new hub and a copy.
 
-### 6.8 Management recovery and creator recovery
+**Recovering the creator.** The creator's home key is also sealed to `MKa` (§5.3). A creator who has lost every device and the keychain enters the hub password on a new device. It opens the capsule, admits a fresh keychain for the creator's participant, the one and only exception to member authorization (§6.9), and opens the creator's home. The hub password recovers nobody else: no member's home is sealed to `MKa`.
 
-Use a clean device and the hub's offline RS. The password alone cannot invalidate
-a management seed the attacker already copied.
+A management compromise can admit lookalike new members, revoke people and deny service; an owner fooled into sharing with a lookalike has made a real disclosure. Compromise of both an individual's device and the hub password is stronger: start the new hub from a clean device and review the devices that member had approved.
 
-1. Obtain the complete root-certificate chain and known revocations from the
-   mailbox/surviving replicas. Generate fresh MS, password, salt and wrappers.
-   Create a fresh creator device keypair. Do not inherit opaque pending
-   invitations or unidentified devices from the compromised manager.
-2. Build root generation g+1, linked to the exact preceding root certificate.
-   Bind fresh manager keys, fresh creator public keys and a fixed inventory of retained old certificate/revocation IDs
-   and their complete proof dependencies.
-   Only RKs can sign it. Create the new creator certificate and manager-signed
-   capsule/recovery boxes against this root after its ID exists; the root must
-   not hash a wrapper/certificate that itself binds that root ID. Old-manager objects absent from that inventory are
-   historical only: they cannot arrive later and revoke a renewed member or
-   smuggle an extra device into the new generation. Missing inventoried proofs
-   hold the dependent operations; they are not silently discarded.
-   A special recovery authorization applies **only to the immutable creator
-   member ID**, not an arbitrary member chosen by the admin.
-3. Durably journal the exact signed plan before export, encrypting it under a
-   separately purpose-derived key from the new password KDF output. Do not save
-   RS or plaintext MS. Resume requires the new password; the journal header keeps
-   its KDF salt/profile. Verify new wrappers/boxes before announcing the root.
-4. Publish the signed recovery certificate. Its first announcement is the commit;
-   afterward finish that exact plan, never withdraw it or generate another root
-   successor. Devices retain the newest verified root and reject old-manager
-   commands as current authority, regardless of their counters/timestamps.
-5. Renew other members' certificates only for their independently verified keys
-   with their approval. The admin cannot use RS to invent a device for Alice.
-   Old revoked keys stay retired. If a member has no trusted surviving device,
-   that member rejoins with a new member ID and has lists shared/copied again.
-6. Member devices rekey private homes and collection owners rotate affected
-   lists to the new policy floors. Creator recovery boxes let RS open the
-   creator's own latest available home/replica, not anyone else's. Existing list
-   IDs may survive when their owner history is unambiguous; forked lists retain
-   the existing read-only/copy recovery. No automatic branch reconciliation.
-7. Replace exposed IMAP credentials, hub invitation capabilities and directory
-   bindings. Audit admissions/sharing that happened during compromise. Restoring
-   authority cannot undo leaked content or promises already signed by members.
+### 6.9 Genesis, device registry and policy snapshots
 
-A manager-only compromise cannot forge the member approvals necessary to read
-an existing member's private data. It can admit lookalike new members, revoke
-people and deny service; an owner fooled into sharing with a lookalike has made
-a real disclosure. Compromise of both an individual's device and the management
-key is stronger; require clean-device recovery and review that member's approved devices.
-
-A client deliberately shown only old valid root metadata may remain deceived
-until it receives the reset. No signed timestamp proves absolute freshness here.
-If RS was also stolen, start a new hub authority and migrate readable data;
-there is no protocol for choosing between rival recovery keys.
-
-### 6.9 Root chain, device registry and policy snapshots
-
-A recovery certificate binds hub authority ID, previous certificate ID,
-generation exactly predecessor + 1, both manager public keys, any creator-bootstrap public keys,
-permitted mailbox descriptors, and the immutable creator member registration. Genesis
-also fixes RKa. RKs signs it; the new MKs proves possession over that exact
-certificate. The recovery key is never encrypted under the management password.
-A compromised manager cannot replace it or certify a different manager.
-
-Verify the chain back to the pinned root. Generation numbers alone confer no
-power; unknown predecessors are held. Keep a durable high-water mark. Two
-root-signed successors freeze hub management rather than selecting a branch.
-An invalid genuine root-signed control decision is also a recovery failure;
-start a new hub authority and migrate readable data. No automatic root-key
-replacement or device-seniority rule exists.
+The hub's **genesis** binds `hubID` (that is, `pub(MKs)`), the permitted mailbox descriptors, the commitment of `HubK` and the immutable creator registration, signed with `MKs`. It is the only root a hub ever has. A device pins it at setup, invitation or pairing, and refuses anything that claims to succeed it; a second genesis is a different hub. There are no recovery generations.
 
 The device registry is a set of immutable manager-authorized certificates and
 permanent manager-signed revocations. Existing-member pairing requires a direct
@@ -622,10 +532,7 @@ hashes canonical inputs, not randomized signature bytes. Union merges certificat
 removal wins. A revocation commits the exact certificate/public keys being
 retired and the fixed set of member device certificates retained at that cut, so
 issuing a new certificate for the same keys cannot resurrect them under an
-alias. Revocations included in the offline recovery checkpoint are retained through
-that reset. The recovery operator must gather surviving replicas and review
-that cut: a receiver cannot merge excluded old-manager facts back into the new
-generation to compensate for an incomplete checkpoint. Concurrent device
+alias. Concurrent device
 additions and concurrent removals do not create competing device registries.
 
 A certificate is not valid merely because MKs signed it. For a new participant,
@@ -633,11 +540,11 @@ verify its immutable registration, invitation/direct-admission authority and
 proof of both device keys. For an existing participant, require authorization
 by an admitted device of that same participant: either its signature over the
 exact enrollment request or a valid signed pairing delegation and bearer-signed
-target claim (§6.3). Bind the full target keys and dot namespace, participant,
-hub, root and issuance cut. Validate the source against those immutable
+target claim (§6.3). Bind the full target keys, participant, hub, genesis and issuance cut. Installation
+dot namespaces are bound by individual write signatures, not by the shared certificate (§5.3). Validate the source against those immutable
 issuance dependencies; a later source revocation does not invalidate an already
 retained child. Creator recovery is the only exception, restricted to the
-root-fixed creator and newly root-authorized bootstrap keys (§6.8). An admin
+creator that the genesis fixes, and needs the hub password (§6.8). An admin
 cannot omit these proofs and mint themselves a device as an existing member.
 
 Each certificate has an **issuance snapshot**, the exact known certificate and
@@ -645,7 +552,7 @@ revocation IDs against which member authorization was checked. A valid new
 device certificate does not make its own requester's claimed keys authoritative.
 Proofs and required ancestors must be verified before it becomes usable.
 
-An authorization snapshot hashes the hub recovery-certificate ID and sorted,
+An authorization snapshot hashes the hub's genesis ID and sorted,
 unique certificate/revocation IDs for a member. A collection's fixed policy
 floor pins such a snapshot. Missing signed objects are held; nobody can prove
 that a snapshot includes every fact on the mailbox. Withholding is not solved.
@@ -674,8 +581,8 @@ a fresh client shown only old metadata cannot prove freshness.
 ### 6.10 Private activity history
 
 The originator's private home holds immutable activity events: invitation
-created/cancelled, enrollment approved/completed, device revoked, password changed,
-security reset, sharing offered and acceptance received. Member private events
+created/cancelled, enrollment approved/completed, key revoked, sharing offered
+and acceptance received. Member private events
 remain private even from the hub admin; the admin sees their own administration
 events and authorized receipts. Distinct records retain history instead of
 attempting to reconstruct it from merged current state.
@@ -750,7 +657,7 @@ The roster does not merge. Two different successors of one statement, both signe
 
 ### 8.3 Valid data writes and snapshots
 
-A data write names a valid roster statement in a valid chain from genesis (§8.2), and is signed by the exact device certificate/snapshot bound in its input. The certificate must bind its participant author, device public keys, hub and dot namespace; that roster must list the participant as owner or writer. Its immutable source authorization is checked against the certificate/root chain and revocation sets referenced by that snapshot (§6.9), not whatever registry facts happened to arrive first. A missing ancestor holds the write; an invalid one rejects it. A draft authorizes nothing (§9.4). Its source epoch is the first statement, going back from the one it names, that carries the same epoch commitment. In a channel identified by epoch-start ID `E`, it is eligible iff:
+A data write names a valid roster statement in a valid chain from genesis (§8.2), and is signed by the exact device certificate/snapshot bound in its input. The certificate must bind its participant author, device public keys and hub; the write signature also binds the installation’s dot namespace. That roster must list the participant as owner or writer. Its immutable source authorization is checked against the certificate/root chain and revocation sets referenced by that snapshot (§6.9), not whatever registry facts happened to arrive first. A missing ancestor holds the write; an invalid one rejects it. A draft authorizes nothing (§9.4). Its source epoch is the first statement, going back from the one it names, that carries the same epoch commitment. In a channel identified by epoch-start ID `E`, it is eligible iff:
 
 1. its source epoch ID is **exactly `E`**, and its source authorization snapshot extends that epoch's pinned floor for its participant (including the retained-certificate rule of §6.9); or
 2. its write ID and record ID occur in the snapshot inventory committed by `E`, and the roster statement it names is an ancestor of `E`.
@@ -789,9 +696,9 @@ A write is the tuple:
 
 **HLC:** each device keeps a hybrid logical clock `(millis u48, counter u16)`. A new write's HLC is `(max(now, last.millis), counter)`, with `counter` incremented if `millis` didn't advance; if the counter would pass 65 535, `millis` advances by one and the counter restarts at 0. A device's HLCs are strictly increasing. Devices do **not** adopt other devices' clock values: causality is tracked by `context` and `base`, not by timestamps, so a device with a wrong clock can't make its writes win over writes that saw them.
 
-A write whose `millis` is 2^48 or more is invalid, although the signed slot is wider. The HLC is stored durably with the device ID: a device reserves each new clock value, and stores the write, before it shows the edit as made or lets the write leave the device, an app extension included (§17). A restart must never issue a dot again. A device that can't recover its last clock value generates fresh device keys/namespace and enrolls again (§5.3); it does not guess from vectors other devices claim. This adds an admin approval after unrecoverable local key/clock state loss.
+A write whose `millis` is 2^48 or more is invalid, although the signed slot is wider. The HLC is stored durably with the device ID: a device reserves each new clock value, and stores the write, before it shows the edit as made or lets the write leave the device, an app extension included (§17). A restart must never issue a dot again. An installation that cannot recover its last clock value generates a fresh device ID and starts a new dot namespace (§5.3); its keychain keys and certificate stay usable. It does not guess from vectors other devices claim. Losing the keychain keys themselves still requires pairing or new-participant admission (§6.3–6.4).
 
-The signature's exact certificate binds the acting device and its dot namespace. A vector entry remains an untrusted causal claim, not a signature by the device it names. A namespace collision never selects a public key or changes deduplication by write ID.
+The signature’s exact certificate binds the acting keychain keys and participant; the signature itself binds the installation’s dot namespace. A vector entry remains an untrusted causal claim, not a signature by the device it names. A namespace collision never selects a public key or changes deduplication by write ID.
 
 ### 9.2 Field semantics (data records)
 
@@ -1122,7 +1029,7 @@ A device learns of the change from the announcement in the old channel, or from 
 
 **Signing again by the original device.** Keep the record, field, operation, element, value and original dot. Set the new context empty and base to the join of the old base and `reach(oldWrite)`. Use the first authorized statement of the new epoch listing the participant as owner/writer and the device's exact valid certificate/source snapshot extending its floor. The resulting input/write ID is deterministic for that device and those references; reuse persisted signed bytes on retry. If no authorization exists or the vector would exceed the limit, keep the work for the app.
 
-**Recovery by another device of the same participant.** The laptop cannot sign as the lost phone or reuse its certified dot namespace. It may preserve the old signed write through a fixed owner inventory; otherwise importing its content creates a **new write**, with the laptop's own dot/certificate/source snapshot. Show it as recovered work, retain the old provenance privately, and do not silently claim to be the original authoring device. Use new-epoch contexts/base under §9.2 rather than transporting the old device's causal claims as current authority.
+**Recovery by another device of the same participant.** The laptop uses its own installation dot namespace, even if it shares the lost phone's keychain keys and certificate. It may preserve the old signed write through a fixed owner inventory; otherwise importing its content creates a **new write**, with the laptop's own dot and the certificate/source snapshot valid for its keys. Show it as recovered work, retain the old provenance privately, and do not silently claim to be the original authoring installation. Use new-epoch contexts/base under §9.2 rather than transporting the old installation's causal claims as current authority.
 
 Signing again starts from an empty context, so the order between two writes that both missed the inventory is lost. If one had replaced the other, the replaced value returns as a conflict, and a removed set element returns, until the next write settles it. Keeping the old context instead would let a removed member's malformed context outlive its epoch (§9.3).
 
@@ -1130,7 +1037,7 @@ Only the owner's fixed inventory or the author's own signing again carries old w
 
 ### 11.7 Two devices of one owner
 
-The owner's independently keyed devices share collection access and home, and stay out of each other's way with the note in home (§8.2). A device that is asked to change a collection's sharing while another device's note is there doesn't sign. The note says what that change is, so the device can tell the user.
+The owner's devices share collection access and home, and stay out of each other's way with the note in home (§8.2). A device that is asked to change a collection's sharing while another device's note is there doesn't sign. The note says what that change is, so the device can tell the user.
 
 - **If the change's statement and inventory are on the hub** in the new channel, there is nothing to choose. The device finishes it and says so: "Finishing a change started on Bob's iPhone: making Alice read-only in House." It checks the new channel against the inventory, copies across from the old channel any listed write that is missing, announces the statement, sends the grants and cleans up, as the first device would have (§11.6). It finishes a change only while the note still names the statement the user was shown, and makes the check of step 4 before announcing.
 - **Otherwise the change never happened**, and the device asks: "Bob's iPhone started making Alice read-only in House and didn't finish. Do it here, or discard it?" Either way it removes the note, and the key in it, from home and destroys what was uploaded. It removes the note only if it still names the statement the user was shown. For "do it here" it then makes the same change itself, with a new key, and signs only once the removal is on the hub.
@@ -1205,10 +1112,10 @@ The guiding rule: users never see keys, fingerprints or protocol terms unless th
 
 Settings → **Sync → Add a hub** has two ordinary paths:
 
-1. **Create a hub:** enter the dedicated IMAP account details, choose a hub name, set the management password and save the recovery key plus setup details (§6.1). Existing local lists are uploaded under the creator's participant record. No management identity was required at installation.
-2. **Join a hub:** open its invitation in the trusted native app. Verify the pinned authority/capability, choose a name/device label, and accept. The participant record and first-device admission are created by that flow (§6.1); the member chooses no management password. Already a participant on this hub? Use a pairing link from an enrolled device to keep the same participant/lists. Opening a new-member invite again is not account recovery or device pairing.
+1. **Create a hub:** enter the dedicated IMAP account details, choose a hub name and a hub password, and keep the password with the setup details (§6.1). Existing local lists are uploaded under the creator's participant record. No management identity was required at installation.
+2. **Join a hub:** open its invitation in the trusted native app. Verify the pinned authority/capability, choose a name/device label, and accept. The participant record and first-device admission are created by that flow (§6.1); the member chooses no password. Already a participant on this hub? Use a pairing link from an enrolled device to keep the same participant/lists. Opening a new-member invite again is not account recovery or device pairing.
 
-The IMAP descriptor contains host, port, username and password/app-password credential. The stable hubID is the pinned recovery public key, not a hash of the mailbox address (§5.3). Root metadata authorizes descriptors; two credentials for the same authorized descriptor do not create different authorities. Manual credentials without pins/discovery material do not authorize taking over an existing hub.
+The IMAP descriptor contains host, port, username and password/app-password credential. The stable hubID is `pub(MKs)`, not a hash of the mailbox address (§5.3). Root metadata authorizes descriptors; two credentials for the same authorized descriptor do not create different authorities. Manual credentials without pins/discovery material do not authorize taking over an existing hub.
 
 **New-member invitations.** The admin unlocks MS and creates a manager-signed, purpose-limited invitation capability, intended label, token and expiry, carrying connection details/credential, HubK and root pins in a sensitive QR/link. The capability binds this hub/root, the invite verification key, new-participant purpose and limits. The first device proves both device keys and invitation possession over its exact registration/claim. The complete capability/claim/proof chain authorizes that first admission without a second admin tap; it never authorizes enrollment into an **existing** participant. Concrete capability encoding, consumption/cancellation and concurrent-claim handling must be specified/tested before shipping (Q28). Do not claim that a mutable “used” flag enforces one-time access against a hostile mailbox; duplicate uses are visible claims requiring admin resolution, not an arbitrary winning person.
 
@@ -1216,7 +1123,7 @@ The admin's private home records **Pending invite: Alice**, creation/expiry, cre
 
 **Pairing links.** The member creates them from an existing device (§6.3); the hub admin approves the resulting exact target device. They contain setup information and a bearer delegation, with private home access gated until approval. The app may use `liszto://` links or an HTTPS universal link with the sensitive payload in the fragment, never query/path parameters. Open only in the trusted app; fragments are not sent in HTTP requests, but page scripts, browser history and captured links can still expose them. No member-side comparison code is required; the captured-link trade-off is explicit in §6.3.
 
-**Mail credentials are separate from the management password.** A shared IMAP credential remains the simplest default and is passed on in invitations/pairing. Independent per-device credentials, where supported, allow provider-side removal of one device without reconnecting everyone. The app says which is being used; provider credential creation/revocation may require manual steps. Expiring/cancelling an invitation does not revoke a copied mail credential. Every device needs read, append and delete access; a read-only one is refused. Prefer credentials without send-mail permission where available, and a dedicated account rather than a personal inbox. The IMAP mapping remains §10.3.
+**Mail credentials are separate from the hub password.** A shared IMAP credential remains the simplest default and is passed on in invitations/pairing. Independent per-device credentials, where supported, allow provider-side removal of one device without reconnecting everyone. The app says which is being used; provider credential creation/revocation may require manual steps. Expiring/cancelling an invitation does not revoke a copied mail credential. Every device needs read, append and delete access; a read-only one is refused. Prefer credentials without send-mail permission where available, and a dedicated account rather than a personal inbox. The IMAP mapping remains §10.3.
 
 ### 13.2 Everyday flows
 
@@ -1224,14 +1131,16 @@ The admin's private home records **Pending invite: Alice**, creation/expiry, cre
 |---|---|
 | Create, edit, delete | Nothing special. Instant locally; a subtle sync indicator when offline or behind. |
 | Rename a list | Instant, from any of the owner's devices, offline too. |
-| Add a device | On the enrolled phone: “Add device” → QR/link. Laptop opens it, names itself and shows “Waiting for hub approval”. Admin sees “New device from Alice: Laptop — Approve / Reject”; Approve requests the hub password. Lists/settings then sync. No second Alice confirmation or comparison code. |
-| Hub recovery key | Saved by the creator at hub setup. Recovery needs the offline key and setup details; it is not a personal backup key shown to every joining member. |
+| Add a device | On the enrolled phone: “Add device” → QR/link. Laptop opens it, names itself and shows “Waiting for hub approval”. Admin sees “New device from Alice: Laptop — Approve / Reject”; Approve asks for the hub password, or for Face ID where this device keeps it. Lists/settings then sync. No second Alice confirmation or comparison code. |
+| Hub password | Chosen when the hub is created. Enter it on any device to administer the hub. Nobody who joins is asked for it. |
+| Change the hub password | Enter the current one (or use Face ID on a device that keeps it), choose another. Devices and lists stay as they are. The app warns that an old copy of the capsule still opens with the old password. |
+| A new phone | Sign in to the same Apple account; the keychain brings the keys, and everything syncs. No pairing and no approval. |
 | A device broke or was replaced | Pair from a surviving enrolled device. Private device keys are not restored by cloning an app backup. |
 | Lost every device | Creator: explicit hub recovery using the saved key. Ordinary member: rejoin as a new participant, ask owners to share lists again; private data without a readable replica is lost. |
 | A device was stolen | People → person → Devices → Remove. Admin unlocks management; surviving member devices rekey home and owners rekey lists. Show remaining rekeys and mailbox credential steps separately. Previously downloaded data stays readable. |
 | Share a list | "Share" → pick people from the hub's People, each as editor or read-only. Someone not on the hub yet first needs a hub invite. |
 | Someone shared a list with you | "Bob shared House with you. Add it?", once, on all your devices. |
-| Add someone to the hub | Admin: “Invite someone” → label/connection credential → management password → QR/link. “Pending invite: Alice” appears on all admin devices; accepting creates her participant and first device. Then share selected lists. |
+| Add someone to the hub | Admin: “Invite someone” → label/connection credential → hub password → QR/link. “Pending invite: Alice” appears on all admin devices; accepting creates her participant and first device. Then share selected lists. |
 | On more than one hub | Lists appear together. Each hub has its own participant and device approval; pairing on one does not silently enroll on the others. |
 | Who's on this hub | Hub → People → Alice → Phone, Laptop. Admission/revocation comes from certificates. Proven inviter/claimed names help recognition but do not prove a physical person. |
 | Members | The list's sharing screen shows names and roles. The owner can add people from the hub's People, switch someone between editing and read-only, or remove them. It takes effect at once for the owner; the key change runs in the background and needs the network. |
@@ -1244,7 +1153,8 @@ The admin's private home records **Pending invite: Alice**, creation/expiry, cre
 | Create a list on your phone | It appears on your approved laptop through the shared home, without invitations or further admin approval. The participant owns it; either device can act as owner. |
 | Accept a shared list | Answer once on either device; the grow-only admission answer syncs through home. It appears on the other devices. Concurrent No/Leave still wins over Add (§11.2). |
 | Private activity | “Activity” on any of your devices shows your invitations, enrollments and sharing actions, plus verified acceptance receipts. Hub admin status does not reveal another member's private history. |
-| Change the hub password | Enter the current password, choose another; devices/lists stay enrolled. Warn that captured old capsules remain unlockable with the old password. Suspected compromise uses recovery/reset. |
+| The hub password may have leaked | Make a new hub and copy the lists across; people join it. Changing the password doesn't undo a leak (§6.8). |
+| Forgot the hub password | Set a new one from a device that keeps it behind Face ID. With none, management is lost; lists keep working. |
 
 ### 13.3 Errors
 
@@ -1331,11 +1241,11 @@ References for the CRDT parts: Shapiro, Preguiça, Baquero, Zawirski, "Conflict-
 | # | Question |
 |---|---|
 | Q3 | Folder size: how do Stalwart and Dovecot behave with ~100k messages in one folder (Tandem's expected upper bound per hub)? Fastmail held that many when measured over JMAP; over IMAP it is part of Q26. |
-| Q5 | Hub recovery-key format: base32 groups with checksum or a word list? Define saved hub authority/descriptor details as well; the key alone is not a mailbox credential. |
+| Q5 | Should the app refuse hub passwords found in a list of common ones, rather than only warn? It would add a list to every SDK. And is 1 GiB of Argon2id memory safe on older phones with 4 GB of RAM, which may stop an app that takes that much? |
 | Q9 | Padding message sizes to hide content length from the hub. |
 | Q10 | Tombstones are kept for good (§12.3). Is that affordable at Liszto's deletion rate, or does v2 need a safe way to drop them? |
 | Q14 | What checks the design, and what doesn't. A Go reference SDK and device engine, test vectors checked by a Swift SDK, Lean proofs of the merge, roster, clean-up and encoding rules, and a scenario harness live on the `testbed` branch; `conformance/` tests real cryptography, mail transport and a durable journal. `model/owner_model.py` is a small symbolic model of the roster rules and lags the draft in three places (its README says which). The testbed's `TESTING.md` says what is implemented and what isn't. |
-| Q15 | Reintroduced independent device keys with separate recovery/management authority and fixed certificate cutoffs (§6). Selected model/crypto tests pass; the complete architecture still requires independent review. A revoked owner device can still kill an old roster by forking it (§9.4). |
+| Q15 | Reintroduced keys per keychain, with a password-sealed management key and fixed certificate cutoffs (§6). Keychains that don't sync, such as Android's, lose the new-phone convenience; is a platform backup worth defining there? Selected model/crypto tests pass; the complete architecture still requires independent review. A revoked owner device can still kill an old roster by forking it (§9.4). |
 | Q16 | A roster gains one complete statement per change and is copied at every rotation, and an inventory keeps entries for writes no rotating device has seen (§8.3). Is a signed checkpoint needed for long-lived collections? |
 | Q20 | Two devices of one owner changing a collection's sharing in the same moment kill it (§11.7). The note in home makes that unlikely. Measure how often this occurs in practice; the note narrows the race but cannot eliminate it. |
 | Q21 | Finalize `hubinvite`, `pairing`, `activity`, root/registry discovery and device-signed directory-profile encodings. No SDK implements this complete v2 schema. |
@@ -1343,7 +1253,7 @@ References for the CRDT parts: Shapiro, Preguiça, Baquero, Zawirski, "Conflict-
 | Q23 | Define explicit v1→v2 migration, including owner binding, device enrollment, home/key policy, old-device copies and safe cutover. No in-place upgrade is claimed (§15). |
 | Q25 | A guest who can only look. A read-only credential (Fastmail can make an app password read-only) can't run today's protocol, because even a reader writes. If the owner did the writing (scanning the guest's code and admitting them), a guest could read a list without being able to destroy anything on the hub. |
 | Q26 | A whole hub over IMAP on Fastmail. Measured so far: 40 connections on one app password all get live updates; an append reaches the others in about half a second; 100 appends take 21 s with `MULTIAPPEND`; `QRESYNC` reports removals correctly. Not yet run: every scenario with several devices over IMAP only, the time a key change takes when a whole collection is uploaded one `APPEND` at a time, and a full resync of 100,000 messages (64 s when it was measured over JMAP). |
-| Q28 | Freeze management/control object encodings: root/registry certificates, exact immutable snapshot dependencies, issuance cuts, new-member invitation capability/possession and concurrent uses, both device-key proofs, wrapper DAG, home-epoch announcement/serialization, device grant/receipt/notice inputs, discovery channels and bounded KDF profile IDs. Then generate cross-language vectors. Until these are specified the architecture is not an implementable interoperable protocol. |
+| Q28 | Freeze management/control object encodings: root/registry certificates, exact immutable snapshot dependencies, issuance cuts, new-member invitation capability/possession and concurrent uses, both device-key proofs, the admin capsule, home-epoch announcement/serialization, device grant/receipt/notice inputs and discovery channels. Then generate cross-language vectors. Until these are specified the architecture is not an implementable interoperable protocol. |
 | Q29 | Exercise the complete UX over real IMAP with durable storage: automatic future-list sync; original device removed while child keeps access; stale/forking owner; absent admin/member/owner; pending pairing across home rekey/root reset; kill/lost-ack at every export; concurrent password changes; recovery with late old-manager facts. Ensure no admin-accessible box decrypts another member's private home. |
 | Q30 | Which mail providers work. Tested: Fastmail, Stalwart and Gmail (§10.3). Known not to: Outlook.com personal accounts, which accept only OAuth since September 2024. Not yet measured: iCloud Mail, Yahoo, GMX, mailbox.org and others, and Gmail's connection limit. On Gmail, live updates take about 30 s, or about 12 s and 8.5 s when IDLE is restarted every 5 s and 2 s: the default is 3 s; does Gmail tolerate it for hours on end? `probes/imap_probe.py` checks a provider: required extensions, live-update latency, bulk appends, whether a destroyed message survives elsewhere, and how many connections it allows; `--compare` tries other ways to get a change pushed. |
 

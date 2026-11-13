@@ -12,7 +12,8 @@ conformance/.venv/bin/python -m pip install -r conformance/requirements.txt
 conformance/.venv/bin/python -B conformance/run.py --require-cryptokit --mail
 ```
 
-Omit `--mail` for an offline run after dependency installation. Omit
+Omit `--mail` for an offline run after dependency installation. Add
+`--require-libsodium` to fail rather than skip when libsodium is missing. Omit
 `--require-cryptokit` on Linux to run the Python and storage checks; Apple tests
 are explicitly skipped there. `--verbose` names individual tests. Docker is
 required only with `--mail`; the first mail run downloads the pinned image.
@@ -37,6 +38,10 @@ for the initial local evidence and the implementation requirements it exposed.
   for another SDK, including distinct composed/decomposed field names.
   Its `spec_sha256` identifies the reviewed draft it targets. Signatures in
   fixtures are valid examples, not a requirement to reproduce their bytes.
+* `test_admin_capsule.py` seals and opens the v2 admin capsule (DESIGN §6.7)
+  with Argon2id from `cryptography`. `fixtures/tandem-v2-capsule.json` is a
+  vector at the real 1 GiB profile; libsodium's `crypto_pwhash`, loaded with
+  `ctypes`, must reproduce its key.
 * `mail_transport.py` sends the exact JMAP `Email/set`, `Email/changes` and `Email/get`
   traffic and IMAP `APPEND`, `UID FETCH`, IDLE, QRESYNC and `UID EXPUNGE` calls.
   Tests cover both binding directions, MIME transfer encodings and UTF-16,

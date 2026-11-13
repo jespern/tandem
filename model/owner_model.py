@@ -8,7 +8,7 @@ the owner's home channel.
 Keys/signatures are symbols, not cryptography: a user ID stands for the user's
 key, and "signed by" is a name. JSON encoding below makes model identities
 deterministic; the protocol's binary encodings remain in DESIGN.md.
-No mail binding, pairing or production storage. Of invitations, only what the roster decides.
+No mail binding, pairing, hub directory or production storage.
 """
 import base64
 import copy
@@ -161,15 +161,11 @@ class OwnerLog:
         members = b["members"]
         if owner(b) != s["signer"] or any(role not in ROLES for role in members.values()):
             return False  # one owner, and it is the key that signs: the owner never changes
-        via = b.get("via", {})
         if parent is None:
             return (len(members) == 1 and b["n"] == b["epoch"] == 0
-                    and b["snapshot"] is None and not b["deleted"] and not via)
+                    and b["snapshot"] is None and not b["deleted"])
         if parent["deleted"] or b["n"] != parent["n"] + 1:
             return False
-        if set(via) - set(members) or any(via.get(uid) != parent.get("via", {}).get(uid)
-                                          for uid in members if uid in parent["members"]):
-            return False  # the invite a member came in through is fixed while they stay
         reducing = any(uid not in members or ROLES[members[uid]] < ROLES[role]
                        for uid, role in parent["members"].items())
         rotated = b["commit"] != parent["commit"]
@@ -340,20 +336,6 @@ def sync(log, hub, keys, announced=False):
                     log.add(s)
 
 
-def invite_open(log, invite):
-    """§11.3. `invite` is the owner's record in home. Uses are counted on the roster, and an invite
-    is over for good once anyone who came in through it has been removed, even if they are back
-    by another invite. Both follow from the signed roster's history, so no second write has to
-    land for a removal to close the door behind it."""
-    users = set()
-    for sid in log.line():
-        came = {uid for uid, via in log.st[sid]["body"].get("via", {}).items() if via == invite["id"]}
-        if users - came:
-            return False
-        users |= came
-    return not invite["closed"] and len(users) < invite["maxUses"]
-
-
 def report(log, hub, epoch, key):
     """A device that sees a conflict shows it where every member can see it: the current channel."""
     history = hub.channels[(epoch, key)]["history"]
@@ -427,22 +409,15 @@ class Device:
         self.log.add(s)
         return s
 
-    def admit(self, uid, invite, role="reader", asked=False):
-        """Answer a join request (§11.3). `asked`: the owner approved this very request by hand."""
+    def share(self, uid, role="reader"):
+        """§11.1: the owner picks someone from the hub's directory. Always the owner's own act."""
         head, before = self.ready()
         if uid in before["members"]:
-            self.grant(uid)  # the grant again: the device may have crashed between admitting and granting
+            self.grant(uid)  # the grant again: the device may have crashed between adding and granting
             return "granted"
-        was_member = any(uid in self.log.st[i]["body"]["members"] for i in self.log.line())
-        if not invite_open(self.log, invite) or (was_member and not asked):
-            return "refused"
-
-        def join(body):
-            body["members"][uid] = role
-            body.setdefault("via", {})[uid] = invite["id"]
-        self.amend(join)
+        self.amend(lambda body: body["members"].update({uid: role}))
         self.grant(uid)
-        return "admitted"
+        return "shared"
 
     def prepare(self, edit, writes=(), fresh_key="new-key", resolved=()):
         """A change that starts an epoch. Nothing leaves the device before home and the journal have it.
@@ -551,6 +526,26 @@ class Device:
         self.hub.inbox.setdefault(uid, []).append({"at": at, "epoch": epoch,
                                                    "key": self.home["keys"][epoch], "signer": self.uid})
 
+    def heal_grants(self):
+        """§11.4, §12.2: grants are kept in the recipient's inbox, and the owner's devices look after
+        them. Each current member keeps the latest grant; one that went missing is sent again, an
+        earlier one is destroyed once a later one is there, and a removed member's go."""
+        self.sync()
+        head = self.log.head()
+        epoch = self.log.epoch(head)
+        members = self.log.st[head]["body"]["members"]
+        for uid in sorted(set(members) | set(self.hub.inbox)):
+            box = self.hub.inbox.setdefault(uid, [])
+            mine = [g for g in box if g["signer"] == self.uid]
+            if uid not in members:
+                box[:] = [g for g in box if g not in mine]
+                continue
+            if not any(g["epoch"] == epoch for g in mine):
+                self.grant(uid)
+                mine = [g for g in box if g["signer"] == self.uid]
+            latest = [g for g in mine if g["epoch"] == epoch][-1]
+            box[:] = [g for g in box if g not in mine or g is latest]
+
     def finish_here(self):
         """The user says: deal on this device with what another one started. Finished if its
         statement and inventory are on the hub; otherwise it is dropped, and `self.abandoned`
@@ -594,7 +589,7 @@ def receive_grant(log, hub, uid, grant):
     """Verify accessible history; the hub is never asked what is current.
 
     `log` starts from the genesis the device expects: for a newcomer, the one whose
-    owner is the inviter and whose ID gives the collection ID in the invite.
+    owner is the one who shared it, and whose ID gives the collection ID it was offered.
     """
     channel = hub.channels.get((grant["epoch"], grant["key"]))
     if channel is None:
@@ -618,3 +613,48 @@ def receive_grant(log, hub, uid, grant):
     # A listed write that isn't here delays nothing: later edits supersede snapshot
     # writes and their messages are collected, and a destroyed one is healed by its holders.
     return [w for w in channel["writes"] if write_valid(log, w, grant["epoch"], inventory)]
+
+
+# --- §11.2: admissions, answers and offers ----------------------------------------------------
+
+def admission(log, uid, at):
+    """The admission of `uid` in force at statement `at`: the statement that added them, which is
+    the first that lists them after one that doesn't, or after the genesis. None if `at` doesn't list them."""
+    current, listed = None, False
+    for sid in log.line(at):
+        now = uid in log.st[sid]["body"]["members"]
+        if now and not listed:
+            current = sid
+        listed = now
+    return current if listed else None
+
+
+def state(log, uid, answers, held=()):
+    """§11.2: a membership's state, computed from the roster and the answers, never stored.
+    `answers` is the add-only set in home: (admission, "a" | "n" | "l"). `held` are grants the
+    user's devices hold."""
+    head = log.head()
+    current = admission(log, uid, head)
+    if current is None:
+        return "removed"
+    given = {kind for adm, kind in answers if adm == current}
+    if given & {"n", "l"}:
+        return "left"
+    if "a" in given:
+        return "active"
+    held_for = {admission(log, uid, g["at"]) for g in held if g["at"] in log.st}
+    return "offered" if current in held_for else "none"
+
+
+def offers(log, hub, uid, answers):
+    """Admissions the user is to be asked about: one per valid grant in the inbox whose admission
+    has no answer. An offer is never written anywhere; this is all it is."""
+    answered = {adm for adm, _ in answers}
+    found = []
+    for g in hub.inbox.get(uid, []):
+        if receive_grant(copy.deepcopy(log), hub, uid, g) in (None, False):
+            continue
+        adm = admission(log, uid, g["at"])
+        if adm is not None and adm not in answered and adm not in found:
+            found.append(adm)
+    return found

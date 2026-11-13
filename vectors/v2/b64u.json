@@ -1,0 +1,69 @@
+{
+  "cases": {
+    "invalid": [
+      {
+        "text": "QR",
+        "why": "unused bits not zero (QQ is the one spelling of 0x41)"
+      },
+      {
+        "text": "QQ==",
+        "why": "padding"
+      },
+      {
+        "text": "QQ=",
+        "why": "padding"
+      },
+      {
+        "text": "Q",
+        "why": "impossible length"
+      },
+      {
+        "text": "QQ\n",
+        "why": "newline"
+      },
+      {
+        "text": "Q Q",
+        "why": "space"
+      },
+      {
+        "text": "+_8",
+        "why": "+ is not in the base64url alphabet"
+      },
+      {
+        "text": "-/8",
+        "why": "/ is not in the base64url alphabet"
+      },
+      {
+        "text": "QUJD\r\nREVG",
+        "why": "line break"
+      }
+    ],
+    "valid": [
+      {
+        "hex": "",
+        "text": ""
+      },
+      {
+        "hex": "41",
+        "text": "QQ"
+      },
+      {
+        "hex": "4142",
+        "text": "QUI"
+      },
+      {
+        "hex": "414243",
+        "text": "QUJD"
+      },
+      {
+        "hex": "fbffbf",
+        "text": "-_-_"
+      },
+      {
+        "hex": "be1061fd4696b83263b6b4ced0d4f1868b70a60cc59d665596909afa5437689617",
+        "text": "vhBh_UaWuDJjtrTO0NTxhotwpgzFnWZVlpCa-lQ3aJYX"
+      }
+    ]
+  },
+  "description": "base64url in its one spelling (§5.2)."
+}

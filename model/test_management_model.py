@@ -17,8 +17,8 @@ class Administration(unittest.TestCase):
         alice = self.h.join("alice-phone"); self.h.add_certificate(alice)
         self.assertEqual(self.h.home_recipients(alice.member), {"alice-phone"})
         self.assertNotIn("laptop", self.h.home_recipients(alice.member))
-        self.assertNotIn("offline-recovery", self.h.home_recipients(alice.member))
-        self.assertIn("offline-recovery", self.h.home_recipients(self.creator))
+        self.assertNotIn("hub-password", self.h.home_recipients(alice.member))
+        self.assertIn("hub-password", self.h.home_recipients(self.creator))
         self.h.add_revocation(self.h.revoke(alice))
         self.assertEqual(self.h.home_recipients(alice.member), set())
 
@@ -186,7 +186,7 @@ class MemberInitiatedPairing(unittest.TestCase):
         self.assertEqual(self.h.home_recipients(self.alice.member), {"alice-phone", "laptop"})
 
     def test_admin_without_bearer_claim_cannot_enroll_as_alice(self):
-        self.assertIsNone(self.h.approve_pairing(self.delegation, "evil", "admin-key"))
+        self.assertIsNone(self.h.approve_pairing(self.delegation, "evil", "hub-password"))
 
     def test_bearer_without_admin_authority_cannot_enroll(self):
         self.assertIsNone(self.h.approve_pairing(self.delegation, "laptop", self.delegation.invite_key,
@@ -195,16 +195,6 @@ class MemberInitiatedPairing(unittest.TestCase):
     def test_source_revocation_blocks_old_pairing_link(self):
         self.h.add_revocation(self.h.revoke(self.alice))
         self.assertIsNone(self.h.approve_pairing(self.delegation, "laptop", self.delegation.invite_key))
-
-    def test_old_generation_link_is_not_reusable_after_management_reset(self):
-        self.h.add_root(self.h.recover())
-        self.assertIsNone(self.h.approve_pairing(self.delegation, "laptop", self.delegation.invite_key))
-
-    def test_routine_password_change_keeps_pending_pairing_usable(self):
-        self.h.add_wrapper(self.h.rewrap("new-password"))
-        cert = self.h.approve_pairing(self.delegation, "laptop", self.delegation.invite_key)
-        self.assertIsNotNone(cert)
-        self.assertTrue(self.h.add_certificate(cert))
 
     def test_expiry_stops_pending_approval(self):
         self.assertIsNone(self.h.approve_pairing(self.delegation, "laptop", self.delegation.invite_key,
@@ -229,103 +219,90 @@ class MemberInitiatedPairing(unittest.TestCase):
         self.assertFalse(self.h.current_device(self.alice.member, "laptop"))
 
 
-class PasswordAndRecovery(unittest.TestCase):
-    def test_rewrap_preserves_manager_devices_and_root(self):
-        h = Hub(); old_root, old_state = h.current, h.snapshot()
-        w = h.rewrap("new"); self.assertTrue(h.add_wrapper(w))
-        self.assertEqual(h.current, old_root); self.assertEqual(h.snapshot(), old_state)
-        self.assertTrue(h.password_unlocks_current_capsule("new"))
-        self.assertFalse(h.password_unlocks_current_capsule("initial-password"))
-        self.assertTrue(h.can_manage("M0"))  # extracted MS is NOT revoked by rewrapping
+class HubPassword(unittest.TestCase):
+    """§6.7–§6.8: the hub password opens the capsule; the management key is never replaced."""
 
-    def test_old_wrapper_cannot_replace_known_descendant(self):
-        h = Hub(); old = next(iter(h.wrappers.values()))
-        new = h.rewrap("new"); h.add_wrapper(new); h.add_wrapper(old)
-        self.assertEqual(h.frontier(), {new.id})
+    def test_only_the_hub_password_opens_the_capsule(self):
+        h = Hub()
+        self.assertTrue(h.password_opens("hub-password"))
+        self.assertFalse(h.password_opens("a-guess"))
 
-    def test_concurrent_password_changes_need_explicit_merge_not_a_hash_winner(self):
-        template = Hub(); a, b = template.rewrap("a"), template.rewrap("b")
-        for order in itertools.permutations((a, b)):
-            h = Hub()
-            for w in order: h.add_wrapper(w)
-            self.assertEqual(h.frontier(), {a.id, b.id})
-            self.assertTrue(h.current_device(h.creator, "laptop"))
-            merged = h.rewrap("final"); self.assertTrue(h.add_wrapper(merged))
-            self.assertEqual(h.frontier(), {merged.id})
-            self.assertTrue(h.password_unlocks_current_capsule("final"))
-            self.assertFalse(h.password_unlocks_current_capsule("a"))
+    def test_changing_the_password_keeps_the_management_key_and_devices(self):
+        h = Hub(); before = h.snapshot()
+        self.assertIsNone(h.change_password("new", h.unlock("a-guess")))
+        self.assertIsNotNone(h.change_password("new", h.unlock("hub-password")))
+        self.assertTrue(h.password_opens("new"))
+        self.assertFalse(h.password_opens("hub-password"))                    # the current capsule, that is
+        self.assertTrue(h.can_manage("M0"))                                    # a copied old capsule still opens: no reset
+        self.assertEqual(h.snapshot(), before)
 
-    def test_manager_cannot_replace_root_or_forge_a_high_generation(self):
-        h = Hub(); old = h.current
-        forged = replace(h.recover(signer="M0"), generation=999)
-        self.assertFalse(h.add_root(forged)); self.assertEqual(h.current, old)
+    def test_two_changes_at_once_leave_both_until_the_next(self):
+        h = Hub()
+        h.change_password("a", h.unlock("hub-password"))
+        h.capsules["c1b"] = ("b", frozenset({"c0"}))                           # another device, at the same moment
+        self.assertTrue(h.password_opens("a")); self.assertTrue(h.password_opens("b"))
+        h.change_password("final", h.unlock("b"))
+        self.assertEqual([h.capsules[c][0] for c in h.current_capsules()], ["final"])
+
+    def test_a_replayed_capsule_stays_replaced_after_cleanup(self):
+        # Sol, 2026-11-13: C0 -> C1 -> C2 with the old ones deleted; a copy of C0 put back must not
+        # count as current. Each capsule names everything it supersedes, not only its parent.
+        h = Hub(); c0 = h.capsules["c0"]
+        h.change_password("second", h.unlock("hub-password")); h.destroy_replaced()
+        h.change_password("third", h.unlock("second")); h.destroy_replaced()
+        self.assertEqual(list(h.capsules), ["c2"])
+        h.capsules["c0"] = c0                                                  # someone appends an old copy
+        self.assertEqual(h.current_capsules(), ["c2"])
+        self.assertFalse(h.password_opens("hub-password"))
+        self.assertFalse(h.password_opens("second"))
+
+    def test_concurrent_changes_are_superseded_through_cleanup(self):
+        h = Hub()
+        h.change_password("a", h.unlock("hub-password"))
+        h.capsules["c1b"] = ("b", frozenset({"c0"}))
+        h.change_password("final", h.unlock("a")); h.destroy_replaced()
+        h.capsules["c0"] = ("hub-password", frozenset()); h.capsules["c1"] = ("a", frozenset({"c0"}))
+        self.assertEqual([h.capsules[c][0] for c in h.current_capsules()], ["final"])
+
+    def test_a_cached_key_survives_a_password_change_elsewhere(self):
+        # Sol, 2026-11-13: a phone caches the key behind Face ID; the laptop changes the password and
+        # deletes the old capsule; the new password is then forgotten. The phone still sets another.
+        h = Hub()
+        phone = h.unlock("hub-password")                                       # cached on the phone only
+        h.change_password("forgotten", h.unlock("hub-password")); h.destroy_replaced()
+        self.assertIsNotNone(h.change_password("remembered", phone))
+        self.assertTrue(h.password_opens("remembered"))
+        self.assertTrue(h.can_manage(phone))
+
+    def test_nothing_ever_follows_the_genesis(self):
+        # There is no recovery generation to forge or race: a second root is refused, and the
+        # hub keeps working rather than freezing.
+        h = Hub()
+        for signer in ("hub-password", "M0", "M1"):
+            successor = Root(h.genesis.id, 1, "M1", "clean", signer)
+            self.assertFalse(h.add_root(successor))
+            self.assertFalse(h.add_root(replace(successor, generation=999)))
         self.assertFalse(h.frozen)
+        self.assertTrue(h.can_manage("M0"))
+        self.assertFalse(h.can_manage("M1"))
 
-    def test_recovery_replaces_manager_and_preserves_creator_member_record(self):
-        h = Hub(); member = h.creator
-        root = h.recover(); self.assertTrue(h.add_root(root))
-        self.assertTrue(h.can_manage("M1")); self.assertFalse(h.can_manage("M0"))
-        self.assertEqual(h.creator, member)
-        self.assertTrue(h.current_device(member, "clean"))
-        self.assertFalse(h.current_device(member, "laptop"))
-        self.assertFalse(h.password_unlocks_current_capsule("initial-password"))
+    def test_another_genesis_is_another_hub(self):
+        h = Hub()
+        other = Hub(key="other-password", manager="M9")
+        self.assertFalse(h.add_root(other.genesis))
+        self.assertEqual(h.current, h.genesis.id)
 
-    def test_manager_reset_cannot_bootstrap_an_arbitrary_member(self):
-        h = Hub(); alice = h.join("alice-phone"); h.add_certificate(alice)
-        h.add_root(h.recover())
-        self.assertFalse(h.current_device(alice.member, "clean"))
-        renewed = h.enroll(alice.member, "alice-new", "alice-phone", source=alice.id)
-        self.assertTrue(h.add_certificate(renewed))
-        self.assertTrue(h.current_device(alice.member, "alice-new"))
-
-    def test_old_manager_commands_after_reset_cannot_affect_new_generation(self):
-        h = Hub(); alice = h.join("alice-phone"); h.add_certificate(alice)
-        old_cut = h.revoke(alice)  # not published or included in recovery checkpoint
-        old_alias = h.enroll(alice.member, "evil", "alice-phone")
-        old_wrapper = h.rewrap("stolen")
-        h.add_root(h.recover())
-        renewed = h.enroll(alice.member, "alice-phone", "alice-phone", source=alice.id)
-        self.assertTrue(h.add_certificate(renewed))
-        self.assertTrue(h.add_revocation(old_cut)); self.assertTrue(h.add_certificate(old_alias))
-        self.assertTrue(h.add_wrapper(old_wrapper))
-        self.assertTrue(h.current_device(alice.member, "alice-phone"))
-        self.assertFalse(h.current_device(alice.member, "evil"))
-        self.assertFalse(h.password_unlocks_current_capsule("stolen"))
-
-    def test_known_revocation_is_not_erased_by_root_reset(self):
-        h = Hub(); alice = h.join("alice-phone"); h.add_certificate(alice)
-        h.add_revocation(h.revoke(alice)); h.add_root(h.recover())
-        bad = h.enroll(alice.member, "alias", "alice-phone", source=alice.id)
-        self.assertFalse(h.add_certificate(bad))
-
-    def test_old_manager_cannot_certify_new_generation_devices(self):
-        h = Hub(); h.add_root(h.recover())
-        cert = h.enroll(h.creator, "new-phone", "clean", signer="M0")
-        self.assertFalse(h.add_certificate(cert))
-
-    def test_recovery_fork_freezes_without_picking_a_winner(self):
-        template = Hub(); a, b = template.recover(), template.recover("M2", "other")
-        for order in itertools.permutations((a, b)):
-            h = Hub()
-            for root in order: self.assertTrue(h.add_root(root))
-            self.assertTrue(h.frozen)
-            self.assertFalse(h.can_manage("M1")); self.assertFalse(h.can_manage("M2"))
-
-    def test_missing_root_ancestor_is_not_authority(self):
-        h = Hub(); first = h.recover()
-        second = Root(first.id, 2, "M2", "later", h.key)
-        self.assertFalse(h.add_root(second)); self.assertFalse(h.frozen)
-        self.assertTrue(h.add_root(first)); self.assertTrue(h.add_root(second))
-        self.assertEqual(h.current, second.id)
-
-    def test_old_root_replay_never_rolls_back(self):
-        h = Hub(); root = h.recover(); h.add_root(root); h.add_root(h.genesis)
-        self.assertEqual(h.current, root.id)
-
-    def test_bad_wrapper_revision_or_parent_is_rejected(self):
-        h = Hub(); w = h.rewrap("new")
-        self.assertFalse(h.add_wrapper(replace(w, revision=999)))
-        self.assertFalse(h.add_wrapper(replace(w, parents=("missing",))))
+    def test_the_admin_key_recovers_the_creator_and_nobody_else(self):
+        h = Hub()
+        alice = h.join("alice-phone"); self.assertTrue(h.add_certificate(alice))
+        self.assertIsNone(h.recover_creator("new-mac", "a-guess"))
+        cert = h.recover_creator("new-mac", "hub-password")
+        self.assertTrue(h.add_certificate(cert))
+        self.assertTrue(h.current_device(h.creator, "new-mac"))
+        stolen = replace(cert, member=alice.member)                           # the same for Alice
+        stolen = replace(stolen, consent_for=stolen.request_id)
+        self.assertFalse(h.add_certificate(stolen))
+        self.assertFalse(h.current_device(alice.member, "new-mac"))
 
 
 if __name__ == "__main__":
