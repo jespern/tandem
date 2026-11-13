@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"sync/atomic"
 	"testing"
 
@@ -195,6 +196,61 @@ func TestSecondReviewADiscardedChangeStaysDiscardedAfterALostAnswer(t *testing.T
 	syncAll(t, w.carol)
 	if r := w.carol.Role(w.list); r != Writer {
 		t.Fatal("the discarded change happened:", r)
+	}
+}
+
+// 6. Two devices of Alice rekey her home at once, leaving two heads, and one then changes a
+// record both heads carry: syncing again and again settles, rather than each destroying and
+// re-publishing the other's messages. Each head's channel keeps only the writes that count in it.
+func TestSecondReviewTwoHomeHeadsSettle(t *testing.T) {
+	for _, keychains := range []bool{false, true} {
+		t.Run(map[bool]string{false: "installations", true: "keychains"}[keychains], func(t *testing.T) {
+			var hub *MemoryHub
+			var a, b *Device
+			if keychains { // two keychains of one participant
+				w := newRevWorld(t)
+				hub, a, b = w.hub, w.phone, w.tablet
+			} else { // two installations of one keychain
+				var f *Founding
+				var keys *tandem.DeviceKeys
+				hub, f, keys, a = found(t, "Bob’s Mac", nil)
+				b = open(t, f, keys, nil, hub.Connect())
+				syncAll(t, b)
+			}
+			must(t, a.SetHome(bg, "settings:x", "v", []byte{1}))
+			syncAll(t, b)
+			must(t, a.RotateHome(bg))
+			must(t, b.RotateHome(bg))
+			must(t, a.SetHome(bg, "settings:a", "v", []byte{1}))
+			must(t, b.SetHome(bg, "settings:b", "v", []byte{2}))
+			must(t, a.SetHome(bg, "settings:x", "v", []byte{3}))
+			for range 3 {
+				syncAll(t, a, b)
+			}
+			if n := len(a.HomeHeads()); n != 2 {
+				t.Fatal(n, "heads")
+			}
+			ids := func() []string {
+				var out []string
+				for _, m := range hub.Messages() {
+					out = append(out, m.ID)
+				}
+				slices.Sort(out)
+				return out
+			}
+			before := ids()
+			for range 3 {
+				syncAll(t, a, b)
+			}
+			if after := ids(); !slices.Equal(after, before) {
+				t.Fatal("still destroying and publishing:", len(before), "messages before,", len(after), "after")
+			}
+			for _, d := range []*Device{a, b} {
+				if homeValue(d, "settings:a", "v")[0] != 1 || homeValue(d, "settings:b", "v")[0] != 2 || homeValue(d, "settings:x", "v")[0] != 3 {
+					t.Fatal("a home write was lost")
+				}
+			}
+		})
 	}
 }
 

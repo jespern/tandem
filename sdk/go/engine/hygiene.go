@@ -60,7 +60,7 @@ func (d *Device) hygiene(ctx context.Context) error {
 			return &e
 		}
 		republish := func(record []byte, writes []*tandem.Write) error { return d.publish(ctx, cid, epoch, record, writes) }
-		if err := d.tidy(ctx, tag, cid, c.records, place, republish); err != nil {
+		if err := d.tidy(ctx, tag, cid, c.records, place, nil, republish); err != nil {
 			return err
 		}
 	}
@@ -89,8 +89,16 @@ func (d *Device) hygiene(ctx context.Context) error {
 			}
 			return &e
 		}
+		// With several heads, this device's state of a record can hold writes made in another
+		// head, which don't count in this one's channel (§10.8): only the writes that belong here
+		// are kept here. Republishing the others would be dropped from the message by every
+		// other device, which would then see it as dominated and destroy it, again and again.
+		inv := d.inventories[string(epoch)]
+		belongs := func(w *tandem.Write) bool {
+			return bytes.Equal(w.Ref, epoch) || containsID(inv[string(w.Record)], writeID(w))
+		}
 		republish := func(record []byte, writes []*tandem.Write) error { return d.publishHome(ctx, record, epoch, writes) }
-		if err := d.tidy(ctx, tag, scope, d.home, place, republish); err != nil {
+		if err := d.tidy(ctx, tag, scope, d.home, place, belongs, republish); err != nil {
 			return err
 		}
 	}
@@ -277,9 +285,19 @@ type hubMessage struct {
 }
 
 // tidy collects and heals one channel. records is this device's state of the scope; place
-// places a stored write.
+// places a stored write; belongs, if not nil, says which of the state's writes count in this
+// channel (the others are left to their own channel).
 func (d *Device) tidy(ctx context.Context, tag string, scope []byte, records map[string]*tandem.Record,
-	place func(*tandem.Write) *tandem.Entry, republish func([]byte, []*tandem.Write) error) error {
+	place func(*tandem.Write) *tandem.Entry, belongs func(*tandem.Write) bool, republish func([]byte, []*tandem.Write) error) error {
+	keptHere := func(r *tandem.Record) []tandem.Entry {
+		var out []tandem.Entry
+		for _, e := range r.Entries() {
+			if belongs == nil || belongs(e.W) {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
 	byRecord := map[string][]hubMessage{}
 	ms, err := d.store.Merged(tag)
 	if err != nil {
@@ -301,7 +319,7 @@ func (d *Device) tidy(ctx context.Context, tag string, scope []byte, records map
 	}
 	// A record with no message left at all is healed too.
 	for rid, r := range records {
-		if rid != string(rosterRecord) && byRecord[rid] == nil && len(r.Entries()) > 0 {
+		if rid != string(rosterRecord) && byRecord[rid] == nil && len(keptHere(r)) > 0 {
 			byRecord[rid] = []hubMessage{}
 		}
 	}
@@ -381,7 +399,10 @@ func (d *Device) tidy(ctx context.Context, tag string, scope []byte, records map
 				left[w] = true
 			}
 		}
-		kept := state.Entries()
+		kept := keptHere(state)
+		if len(kept) == 0 {
+			continue
+		}
 		coveredBy := func(n map[string]bool) bool {
 			for _, k := range kept {
 				if !n[string(k.ID)] && !coversEntry(n, entries, k) {
@@ -397,7 +418,11 @@ func (d *Device) tidy(ctx context.Context, tag string, scope []byte, records map
 		// Concurrent publishers (§10.7): when no single message left holds this device's state,
 		// publish the merged state, which then dominates the others.
 		if !coveredBy(left) || (!single && len(leftMessages) > 1) {
-			if err := republish([]byte(rid), keptWrites(state)); err != nil {
+			var writes []*tandem.Write
+			for _, k := range kept {
+				writes = append(writes, k.W)
+			}
+			if err := republish([]byte(rid), writes); err != nil {
 				return err
 			}
 		}
