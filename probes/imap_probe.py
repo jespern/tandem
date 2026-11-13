@@ -32,9 +32,7 @@ from email import policy
 from email.message import EmailMessage
 from email.utils import formatdate
 
-SAMPLES = 5      # appends timed for live-update latency
 BULK = 20        # appends timed back to back
-IDLE_WAIT = 15   # seconds to wait for a pushed change
 
 
 def log(*a):
@@ -104,32 +102,45 @@ def purge(m, folder, uids):
     m.expunge()
 
 
+UPDATES = ('EXISTS', 'EXPUNGE', 'VANISHED', 'RECENT', 'FETCH')
+
+
 class Watcher:
     """A second connection idling on the folder, reporting pushed responses."""
 
-    def __init__(self, m, folder):
-        self.m, self.folder = m, folder
+    def __init__(self, m, folder, wait):
+        self.m, self.folder, self.wait = m, folder, wait
         m.select(quote(folder))
 
+    def drain(self):
+        """Collect anything the server has queued, so it can't pass for the next change."""
+        self.m.noop()
+        return [k for k in UPDATES if self.m.response(k)[1] != [None]]
+
     def wait_for(self, kinds, action):
-        """Start IDLE, run action, return seconds until a response in kinds."""
-        ready, seen = threading.Event(), {}
+        """Start IDLE and run action. Returns how long the server took to push
+        a response in kinds (None if it didn't within the wait) and, if it
+        didn't, whether a NOOP afterwards showed the change anyway."""
+        self.drain()
+        ready, state = threading.Event(), {}
 
         def idle():
-            with self.m.idle(duration=IDLE_WAIT) as idler:
+            with self.m.idle(duration=self.wait) as idler:
                 ready.set()
                 for typ, data in idler:
-                    if typ in kinds:
-                        seen['at'] = time.monotonic()
+                    if typ in kinds and 'sent' in state:
+                        state['at'] = time.monotonic()
                         break
         t = threading.Thread(target=idle)
         t.start()
-        ready.wait(IDLE_WAIT)
+        ready.wait(self.wait)
         time.sleep(0.2)  # let the server settle into IDLE
-        sent = time.monotonic()
+        state['sent'] = time.monotonic()
         action()
-        t.join(IDLE_WAIT + 5)
-        return round(seen['at'] - sent, 3) if 'at' in seen else None
+        t.join(self.wait + 5)
+        if 'at' in state:
+            return {'pushed': round(state['at'] - state['sent'], 3)}
+        return {'pushed': None, 'seen_on_noop': bool(set(kinds) & set(self.drain()))}
 
 
 def connections(host, port, user, password, limit):
@@ -147,7 +158,7 @@ def connections(host, port, user, password, limit):
     return {'opened': len(open_), 'asked': limit, 'refusal': error}
 
 
-def probe(host, port, user, password, want_connections):
+def probe(host, port, user, password, want_connections, samples=3, wait=120):
     run = os.urandom(4).hex()
     folder = f'Tandem-probe-{run}'
     r = {'host': host, 'port': port, 'date': time.strftime('%Y-%m-%d'), 'run': run}
@@ -166,7 +177,7 @@ def probe(host, port, user, password, want_connections):
         return r
     log(f'created {folder}')
     b = connect(host, port, user, password)
-    watcher = Watcher(b, folder)
+    watcher = Watcher(b, folder, wait)
     uids, bodies = [], {}
 
     def append(n):
@@ -179,8 +190,10 @@ def probe(host, port, user, password, want_connections):
 
     try:
         # Live updates: how long an append takes to reach an idling connection.
-        r['push_seconds'] = [watcher.wait_for({'EXISTS'}, lambda n=n: append(n)) for n in range(SAMPLES)]
-        log('push latencies', r['push_seconds'])
+        r['push'] = []
+        for n in range(samples):
+            r['push'].append(watcher.wait_for({'EXISTS'}, lambda n=n: append(n)))
+            log(f'append {n + 1}/{samples}:', r['push'][-1])
         r['appenduid'] = all(uids)
 
         # The body comes back byte for byte.
@@ -196,7 +209,7 @@ def probe(host, port, user, password, want_connections):
 
         # Bulk: BULK appends one at a time, as a key change would send them.
         start = time.monotonic()
-        for n in range(SAMPLES, SAMPLES + BULK):
+        for n in range(samples, samples + BULK):
             append(n)
         r['bulk_seconds'] = {'messages': BULK, 'seconds': round(time.monotonic() - start, 2)}
         log('bulk', r['bulk_seconds'])
@@ -209,7 +222,8 @@ def probe(host, port, user, password, want_connections):
         def destroy():
             a.uid('STORE', victim, '+FLAGS.SILENT', '(\\Deleted)')
             a.uid('EXPUNGE', victim)
-        r['expunge_push_seconds'] = watcher.wait_for({'EXPUNGE', 'VANISHED'}, destroy)
+        r['expunge_push'] = watcher.wait_for({'EXPUNGE', 'VANISHED'}, destroy)
+        log('expunge:', r['expunge_push'])
         time.sleep(3)
         lone = f'<0.{run}@tandem.invalid>'
         survivors = {}
@@ -275,6 +289,8 @@ def main():
     p.add_argument('--port', type=int, default=993)
     p.add_argument('--keychain', metavar='SERVICE', help='read the password from this macOS keychain item')
     p.add_argument('--connections', type=int, default=0, metavar='N', help='also open up to N logins at once')
+    p.add_argument('--samples', type=int, default=3, help='appends timed for live updates (default 3)')
+    p.add_argument('--wait', type=int, default=120, metavar='SECONDS', help='how long to wait for each push (default 120)')
     p.add_argument('--out', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results'))
     args = p.parse_args()
     if not hasattr(imaplib.IMAP4, 'idle'):
@@ -289,7 +305,7 @@ def main():
         password = found.stdout.rstrip('\n')
     else:
         password = getpass.getpass(f'Password for {args.user} at {args.host}: ')
-    report = probe(args.host, args.port, args.user, password, args.connections)
+    report = probe(args.host, args.port, args.user, password, args.connections, args.samples, args.wait)
     os.makedirs(args.out, exist_ok=True)
     path = os.path.join(args.out, f"{args.host}-{report['date']}-{report['run']}.json")
     with open(path, 'w') as f:
