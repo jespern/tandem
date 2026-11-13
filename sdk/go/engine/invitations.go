@@ -144,6 +144,9 @@ func (d *Device) publishObjects(ctx context.Context, objs ...*tandem.Control) er
 
 // Join joins a hub through an invitation: it finds and pins the hub's genesis, admits this
 // keychain under the capability, and starts a home. It needs no hub password.
+//
+// Joining is journalled: one that fails half way is finished by the next sync, or by calling
+// Join again with the same store, which then returns the device.
 func Join(ctx context.Context, link *InvitationLink, keys *tandem.DeviceKeys, label string, store *Store, hub tandem.PushStore) (*Device, error) {
 	inv := link.Invitation
 	expires, _ := fint(inv, "expires")
@@ -163,18 +166,25 @@ func Join(ctx context.Context, link *InvitationLink, keys *tandem.DeviceKeys, la
 	if err != nil {
 		return nil, err
 	}
-	end := d.begin()
-	defer end()
-	if _, err := d.sync(ctx); err != nil {
-		return nil, err
-	}
-	if d.receipt(tandem.ReceiptInviteCancelled, oid(inv)) {
-		return nil, fail("invitation: the admin cancelled it")
-	}
-	if err := d.admit(ctx, inv, inviteKey, label); err != nil {
+	if err := d.join(ctx, inv, inviteKey, label); err != nil {
+		d.Close()
 		return nil, err
 	}
 	return d, nil
+}
+
+func (d *Device) join(ctx context.Context, inv *tandem.Control, inviteKey ed25519.PrivateKey, label string) error {
+	defer d.begin()()
+	if _, err := d.sync(ctx); err != nil {
+		return err
+	}
+	if d.me != nil {
+		return nil // joined already with this store, perhaps half way: the sync finished the journalled admission
+	}
+	if d.receipt(tandem.ReceiptInviteCancelled, oid(inv)) {
+		return fail("invitation: the admin cancelled it")
+	}
+	return d.admit(ctx, inv, inviteKey, label)
 }
 
 // admit registers, requests admission with the invite key, certifies it with the same key
@@ -221,7 +231,38 @@ func (d *Device) admit(ctx context.Context, inv *tandem.Control, inviteKey ed255
 		return err
 	}
 	epochID := oid(epoch)
+	// Every envelope of the admission, journalled with this device's identity before any leaves
+	// (§6.1): a join that fails half way is finished by the next sync, or by joining again.
+	var out []tagged
+	for _, o := range []*tandem.Control{certificate, snapshot} {
+		j, err := cjson(o)
+		if err != nil {
+			return err
+		}
+		env, err := tandem.Seal(d.directoryChannelKey(), d.pin.Hub, tandem.KindRequest, d.directoryTag(), j)
+		if err != nil {
+			return err
+		}
+		out = append(out, tagged{d.directoryTag(), env})
+	}
+	homeTag := tandem.HomeTag(homeKey, d.pin.Hub, participant, epochID)
+	ej, err := cjson(epoch)
+	if err != nil {
+		return err
+	}
+	start, err := tandem.Seal(homeKey, d.pin.Hub, tandem.KindRequest, homeTag, ej)
+	if err != nil {
+		return err
+	}
+	delivery, err := tandem.SealInbox(d.pin.Hub, participant, agree, homeKeyNotice(epochID, homeKey).JSON())
+	if err != nil {
+		return err
+	}
+	out = append(out, tagged{homeTag, start}, tagged{tandem.InboxTag(participant, d.pin.Hub), delivery})
 	err = d.store.Transaction(func() error {
+		if err := d.store.SetJournal("admit", pack(out)); err != nil {
+			return err
+		}
 		for _, o := range []*tandem.Control{certificate, snapshot, epoch} {
 			if _, err := d.store.PutObject(o); err != nil {
 				return err
@@ -237,28 +278,7 @@ func (d *Device) admit(ctx context.Context, inv *tandem.Control, inviteKey ed255
 	if err := d.adopt(participant, certID, oid(snapshot)); err != nil {
 		return err
 	}
-	if err := d.publishObjects(ctx, certificate, snapshot); err != nil {
-		return err
-	}
-	homeTag := tandem.HomeTag(homeKey, d.pin.Hub, participant, epochID)
-	ej, err := cjson(epoch)
-	if err != nil {
-		return err
-	}
-	start, err := tandem.Seal(homeKey, d.pin.Hub, tandem.KindRequest, homeTag, ej)
-	if err != nil {
-		return err
-	}
-	delivery, err := tandem.SealInbox(d.pin.Hub, participant, agree, homeKeyNotice(epochID, homeKey).JSON())
-	if err != nil {
-		return err
-	}
-	for _, e := range []tagged{{homeTag, start}, {tandem.InboxTag(participant, d.pin.Hub), delivery}} {
-		if _, err := d.appendNoted(ctx, e.tag, e.body); err != nil {
-			return err
-		}
-	}
-	return nil
+	return d.export(ctx, out, "admit")
 }
 
 // findGenesis finds a hub's genesis in its directory; the link pins its ID.

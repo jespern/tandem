@@ -223,3 +223,21 @@ func TestSecondReviewAFailedSameEpochChangeLeavesNoTrace(t *testing.T) {
 		t.Fatal("the delete never reached the hub")
 	}
 }
+
+// 8. Joining fails half way; joining again with the same store finishes it, and the admin sees the member.
+func TestSecondReviewAnInterruptedJoinFinishes(t *testing.T) {
+	hub, f, _, bob := found(t, "Bob’s Mac", nil)
+	link := try(bob.Invite(bg, "Alice", account, f.ManagementSeed, 0))
+	aliceKeys, aliceStore := newKeys(t), MemoryStore()
+	if d, err := Join(bg, link, aliceKeys, "Alice", aliceStore, failingAppends{hub.Connect()}); err == nil {
+		d.Close()
+		t.Fatal("offline")
+	}
+	alice := try(Join(bg, link, aliceKeys, "Alice", aliceStore, hub.Connect()))
+	t.Cleanup(alice.Close)
+	must(t, alice.SetHome(bg, "settings:x", "v", []byte{1}))
+	syncAll(t, bob)
+	if v := bob.Registry().Activity(me(t, alice).Certificate); !v.IsValid() {
+		t.Fatal(v)
+	}
+}
