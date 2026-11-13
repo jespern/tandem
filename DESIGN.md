@@ -1,6 +1,6 @@
 # Tandem: encrypted, shared, real-time collections over a mailbox
 
-Status: **participant/device architecture draft**, 2026-11-13. This revision adopts one participant record per person per hub, keypairs kept in the system keychain, and hub management unlocked by a hub password. It incorporates the current working draft's IMAP-only transport, directory and grow-only admission answers. The implemented shared-secret v1 is a different protocol. This draft calls the incompatible successor **v2**; its management-object encodings and migration remain unfinished (§18). The model and crypto tests cover selected mechanisms, not a complete implementation or security sign-off.
+Status: **participant/device architecture draft**, 2026-11-13. This revision adopts one participant record per person per hub, keypairs kept in the system keychain, and hub management unlocked by a hub password. It incorporates the current working draft's IMAP-only transport, directory and grow-only admission answers. The implemented shared-secret v1 is a different protocol. This draft calls the incompatible successor **v2**. Its control-object encodings are fixed (§10.8); migration from v1 remains open (§18). The model and crypto tests cover selected mechanisms, not a complete implementation or security sign-off.
 
 This document is self-contained. It assumes no knowledge of the app that motivated it (Liszto, a to-do app; §17) and is written so that independent reviewers can check it for soundness. The words MUST, SHOULD and MAY are used in the sense of RFC 2119.
 
@@ -197,7 +197,7 @@ No home or collection key is derived from the hub password, MS or HubK. The mana
 
 **Hub identity and storage location:** the stable cryptographic hubID is independent of the IMAP descriptor. All signatures, envelopes, scopes, policies and boxes bind hubID. The genesis, signed with `MKs`, names the permitted descriptors without credentials; credentials merely connect to that mailbox. Copying metadata into a different mailbox cannot authorize relocation. Moving a hub to another mailbox is a management action, signed with `MKs` after entering the hub password.
 
-All labels use `tandem/v2/`, which is not compatible with shared-secret v1. The remaining management-object encodings must be frozen together before interoperability tests (§18).
+All labels use `tandem/v2/`, which is not compatible with shared-secret v1. The management and control objects are encoded as §10.8 says.
 
 ### 5.4 Message encryption
 
@@ -262,7 +262,7 @@ Signatures live **inside** the ciphertext, so message contents tell the hub noth
 
 **Verification is strict and the same everywhere.** Whether a write is valid must not depend on which library checked it, or two honest clients could disagree and diverge. A verifier MUST reject a signature whose `S` is not below the group order, MUST reject a public key or `R` that isn't a canonical point encoding, MUST reject a small-order public key, and MUST check the plain equation `[S]B = R + [k]A`. RFC 8032 §5.1.7 permits either that or the cofactored form; Tandem fixes the choice. Libraries that verify in batches or with the cofactored equation accept signatures the others reject and MUST NOT be used.
 
-Other signed objects (grants, key requests, leave notices and pairing challenges) use their own `TANDEM-…-V2` prefixes, so a signature can never be replayed as a different kind of object. Those prefixes are fixed with the objects' encodings (Q28); none is defined yet.
+Other signed objects (certificates, grants, key requests, leave notices and the rest of §10.8) use their own `TANDEM-…-V2` prefixes, so a signature can never be replayed as a different kind of object.
 
 ### 5.6 Channels and tags
 
@@ -273,7 +273,7 @@ The hub sees channel tags, never plaintext participant, device or collection IDs
 | Collection epoch | Random `K(c,e)`, committed by epoch-start statement `E` | `b32(KDF(K(c,e), hubID || E, "tandem/v2/collection-tag", 20))` |
 | Home epoch | Random `HK`, committed by its signed home-epoch start `E` | `b32(KDF(HK, hubID || uid || E, "tandem/v2/home-tag", 20))` |
 | Participant inbox | HPKE to a particular admitted DKa | `b32(KDF(uid, hubID, "tandem/v2/inbox-tag", 20))` |
-| Pairing token | Purpose-derived session key from L | Pairing-specific derivation binding hubID and token ID; final encoding pending (§18) |
+| Pairing token | `KDF(L, hubID ‖ token, "tandem/v2/pair-key", 32)` | `b32(KDF(L, hubID ‖ token, "tandem/v2/pair-tag", 20))` (§10.8) |
 | Directory / registry discovery | `KDF(HubK, hubID, "tandem/v2/directory-key", 32)` | `b32(KDF(HubK, hubID, "tandem/v2/directory-tag", 20))` |
 
 The inbox is stable per participant/hub so other participants can deliver to it, but it contains independently sealed device envelopes. Registry objects prove their own authority; learning HubK never permits forging a certificate. The initially pinned root and directory-discovery material travel in hub invites, pairing links or the creator's saved setup details.
@@ -338,7 +338,7 @@ When the phone creates a new list, it adds its membership/key here. The laptop d
 | | `hk` | add | This authority's 32-byte directory key. Conflicting independent hub setups are not silently merged (§6.6) |
 | `settings:<app>` | | | App-defined |
 
-The `membership` rows are what the reference SDK writes. The `hubinvite`, `pairing` and `activity` rows need final encodings (Q21). The existing v1 SDK's home writes do not implement v2 device certificates or home epochs.
+The `hubinvite`, `pairing` and `activity` records have further fields, given in §10.8.
 
 ### 6.3 Adding a device
 
@@ -636,7 +636,7 @@ A collection has exactly one **owner**: the participant registration named by it
 
 The roster is a chain of complete states. Each state carries its sequence number, epoch counter/commitment and prior commitment, fixed snapshot commitment at an epoch start, deletion flag, and sorted unique participant entries containing participant ID, role and display name. There is no shared participant agreement key. Each epoch additionally fixes a device-policy floor per listed participant: the root and exact certificate/revocation snapshot against which new direct writes are checked (§6.9).
 
-New devices extend their participant's pinned policy without becoming separate collection members. Device revocation, management recovery or any policy change that excludes formerly authorized keys requires a new epoch/fixed inventory and fresh key. Adds/promotions may keep the epoch when they only increase access. A same-epoch member addition supplies that member's initial device floor. Precise roster field encodings are part of Q28; no v1 `uka` field can express this authority.
+New devices extend their participant's pinned policy without becoming separate collection members. Device revocation, management recovery or any policy change that excludes formerly authorized keys requires a new epoch/fixed inventory and fresh key. Adds/promotions may keep the epoch when they only increase access. A same-epoch member addition supplies that member's initial device floor. The statement's JSON is in §10.8.
 
 The collection's name, icon and other app metadata are not in the roster. They are an ordinary record, `_meta`, that only the owner may write (§8.3), so renaming works offline from any of the owner's devices.
 
@@ -911,7 +911,7 @@ A standard parser that silently picks a winner among repeated names, or folds eq
 
 **Kind 2, inbox message** (HPKE-sealed): grants, key requests and roster replies (§11.4).
 
-**Kind 3, request or notice**, each with a `type`: pairing claims, possession challenges, outcomes and releases (§6.3); management registry controls have separate purpose-signed objects whose exact payload encodings remain Q28, leave notices (collection channel, §11.5) and key-request notices in an earlier collection epoch (§11.4).
+**Kind 3, request or notice**, each with a `type`: pairing claims, possession challenges, outcomes and releases (§6.3); management registry controls (§10.8), leave notices (collection channel, §11.5) and key-request notices in an earlier collection epoch (§11.4).
 
 ### 10.6 Sizes
 
@@ -926,6 +926,110 @@ A device publishes a record by appending a kind-1 message with the record's curr
 - It MUST NOT destroy a message it hasn't merged, or a message of a version it doesn't understand (§15). Incomplete objects can be evicted locally under §9.4; that does not authorize destroying their hub messages. Statements the owner signed are kept.
 - When a device sees messages for one record that none of them dominates (concurrent publishers), it waits a short random time, a few seconds at most, and publishes the merged state only if no dominating message has appeared in the meantime. Without the delay, every online device would publish the same merge at once. A record that fits one message converges to one message on the hub between bursts of activity. For a record split over several messages the test is the union: a device publishes only if the valid messages on the hub, taken together, don't dominate its own state. Parts that merely differ from each other are no reason to publish. Messages are still destroyed only one against one, by the rule above. Letting a set of messages dominate one would not be safe: of `{a, b}`, `{b, c}` and `{a, c}` each is covered by the other two, and three devices could destroy all three.
 - Writes made in quick succession SHOULD be coalesced (debounce ~1 s) into one publish, so typing doesn't create a message per keystroke.
+
+### 10.8 Control objects
+
+Everything that is not a record write is a **control object**: the hub's genesis, admin capsules, registrations, enrollment requests, certificates, revocations, invitation capabilities, pairing delegations, receipts, authorization snapshots, home-epoch starts, grants, key requests, leave notices and sharing answers. Each has a fixed signed input built only from the types below, and its ID is the hash of that input, so signatures never enter an ID (§5.5). Each signed input starts with its own `TANDEM-…-V2` tag; no tag is a prefix of another, so a signature for one kind can't be read as another (`proofs/TandemProofs/Encoding.lean`).
+
+| Type | Bytes |
+|---|---|
+| `id` | 32 bytes: an object ID, a hash or a public key |
+| `id16` | 16 bytes: a collection ID, an enrollment reference, a token or invite ID |
+| `text` | `lp(UTF-8)`; at most 256 bytes, compared as bytes (§10.5) |
+| `set` | `u32(n)` followed by `n` sorted, unique `id`s; at most 65,536 |
+| `none` | 32 zero bytes, where an `id` is optional |
+
+**Transport.** A control object travels as one strict JSON object (§10.5) with `"type"` set to the name in the table, one property per field, named as in the table and spelled as follows: `id` and `id16` in b64u, `text` as a JSON string, integers as JSON numbers (a `u64` time is Unix milliseconds), a `set` as an array of b64u strings in its sorted order, `none` as JSON `null`, and each signature as b64u under the name the table gives. A reader rebuilds the signed input from the parsed fields, checks the signatures, and computes the ID itself; it never trusts an ID that came in a message.
+
+#### The hub
+
+| Type | Signed input, after the tag | Signed by | ID |
+|---|---|---|---|
+| `genesis`<br>`TANDEM-GENESIS-V2` | `hub` id (`pub(MKs)`), `hubkey` id (`commit(HubK)`, §5.7), `creator` id (the creator's participant ID), `mailboxes` u32 count then, sorted by their bytes, each `host` text (lowercase), `port` u16, `user` text | `MKs`, as `sig` | `genesisID` |
+| `capsule`<br>`TANDEM-CAPSULE-V2` | `hub` id, `genesis` id, `sealed` id (`H(salt ‖ nonce ‖ ciphertext)`, §6.7), `supersedes` set (capsule IDs) | `MKs`, as `sig`; the JSON also carries `capsule`, the sealed bytes, in b64u | capsule ID |
+| `snapshot`<br>`tandem/v2/auth-snapshot` (hashed, not signed) | `hub` id, `genesis` id, `participant` id, `certs` set, `revocations` set | nobody | authorization snapshot ID (§6.9) |
+
+`mailboxes` lists the permitted descriptors without credentials; IMAP host names are compared lowercased. A device that pins a hub pins `hubID` and `genesisID` together and refuses a second genesis (§6.9). The capsule ID is what a later capsule names in `supersedes` (§6.7). An authorization snapshot is a hash, not a signature: anyone can publish one, and it means only the exact sets it names.
+
+#### Participants and devices
+
+| Type | Signed input, after the tag | Signed by | ID |
+|---|---|---|---|
+| `registration`<br>`TANDEM-REGISTRATION-V2` (hashed, not signed) | `hub` id, `sign` id (`pub(DKs)`), `agree` id (`pub(DKa)`), `enrollment` id16 | nobody | the participant ID `uid` (§5.3) |
+| `request`<br>`TANDEM-REQUEST-V2` | `hub` id, `genesis` id, `participant` id, `sign` id, `agree` id, `label` text, `how` u8, `authority` id or none, `enrollment` id16 | the new `DKs`, as `self`; and the approver, as `approver`, when `how` is 2, 3 or 4 | request ID |
+| `certificate`<br>`TANDEM-CERT-V2` | `hub` id, `genesis` id, `request` id, `issued` set (revocation IDs) | `MKs`, as `sig`; for `how` 2, the invite key | certificate ID |
+| `revocation`<br>`TANDEM-REVOKE-V2` | `hub` id, `genesis` id, `target` id (a certificate ID), `retained` set (certificate IDs of the same participant) | `MKs`, as `sig` | revocation ID |
+
+`how` is the way the keys came in, as in the registry proofs: 1 a first admission (the creator's, or `uid` made directly by the admin), 2 through an invitation capability, 3 approved by a device of the same participant, 4 through a pairing delegation, 5 the creator's recovery (§6.8). `authority` is the capability ID for 2, the approving device's certificate ID for 3 and the delegation ID for 4, and none for 1 and 5. `enrollment` is the registration's reference for 1 and 2 and zero otherwise. For 1 and 2 the participant ID must be the registration of exactly these keys and this enrollment; for 5 it must be the creator the genesis names; for 3 and 4 it must be the participant of the approving certificate or delegation. The approver is the invite key for 2 and 4, and the approving certificate's `DKs` for 3. The JSON of a certificate carries its request whole, as a nested object under `body`, so a certificate can be checked alone.
+
+A request is signed by the new `DKs` as proof that its holder asked for it. The agreement key is bound by that signature, not proved separately: X25519 has no way to sign, and a claimant who names an agreement key it doesn't hold only receives grants it can't open. Certificate validity is the registry rule of §6.9, checked on these exact fields.
+
+#### Invitations and pairing
+
+| Type | Signed input, after the tag | Signed by | ID |
+|---|---|---|---|
+| `invitation`<br>`TANDEM-INVITE-V2` | `hub` id, `genesis` id, `key` id (the invite public key), `invite` id16, `expires` u64, `label` text | `MKs`, as `sig` | capability ID |
+| `delegation`<br>`TANDEM-DELEGATION-V2` | `hub` id, `genesis` id, `participant` id, `source` id (the phone's certificate ID), `key` id (the link's invite public key), `token` id16, `expires` u64, `package` id (`H` of the package bytes), `gate` id (`H` of the gate box) | the source `DKs`, as `sig` | delegation ID |
+| `receipt`<br>`TANDEM-RECEIPT-V2` | `hub` id, `genesis` id, `outcome` u8, `subject` id, `signer` id (a certificate ID, or none) | see below, as `sig` | receipt ID |
+
+**Invitation.** The admin picks a random 32-byte secret `s` and a 16-byte invite ID. The invite key is the Ed25519 key whose seed is `KDF(s, hubID ‖ invite, "tandem/v2/invite-key", 32)`. The link carries, in strict JSON, `{"v":2,"hub","genesis","hk","mail":{"host","port","user","pass"},"s","invitation":{…}}`, with `hk` the directory key `HubK`. The new device makes its keys and an enrollment reference, registers, and signs a request with `how` 2 both with its own `DKs` and with the invite key; then it signs the certificate itself with the invite key, with `issued` the revocation IDs it holds. That chain is the whole admission (§13.1). A capability is good until `expires`, checked by the accepting device. Cancelling one is a receipt with outcome 3; honest devices then refuse it, but admissions already made through it stand, and the admin revokes those that were not wanted. Two people using one link are two participants, both visible.
+
+**Pairing.** The phone picks the token ID and `L` and `A` (§6.3). The link's invite key has seed `KDF(L, hubID ‖ token, "tandem/v2/pair-invite", 32)`. The package is `nonce ‖ ChaCha20-Poly1305(KDF(L ‖ A, token, "tandem/v2/pair-package", 32), nonce, plaintext, aad)`, with a random 12-byte nonce, `aad = "TANDEM-PAIR-PACKAGE-V2" ‖ hubID ‖ token` and plaintext the strict JSON `{"home":"<b64u home-epoch ID>","k":"<b64u HK>"}`. The gate box is `A` HPKE-sealed to `MKa` with `info = "tandem/v2/pair-gate"` and `aad = "TANDEM-PAIR-GATE-V2" ‖ hubID ‖ token ‖ participant`. The delegation, package and gate are kind-3 messages in the **pairing channel**: key `KDF(L, hubID ‖ token, "tandem/v2/pair-key", 32)`, tag `b32(KDF(L, hubID ‖ token, "tandem/v2/pair-tag", 20))`, with `type` `delegation`, `package` (`{"type":"package","bytes":…}`) and `gate` (`{"type":"gate","bytes":…}`). The link carries `{"v":2,"hub","genesis","hk","mail":{…},"l","t","participant"}`, with `l` = `L` and `t` the token.
+
+The new device signs a request with `how` 4 and `authority` the delegation ID, with its `DKs` and the link's invite key, and sends it as `{"type":"pair-claim","request":{…},"delegation":{…},"gate":"<b64u>"}` to every admitted device in the inbox of each participant whose devices hold `MS` (in practice the admin's). The approving device unlocks `MS`, checks §6.3 step 3 and the registry rule, publishes the certificate in the directory, and seals `{"type":"pair-release","certificate":"<b64u ID>","delegation":"<b64u ID>","package":"<b64u hash>","a":"<b64u A>"}` to the new device's agreement key, in its participant's inbox. The new device opens the package only if all three named values are the ones it holds.
+
+**Receipts.** `outcome` is 1 for a rejected claim (`subject` the request ID), 2 for a cancelled pairing (`subject` the delegation ID), 3 for a cancelled invitation (`subject` the capability ID) and 4 for a completed pairing (`subject` the certificate ID). A rejection and a cancelled invitation are signed with `MKs` and have `signer` none: rejecting, like approving, takes the admin's authority, so nobody else can mark someone's claim rejected. A cancelled pairing and a completed one are signed by a device of the pairing participant, with `signer` its certificate ID. A valid certificate outweighs any rejection (§6.3).
+
+#### Homes
+
+| Type | Signed input, after the tag | Signed by | ID |
+|---|---|---|---|
+| `home-epoch`<br>`TANDEM-HOME-EPOCH-V2` | `hub` id, `genesis` id, `participant` id, `n` u32, `parents` set (the home-epoch IDs it follows; empty for the first), `key` id (`commit(HK)`), `recipients` set (the certificate IDs `HK` is sealed to), `snapshot` id (inventory hash, §8.3), `signer` id (certificate ID), `auth` id (authorization snapshot) | the signer's `DKs`, as `sig` | home-epoch ID `E` (§5.6) |
+
+A home epoch is announced by publishing its start as a kind-3 message in each parent's channel and delivering `HK` to every recipient as `{"type":"home-key","epoch":"<b64u E>","k":"<b64u HK>"}` in the participant's inbox, sealed to that certificate's agreement key. The creator's home key is also sealed to `MKa`, with `info = "tandem/v2/home-recovery"` and `aad = "TANDEM-HOME-RECOVERY-V2" ‖ hubID ‖ E`, as `{"type":"home-recovery","epoch":…,"bytes":…}` in the directory (§6.8). `n` is one more than the greatest parent's. Every recipient must be admitted under `auth`, and `auth` must extend every parent's.
+
+Two devices of one participant can start home epochs from the same parent at the same moment. Unlike a roster (§8.2), a home does not die of it: its records merge like any other (§9), and both successors exclude whatever their signers had revoked. A device follows every current head, that is every announced home epoch that no announced epoch names as a parent, and writes to the one with the smallest ID. The next home epoch names all current heads as `parents`, which joins them again. A device that holds a revocation that a current head's `auth` doesn't reflect starts a new home epoch at once.
+
+#### Collections
+
+| Type | Signed input, after the tag | Signed by | ID |
+|---|---|---|---|
+| `grant`<br>`TANDEM-GRANT-V2` | `hub` id, `collection` id16, `recipient` id (participant), `admission` id, `at` id, `epoch` id, `key` id (`commit(K)`), `signer` id (owner certificate), `auth` id | the owner device's `DKs`, as `sig` | grant ID |
+| `key-request`<br>`TANDEM-KEYREQ-V2` | `hub` id, `collection` id16, `participant` id, `have` id (a roster statement ID), `signer` id, `auth` id | the requesting device's `DKs`, as `sig` | request ID |
+| `leave`<br>`TANDEM-LEAVE-V2` | `hub` id, `collection` id16, `participant` id, `at` id (the statement of the admission being left), `signer` id, `auth` id | the leaving device's `DKs`, as `sig` | notice ID |
+| `answer`<br>`TANDEM-ANSWER-V2` | `hub` id, `collection` id16, `participant` id, `admission` id, `answer` u8 (`a`, `n` or `l` as its ASCII byte), `event` id16, `signer` id, `auth` id | the answering device's `DKs`, as `sig` | answer ID |
+
+A grant is delivered as `{"type":"grant","grant":{…},"certificate":"<b64u recipient certificate ID>","k":"<b64u K>"}`, sealed to that certificate's agreement key in the recipient's inbox. A reply to a removed member is `{"type":"roster","c":"<b64u collection ID>","statements":[…]}`, the roster statements as kind-1 writes, which prove themselves. Leave notices and key-request notices are kind-3 messages in a collection channel; key requests also go to the owner's inbox. An answer is sealed to the devices of the participant who shared the collection, as the receipt of §6.10.
+
+**Roster statements.** A statement is the value of the `s` field of `_roster`, the UTF-8 strict JSON
+
+```json
+{ "n": 12,
+  "key": { "n": 3, "commit": "<b64u commit(K)>", "prev": "<b64u previous commit>" },
+  "snapshot": "<b64u inventory hash>",
+  "members": [ { "uid": "<b64u participant ID>", "role": "owner|writer|reader",
+                 "name": "Alice", "floor": "<b64u authorization snapshot ID>" } ],
+  "deleted": false }
+```
+
+with `members` sorted by the bytes of their `uid`. A genesis has `"n": 0`, `"key": {"n": 0, "commit": …}` without `prev`, no `snapshot`, and `"nonce"`: 16 random bytes in b64u (§7.1); no other statement has `nonce`. `floor` is the member's device-policy floor (§8.1). A statement that keeps the epoch keeps every listed member's `floor`; one that starts an epoch sets every floor afresh. `name` is a display hint, at most 256 bytes.
+
+#### The directory
+
+Genesis, capsules, registrations' certificates, revocations, invitation capabilities, receipts with outcome 1 or 3, authorization snapshots and home-recovery boxes are kind-3 messages in the directory channel (§5.6). A **profile** is an ordinary record there: writes (§5.5) with `scopeID = H("tandem/v2/directory" ‖ hubID)[0..16]`, the named record `profile:<b64u uid>` with fields `_name` and `name` (UTF-8, at most 256 bytes), `ref` the genesis ID, and `cert` and `auth` those of an admitted device of exactly that participant. A profile write by any other participant's device is invalid. Names merge like any other field (§9.2).
+
+#### Home records
+
+The `hubinvite`, `pairing` and `activity` records of §6.2 have these fields, in addition to `_name`:
+
+| Record | Field | Op | Bytes |
+|---|---|---|---|
+| `hubinvite:…` | `capability` | assign | The 32-byte capability ID |
+| `pairing:<b64u token>` | `delegation` | assign | The 32-byte delegation ID |
+| | `label` | assign | UTF-8 text |
+| | `expires` | assign | ASCII decimal digits: Unix milliseconds |
+| | `outcome` | add | One element per receipt: its 32-byte receipt ID |
+| `activity:<b64u event>` | `event` | assign | The strict JSON `{"what","at","refs"}`: `what` one of `invited`, `invite-cancelled`, `paired`, `pairing-cancelled`, `revoked`, `shared`, `answered`; `at` the device's clock in Unix milliseconds, a claim, not an order; `refs` the IDs of the control objects it concerns, in b64u |
 
 ---
 
@@ -977,7 +1081,7 @@ Inbox messages are kind-2 messages delivered to the participant's common inbox, 
 
 A logical **grant** is signed by an admitted owner device and binds hubID, recipient participant, that recipient's admission statement ID, collection ID, `at` roster ID, exact epoch-start ID, key commitment, acting owner certificate and source authorization snapshot. Delivery envelopes bind that same grant and the exact recipient certificate/key. Send to the recipient's verified admitted devices; once accepted, the membership and key also enter their shared home. A newly paired device receives the current home and therefore future memberships without a new owner invitation or roster entry. An existing admitted device of that recipient may re-seal the unchanged owner authorization to another admitted device of the **same** participant. It cannot change the grant's recipient/admission or promote a role.
 
-It is sent only once `at` is on the hub and, for an epoch start, announced (§11.6). The new channel holds the complete roster through `at`, policy proofs and inventory so recipients can validate it. Encoding/signature field order for these v2 objects remains Q28; v1 grants are not accepted as v2 authorization.
+It is sent only once `at` is on the hub and, for an epoch start, announced (§11.6). The new channel holds the complete roster through `at`, policy proofs and inventory so recipients can validate it. The grant's encoding is in §10.8; v1 grants are not accepted as v2 authorization.
 
 **Grants are kept.** A recipient never destroys a grant; it stays in their inbox. The owner's devices keep, for each current member of each collection, the last grant they sent, heal it like their own data if it goes missing from the hub (§12.2), and destroy an earlier grant to the same member once a later one is on the hub. A grant to someone no longer listed is destroyed and not healed. So a grant that was deleted before it was read comes back, without the recipient needing to know that there was anything to ask for. The cost is one small delivery per relevant admitted device and collection that stays on the hub. Retain the owner authorization in home so an enrolled device can relay it to a later paired device; stop repairing envelopes to revoked device keys once the verified cutoff applies.
 
@@ -991,7 +1095,7 @@ A receiver requires all of this:
 
 A device that already follows the collection checks the roster it is given against every statement it knows: a second successor anywhere means the collection is dead (§9.4). An older grant never moves it back. A grant for an earlier statement of the still-current epoch remains useful if the user is still listed. The device adds the key to home only after these checks. A grant that depends on something missing is held.
 
-**Key requests** are device-signed objects binding purpose, hubID, collection ID, participant ID, exact requester certificate/source snapshot and `have`, the latest valid roster statement ID held. Leave notices and roster replies similarly bind their device certificate/source snapshot and hub/collection context; their exact v2 encoding is Q28. These replace the v1 user-key signatures.
+**Key requests** are device-signed objects binding purpose, hubID, collection ID, participant ID, exact requester certificate/source snapshot and `have`, the latest valid roster statement ID held. Leave notices and roster replies similarly bind their device certificate/source snapshot and hub/collection context (§10.8). These replace the v1 user-key signatures.
 
 A device learning of an epoch whose key it lacks waits for normal grant delivery. After 10 minutes it may send one request to the owner's admitted device inboxes and post it as a kind-3 notice in the last epoch channel it can read. This timeout is a safety net behind grant/channel events, not a polling schedule. Owner devices keep watching earlier epoch tags through one hub change feed. Revoked devices receive no new key even if their participant remains a collection member; a stale certificate cannot be used as a key-request alias.
 
@@ -1117,7 +1221,7 @@ Settings → **Sync → Add a hub** has two ordinary paths:
 
 The IMAP descriptor contains host, port, username and password/app-password credential. The stable hubID is `pub(MKs)`, not a hash of the mailbox address (§5.3). Root metadata authorizes descriptors; two credentials for the same authorized descriptor do not create different authorities. Manual credentials without pins/discovery material do not authorize taking over an existing hub.
 
-**New-member invitations.** The admin unlocks MS and creates a manager-signed, purpose-limited invitation capability, intended label, token and expiry, carrying connection details/credential, HubK and root pins in a sensitive QR/link. The capability binds this hub/root, the invite verification key, new-participant purpose and limits. The first device proves both device keys and invitation possession over its exact registration/claim. The complete capability/claim/proof chain authorizes that first admission without a second admin tap; it never authorizes enrollment into an **existing** participant. Concrete capability encoding, consumption/cancellation and concurrent-claim handling must be specified/tested before shipping (Q28). Do not claim that a mutable “used” flag enforces one-time access against a hostile mailbox; duplicate uses are visible claims requiring admin resolution, not an arbitrary winning person.
+**New-member invitations.** The admin unlocks MS and creates a manager-signed, purpose-limited invitation capability, intended label, token and expiry, carrying connection details/credential, HubK and root pins in a sensitive QR/link. The capability binds this hub/root, the invite verification key, new-participant purpose and limits. The first device proves both device keys and invitation possession over its exact registration/claim. The complete capability/claim/proof chain authorizes that first admission without a second admin tap; it never authorizes enrollment into an **existing** participant. The capability, its cancellation and what two claims on one link mean are in §10.8. Do not claim that a mutable “used” flag enforces one-time access against a hostile mailbox; duplicate uses are visible claims requiring admin resolution, not an arbitrary winning person.
 
 The admin's private home records **Pending invite: Alice**, creation/expiry, credential hint and outcomes. Their other devices see the same pending invitation. Approval/completion receipts turn it into a joined participant; sharing two lists is a separate owner action. Invitation history and bearer secrets are different: do not put secrets into logs/directory/admin notifications.
 
@@ -1188,7 +1292,7 @@ Tandem doesn't defend against traffic analysis by the hub. Padding message sizes
 
 ## 15. Versioning
 
-This draft proposes incompatible **v2**: changed write inputs, participant/device authorization, random rotating home keys, registry controls, grants, directory and recovery. It must not be shipped under the implemented v1 version byte or labels. Envelope and mail header version fields are both 2; all authenticated contexts bind v2 and hubID. Final control-object encodings and migration are Q28/Q23.
+This draft proposes incompatible **v2**: changed write inputs, participant/device authorization, random rotating home keys, registry controls, grants, directory and recovery. It must not be shipped under the implemented v1 version byte or labels. Envelope and mail header version fields are both 2; all authenticated contexts bind v2 and hubID. Control objects are encoded as §10.8 says; migration is Q23.
 
 A message in a v2 channel with a different or inconsistent version is junk to that client: ignored, never destroyed, and no reason to pause healing/GC. An unauthenticated header cannot force migration or disable the protocol. Unknown authenticated payload fields are preserved under §9.2; an incompatible crypto/authorization change requires another version. These rules do not make v1 devices interoperable with v2.
 
@@ -1248,12 +1352,10 @@ References for the CRDT parts: Shapiro, Preguiça, Baquero, Zawirski, "Conflict-
 | Q15 | Reintroduced keys per keychain, with a password-sealed management key and fixed certificate cutoffs (§6). Keychains that don't sync, such as Android's, lose the new-phone convenience; is a platform backup worth defining there? Selected model/crypto tests pass; the complete architecture still requires independent review. A revoked owner device can still kill an old roster by forking it (§9.4). |
 | Q16 | A roster gains one complete statement per change and is copied at every rotation, and an inventory keeps entries for writes no rotating device has seen (§8.3). Is a signed checkpoint needed for long-lived collections? |
 | Q20 | Two devices of one owner changing a collection's sharing in the same moment kill it (§11.7). The note in home makes that unlikely. Measure how often this occurs in practice; the note narrows the race but cannot eliminate it. |
-| Q21 | Finalize `hubinvite`, `pairing`, `activity`, root/registry discovery and device-signed directory-profile encodings. No SDK implements this complete v2 schema. |
 | Q22 | A device keeps an epoch's superseded writes until the next epoch's inventory is fixed (§9.3). A collection that is never rotated keeps them for good. Is a narrower rule safe, for instance dropping at once what the owner's own writes superseded? |
 | Q23 | Define explicit v1→v2 migration, including owner binding, device enrollment, home/key policy, old-device copies and safe cutover. No in-place upgrade is claimed (§15). |
 | Q25 | A guest who can only look. A read-only credential (Fastmail can make an app password read-only) can't run today's protocol, because even a reader writes. If the owner did the writing (scanning the guest's code and admitting them), a guest could read a list without being able to destroy anything on the hub. |
 | Q26 | A whole hub over IMAP on Fastmail. Measured so far: 40 connections on one app password all get live updates; an append reaches the others in about half a second; 100 appends take 21 s with `MULTIAPPEND`; `QRESYNC` reports removals correctly. Not yet run: every scenario with several devices over IMAP only, the time a key change takes when a whole collection is uploaded one `APPEND` at a time, and a full resync of 100,000 messages (64 s when it was measured over JMAP). |
-| Q28 | Freeze management/control object encodings: root/registry certificates, exact immutable snapshot dependencies, issuance cuts, new-member invitation capability/possession and concurrent uses, both device-key proofs, the admin capsule, home-epoch announcement/serialization, device grant/receipt/notice inputs and discovery channels. Then generate cross-language vectors. Until these are specified the architecture is not an implementable interoperable protocol. |
 | Q29 | Exercise the complete UX over real IMAP with durable storage: automatic future-list sync; original device removed while child keeps access; stale/forking owner; absent admin/member/owner; pending pairing across home rekey/root reset; kill/lost-ack at every export; concurrent password changes; recovery with late old-manager facts. Ensure no admin-accessible box decrypts another member's private home. |
 | Q30 | Which mail providers work. Tested: Fastmail, Stalwart and Gmail (§10.3). Known not to: Outlook.com personal accounts, which accept only OAuth since September 2024. Not yet measured: iCloud Mail, Yahoo, GMX, mailbox.org and others, and Gmail's connection limit. On Gmail, live updates take about 30 s, or about 12 s and 8.5 s when IDLE is restarted every 5 s and 2 s: the default is 3 s; does Gmail tolerate it for hours on end? `probes/imap_probe.py` checks a provider: required extensions, live-update latency, bulk appends, whether a destroyed message survives elsewhere, and how many connections it allows; `--compare` tries other ways to get a change pushed. |
 

@@ -1,0 +1,842 @@
+{
+  "description": "Public Tandem v2 control-object vectors (§10.8). Test material only.",
+  "schema": {
+    "genesis": {
+      "tag": "TANDEM-GENESIS-V2",
+      "fields": [
+        [
+          "hub",
+          "id"
+        ],
+        [
+          "hubkey",
+          "id"
+        ],
+        [
+          "creator",
+          "id"
+        ],
+        [
+          "mailboxes",
+          "mailboxes"
+        ]
+      ],
+      "signatures": [
+        "sig"
+      ],
+      "extras": []
+    },
+    "capsule": {
+      "tag": "TANDEM-CAPSULE-V2",
+      "fields": [
+        [
+          "hub",
+          "id"
+        ],
+        [
+          "genesis",
+          "id"
+        ],
+        [
+          "sealed",
+          "id"
+        ],
+        [
+          "supersedes",
+          "set"
+        ]
+      ],
+      "signatures": [
+        "sig"
+      ],
+      "extras": [
+        [
+          "capsule",
+          "bytes"
+        ]
+      ]
+    },
+    "snapshot": {
+      "tag": "tandem/v2/auth-snapshot",
+      "fields": [
+        [
+          "hub",
+          "id"
+        ],
+        [
+          "genesis",
+          "id"
+        ],
+        [
+          "participant",
+          "id"
+        ],
+        [
+          "certs",
+          "set"
+        ],
+        [
+          "revocations",
+          "set"
+        ]
+      ],
+      "signatures": [],
+      "extras": []
+    },
+    "registration": {
+      "tag": "TANDEM-REGISTRATION-V2",
+      "fields": [
+        [
+          "hub",
+          "id"
+        ],
+        [
+          "sign",
+          "id"
+        ],
+        [
+          "agree",
+          "id"
+        ],
+        [
+          "enrollment",
+          "id16"
+        ]
+      ],
+      "signatures": [],
+      "extras": []
+    },
+    "request": {
+      "tag": "TANDEM-REQUEST-V2",
+      "fields": [
+        [
+          "hub",
+          "id"
+        ],
+        [
+          "genesis",
+          "id"
+        ],
+        [
+          "participant",
+          "id"
+        ],
+        [
+          "sign",
+          "id"
+        ],
+        [
+          "agree",
+          "id"
+        ],
+        [
+          "label",
+          "text"
+        ],
+        [
+          "how",
+          "u8"
+        ],
+        [
+          "authority",
+          "opt"
+        ],
+        [
+          "enrollment",
+          "id16"
+        ]
+      ],
+      "signatures": [
+        "self",
+        "approver?"
+      ],
+      "extras": []
+    },
+    "certificate": {
+      "tag": "TANDEM-CERT-V2",
+      "fields": [
+        [
+          "hub",
+          "id"
+        ],
+        [
+          "genesis",
+          "id"
+        ],
+        [
+          "request",
+          "id"
+        ],
+        [
+          "issued",
+          "set"
+        ]
+      ],
+      "signatures": [
+        "sig"
+      ],
+      "extras": [
+        [
+          "body",
+          "request"
+        ]
+      ]
+    },
+    "revocation": {
+      "tag": "TANDEM-REVOKE-V2",
+      "fields": [
+        [
+          "hub",
+          "id"
+        ],
+        [
+          "genesis",
+          "id"
+        ],
+        [
+          "target",
+          "id"
+        ],
+        [
+          "retained",
+          "set"
+        ]
+      ],
+      "signatures": [
+        "sig"
+      ],
+      "extras": []
+    },
+    "invitation": {
+      "tag": "TANDEM-INVITE-V2",
+      "fields": [
+        [
+          "hub",
+          "id"
+        ],
+        [
+          "genesis",
+          "id"
+        ],
+        [
+          "key",
+          "id"
+        ],
+        [
+          "invite",
+          "id16"
+        ],
+        [
+          "expires",
+          "u64"
+        ],
+        [
+          "label",
+          "text"
+        ]
+      ],
+      "signatures": [
+        "sig"
+      ],
+      "extras": []
+    },
+    "delegation": {
+      "tag": "TANDEM-DELEGATION-V2",
+      "fields": [
+        [
+          "hub",
+          "id"
+        ],
+        [
+          "genesis",
+          "id"
+        ],
+        [
+          "participant",
+          "id"
+        ],
+        [
+          "source",
+          "id"
+        ],
+        [
+          "key",
+          "id"
+        ],
+        [
+          "token",
+          "id16"
+        ],
+        [
+          "expires",
+          "u64"
+        ],
+        [
+          "package",
+          "id"
+        ],
+        [
+          "gate",
+          "id"
+        ]
+      ],
+      "signatures": [
+        "sig"
+      ],
+      "extras": []
+    },
+    "receipt": {
+      "tag": "TANDEM-RECEIPT-V2",
+      "fields": [
+        [
+          "hub",
+          "id"
+        ],
+        [
+          "genesis",
+          "id"
+        ],
+        [
+          "outcome",
+          "u8"
+        ],
+        [
+          "subject",
+          "id"
+        ],
+        [
+          "signer",
+          "opt"
+        ]
+      ],
+      "signatures": [
+        "sig"
+      ],
+      "extras": []
+    },
+    "home-epoch": {
+      "tag": "TANDEM-HOME-EPOCH-V2",
+      "fields": [
+        [
+          "hub",
+          "id"
+        ],
+        [
+          "genesis",
+          "id"
+        ],
+        [
+          "participant",
+          "id"
+        ],
+        [
+          "n",
+          "u32"
+        ],
+        [
+          "parents",
+          "set"
+        ],
+        [
+          "key",
+          "id"
+        ],
+        [
+          "recipients",
+          "set"
+        ],
+        [
+          "snapshot",
+          "id"
+        ],
+        [
+          "signer",
+          "id"
+        ],
+        [
+          "auth",
+          "id"
+        ]
+      ],
+      "signatures": [
+        "sig"
+      ],
+      "extras": []
+    },
+    "grant": {
+      "tag": "TANDEM-GRANT-V2",
+      "fields": [
+        [
+          "hub",
+          "id"
+        ],
+        [
+          "collection",
+          "id16"
+        ],
+        [
+          "recipient",
+          "id"
+        ],
+        [
+          "admission",
+          "id"
+        ],
+        [
+          "at",
+          "id"
+        ],
+        [
+          "epoch",
+          "id"
+        ],
+        [
+          "key",
+          "id"
+        ],
+        [
+          "signer",
+          "id"
+        ],
+        [
+          "auth",
+          "id"
+        ]
+      ],
+      "signatures": [
+        "sig"
+      ],
+      "extras": []
+    },
+    "key-request": {
+      "tag": "TANDEM-KEYREQ-V2",
+      "fields": [
+        [
+          "hub",
+          "id"
+        ],
+        [
+          "collection",
+          "id16"
+        ],
+        [
+          "participant",
+          "id"
+        ],
+        [
+          "have",
+          "id"
+        ],
+        [
+          "signer",
+          "id"
+        ],
+        [
+          "auth",
+          "id"
+        ]
+      ],
+      "signatures": [
+        "sig"
+      ],
+      "extras": []
+    },
+    "leave": {
+      "tag": "TANDEM-LEAVE-V2",
+      "fields": [
+        [
+          "hub",
+          "id"
+        ],
+        [
+          "collection",
+          "id16"
+        ],
+        [
+          "participant",
+          "id"
+        ],
+        [
+          "at",
+          "id"
+        ],
+        [
+          "signer",
+          "id"
+        ],
+        [
+          "auth",
+          "id"
+        ]
+      ],
+      "signatures": [
+        "sig"
+      ],
+      "extras": []
+    },
+    "answer": {
+      "tag": "TANDEM-ANSWER-V2",
+      "fields": [
+        [
+          "hub",
+          "id"
+        ],
+        [
+          "collection",
+          "id16"
+        ],
+        [
+          "participant",
+          "id"
+        ],
+        [
+          "admission",
+          "id"
+        ],
+        [
+          "answer",
+          "answer"
+        ],
+        [
+          "event",
+          "id16"
+        ],
+        [
+          "signer",
+          "id"
+        ],
+        [
+          "auth",
+          "id"
+        ]
+      ],
+      "signatures": [
+        "sig"
+      ],
+      "extras": []
+    }
+  },
+  "material": {
+    "management_seed": "d2ce39aa30110b6cd7354541cee54eaaa13c77838c8faf55b3dff9e1460013d7",
+    "invite_secret": "5f0d66feafddfe28cb916faea83410740bbf5ea5ea11afcf1152a51a7fa600c0",
+    "invite": "303bc22ee8f1a1d3c7c1ce1a2c26a018",
+    "link": "a97868a90ec3c676ad8eb4c17d9a90da40dd5be5df824d484202d7758519a7f2",
+    "gate_secret": "7f6628c09d861b2b811385657b46132a4a807e7af409093e4c5b30946c6b74f8",
+    "token": "2edb3f1e498f2b30fc1cd1a7bf566c69",
+    "home_epoch": "cc8b73f20d364c9de07405a058da9a45e4d76c5c6a565b82dd72b6b68791d061",
+    "creator_home_key": "40de377746fd2917bb8d4dfcb51fc1b5ae8b7ce20c69228163f669ed055d42c4"
+  },
+  "derived": {
+    "invite_key": "815422b4ece644ee799c929db0b1b41eb2cc590d640a74c1b45c25b97a522906",
+    "pairing_invite_key": "c073f61ba0bb4d6b806699df744fad28ff744c84d98b051ed3487138fa3a34f4",
+    "pairing_key": "04b527142f81422d5bf278bff865faf8c7312f8884ea191942763fc54981006a",
+    "pairing_tag": "qsk2cyuxke6ubcyooashjbr7db3wccni",
+    "directory_scope": "8f7b590bf8c5e488551652f2f62ccb64",
+    "manager_agreement": "a1b74b844becc51b21dcdfc75cc41aa220e679e41cf6d879341ae4a268ea8b21",
+    "package": "8e4e9c5e51baf8780fe69bc0ee3760b3bd158f7daeb4355b07e9c674631fe1434880d65f6b63a2a81add1a9da77e1c5dc6f91d8cc5e110e77509d0bcb39e6ea796606a135cbede6d39ea6e2045c464f262fe5e32dfd0ebc2b59136115e45789e4f9965574c7df44a4166dc42f1fb1a21f93644fea097ba005282b8acde515fc608bbb8e0",
+    "package_plaintext": "7b22686f6d65223a224b527a6c6e46767874565a6f443543734a6e6745374e5558416e64387053525347376e42635f6f626a494d222c226b223a224a786c39686644427047355a634532694776705a685156545376302d366335584254376f694a4345356634227d",
+    "gate": "a43e9c890a29020320c5dde02b980591d90eb72593c159750f3f6c0f418dc9785213f990f82266f2e60c73fc2980903fc0a89f1095126a1605af22506c2be5049e50f1b3ba6f1a283ac41e1e4c8e3808",
+    "home_recovery": "1de492a8e2f354afe2ec113e044dc219491e7dea8da1c86d5c0973a6fbe88535d000df7b8dafa1934bef84733d4d54715828a4e7913e1e03a60770d4b173fe076bea32b48a37d3f4e468f760bc45e421"
+  },
+  "objects": [
+    {
+      "name": "creator registration",
+      "kind": "registration",
+      "json": "{\"type\":\"registration\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"sign\":\"TZpE-GEchWdVZzHbQehcY1amscXWJR-hQziYbAjrGs8\",\"agree\":\"jGEvtellpEqnnAzL8TOGdIMerG-JnPjPvPWqbQX2d1E\",\"enrollment\":\"oQobGOBm-ONqMFPb1sbQ-Q\"}",
+      "input": "54414e44454d2d524547495354524154494f4e2d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5284d9a44f8611c8567556731db41e85c6356a6b1c5d6251fa14338986c08eb1acf8c612fb5e965a44aa79c0ccbf1338674831eac6f899cf8cfbcf5aa6d05f67751a10a1b18e066f8e36a3053dbd6c6d0f9",
+      "id": "963cf2f179e2df3dcf1e0a8aa353b3f2a5e4c278c36f1404f94eaa65401c7413",
+      "signers": {}
+    },
+    {
+      "name": "genesis",
+      "kind": "genesis",
+      "json": "{\"type\":\"genesis\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"hubkey\":\"lw-VyxQmbcegQ6qVOnFXx8FDq5EDwvA9m7SNSMk7ygc\",\"creator\":\"ljzy8Xni3z3PHgqKo1Oz8qXkwnjDbxQE-U6qZUAcdBM\",\"mailboxes\":[{\"host\":\"imap.example.org\",\"port\":993,\"user\":\"hub@example.org\"},{\"host\":\"imap.fastmail.com\",\"port\":993,\"user\":\"hub@example.org\"}],\"sig\":\"xioHiRzpjSykTK4MczquRzlRsvjYKxh8f5hPboPEglgVYGiEv4I3GcMhK9zQKLwxznZwUbaOnSIcr05RenjFAA\"}",
+      "input": "54414e44454d2d47454e455349532d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c528970f95cb14266dc7a043aa953a7157c7c143ab9103c2f03d9bb48d48c93bca07963cf2f179e2df3dcf1e0a8aa353b3f2a5e4c278c36f1404f94eaa65401c74130000000200000010696d61702e6578616d706c652e6f726703e10000000f687562406578616d706c652e6f726700000011696d61702e666173746d61696c2e636f6d03e10000000f687562406578616d706c652e6f7267",
+      "id": "6f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa6",
+      "signers": {
+        "sig": "c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c528"
+      }
+    },
+    {
+      "name": "first capsule",
+      "kind": "capsule",
+      "json": "{\"type\":\"capsule\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"sealed\":\"4AT1oZNyY05wyDUnZFD83Q94xQd7i0kW74ylhHC-bNQ\",\"supersedes\":[],\"sig\":\"hswI0ZBmx8upEsWH3i48x_5wdT7y9pLkptMfKuKaFF5u9DjXhk9F-cdsqc3-ij5AAKygkoBzaw0sXf42hiJsAA\",\"capsule\":\"6eChpuR_rG9d9-94uPe_kk29CnqVU3-Q72Et-Gz5aVE\"}",
+      "input": "54414e44454d2d43415053554c452d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5286f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa6e004f5a19372634e70c835276450fcdd0f78c5077b8b4916ef8ca58470be6cd400000000",
+      "id": "041281443e7d880e66b7505469a64ba71e3f05f2092cfd654668006491bc7254",
+      "signers": {
+        "sig": "c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c528"
+      }
+    },
+    {
+      "name": "capsule after a password change",
+      "kind": "capsule",
+      "json": "{\"type\":\"capsule\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"sealed\":\"HtVGt-sg14Cn5q4SQba-t6SvT7ZITAY6pbLfiIuR7ac\",\"supersedes\":[\"BBKBRD59iA5mt1BUaaZLpx4_BfIJLP1lRmgAZJG8clQ\"],\"sig\":\"wpI81ILsSYUsTxdtJnQxIwn39hgvrgW6S1SW8guMBS46WT96HXXprPKwH1meCOMrlbQk_ZVXZUpXqOfHqtGvBg\",\"capsule\":\"N2iTjgZVFhRCDqFwRtO7WpTPA1kPF9YRp3YC_IcouD0\"}",
+      "input": "54414e44454d2d43415053554c452d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5286f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa61ed546b7eb20d780a7e6ae1241b6beb7a4af4fb6484c063aa5b2df888b91eda700000001041281443e7d880e66b7505469a64ba71e3f05f2092cfd654668006491bc7254",
+      "id": "6ea97d2d2281a0df785fdd839b6a27b46baad1059c58fcae686cb47f45f220f6",
+      "signers": {
+        "sig": "c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c528"
+      }
+    },
+    {
+      "name": "creator request",
+      "kind": "request",
+      "json": "{\"type\":\"request\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"participant\":\"ljzy8Xni3z3PHgqKo1Oz8qXkwnjDbxQE-U6qZUAcdBM\",\"sign\":\"TZpE-GEchWdVZzHbQehcY1amscXWJR-hQziYbAjrGs8\",\"agree\":\"jGEvtellpEqnnAzL8TOGdIMerG-JnPjPvPWqbQX2d1E\",\"label\":\"Mac\",\"how\":1,\"authority\":null,\"enrollment\":\"oQobGOBm-ONqMFPb1sbQ-Q\",\"self\":\"GfZY5mWFd3QL8-KTFv5ivOaTYkGU9s8VgXag_ZwvdSo1S3LIhThUyoiCT_nYtRa2nDaiaw8JsQ7P5veC7INSBg\"}",
+      "input": "54414e44454d2d524551554553542d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5286f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa6963cf2f179e2df3dcf1e0a8aa353b3f2a5e4c278c36f1404f94eaa65401c74134d9a44f8611c8567556731db41e85c6356a6b1c5d6251fa14338986c08eb1acf8c612fb5e965a44aa79c0ccbf1338674831eac6f899cf8cfbcf5aa6d05f67751000000034d6163010000000000000000000000000000000000000000000000000000000000000000a10a1b18e066f8e36a3053dbd6c6d0f9",
+      "id": "482fce74fe1ff67264b4f28d32e7e007bad3b74b303feaf8161c8539359dc347",
+      "signers": {
+        "self": "4d9a44f8611c8567556731db41e85c6356a6b1c5d6251fa14338986c08eb1acf"
+      }
+    },
+    {
+      "name": "creator certificate",
+      "kind": "certificate",
+      "json": "{\"type\":\"certificate\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"request\":\"SC_OdP4f9nJktPKNMufgB7rTt0swP-r4FhyFOTWdw0c\",\"issued\":[],\"sig\":\"R5jIa2bNLBV-7cj5kfsBCsvBERANDGFrk3UA7qkBGiKkgCJoReCLuyiIO5Wo48nz83EL7ek6noSLsY3zyU2EBA\",\"body\":{\"type\":\"request\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"participant\":\"ljzy8Xni3z3PHgqKo1Oz8qXkwnjDbxQE-U6qZUAcdBM\",\"sign\":\"TZpE-GEchWdVZzHbQehcY1amscXWJR-hQziYbAjrGs8\",\"agree\":\"jGEvtellpEqnnAzL8TOGdIMerG-JnPjPvPWqbQX2d1E\",\"label\":\"Mac\",\"how\":1,\"authority\":null,\"enrollment\":\"oQobGOBm-ONqMFPb1sbQ-Q\",\"self\":\"GfZY5mWFd3QL8-KTFv5ivOaTYkGU9s8VgXag_ZwvdSo1S3LIhThUyoiCT_nYtRa2nDaiaw8JsQ7P5veC7INSBg\"}}",
+      "input": "54414e44454d2d434552542d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5286f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa6482fce74fe1ff67264b4f28d32e7e007bad3b74b303feaf8161c8539359dc34700000000",
+      "id": "d14938c4ac2da9a87bc78083a31caf173992dc9a65758c2dd6d6fe00725104f2",
+      "signers": {
+        "sig": "c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c528"
+      }
+    },
+    {
+      "name": "invitation",
+      "kind": "invitation",
+      "json": "{\"type\":\"invitation\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"key\":\"gVQitOzmRO55nJKdsLG0HrLMWQ1kCnTBtFwluXpSKQY\",\"invite\":\"MDvCLujxodPHwc4aLCagGA\",\"expires\":1800000000000,\"label\":\"Alice\",\"sig\":\"Juvsho3MCF_lvvK6QJfSo5DGnQQ1ixl3-WKDN0dQyg3w_4w7bsKXtX3VOskpweSWCgemjPTgufRLwNgfiPEgBA\"}",
+      "input": "54414e44454d2d494e564954452d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5286f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa6815422b4ece644ee799c929db0b1b41eb2cc590d640a74c1b45c25b97a522906303bc22ee8f1a1d3c7c1ce1a2c26a018000001a3185c500000000005416c696365",
+      "id": "5bbce5ff719a777328a46df0592c3da2ee9a261ad08a2f5b03959662a60244b9",
+      "signers": {
+        "sig": "c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c528"
+      }
+    },
+    {
+      "name": "alice registration",
+      "kind": "registration",
+      "json": "{\"type\":\"registration\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"sign\":\"U7Ew1lOhitZiM5o-_PyVRcJx6-pMnQ5Gt4JOmM6p-tU\",\"agree\":\"6g7UgLeWRFUmwoC27nhFRx6D4-ehLfDFDa3oJtsMUys\",\"enrollment\":\"t7GzWItOBIEvgBxeCXKV3g\"}",
+      "input": "54414e44454d2d524547495354524154494f4e2d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c52853b130d653a18ad662339a3efcfc9545c271ebea4c9d0e46b7824e98cea9fad5ea0ed480b796445526c280b6ee7845471e83e3e7a12df0c50dade826db0c532bb7b1b3588b4e04812f801c5e097295de",
+      "id": "2fb68a055aea083a929b1e153cbbc661d7bc1386f368071e2d1c661be559271d",
+      "signers": {}
+    },
+    {
+      "name": "alice phone request",
+      "kind": "request",
+      "json": "{\"type\":\"request\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"participant\":\"L7aKBVrqCDqSmx4VPLvGYde8E4bzaAceLRxmG-VZJx0\",\"sign\":\"U7Ew1lOhitZiM5o-_PyVRcJx6-pMnQ5Gt4JOmM6p-tU\",\"agree\":\"6g7UgLeWRFUmwoC27nhFRx6D4-ehLfDFDa3oJtsMUys\",\"label\":\"Alice’s iPhone\",\"how\":2,\"authority\":\"W7zl_3Gad3MopG3wWSw9ou6aJhrQii9bA5WWYqYCRLk\",\"enrollment\":\"t7GzWItOBIEvgBxeCXKV3g\",\"self\":\"FvAMr_95VmCScE6rQqMsNaxORFvqvIYJ74SBZhrxZfVILF2CXLQdEyjuxrC-HQ4JHMKLayC42Ze6sDV1dE2KDg\",\"approver\":\"_Z9fi_nIIV7g0X0rlgTvjHTpkOywJ2Mt_m_EVa_dBFE88EifL8bHN_ZymQ1fMvQZAKDKffMTNOZsdEskcDDeCw\"}",
+      "input": "54414e44454d2d524551554553542d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5286f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa62fb68a055aea083a929b1e153cbbc661d7bc1386f368071e2d1c661be559271d53b130d653a18ad662339a3efcfc9545c271ebea4c9d0e46b7824e98cea9fad5ea0ed480b796445526c280b6ee7845471e83e3e7a12df0c50dade826db0c532b00000010416c696365e2809973206950686f6e65025bbce5ff719a777328a46df0592c3da2ee9a261ad08a2f5b03959662a60244b9b7b1b3588b4e04812f801c5e097295de",
+      "id": "56a4858c4098a86814dd7fbfaf6408aa1f172bcf17c167688f9f9e2d3aa79fd0",
+      "signers": {
+        "self": "53b130d653a18ad662339a3efcfc9545c271ebea4c9d0e46b7824e98cea9fad5",
+        "approver": "815422b4ece644ee799c929db0b1b41eb2cc590d640a74c1b45c25b97a522906"
+      }
+    },
+    {
+      "name": "alice phone certificate",
+      "kind": "certificate",
+      "json": "{\"type\":\"certificate\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"request\":\"VqSFjECYqGgU3X-_r2QIqh8XK88XwWdoj5-eLTqnn9A\",\"issued\":[],\"sig\":\"uH3s1MErU8lJHlhWUzOWPYhzROcGY9lC5WGDN1cLY4eFPyE_jhuiWzUTXAo2XwpGrrs4dJT0UkuI3B3XMsZCCQ\",\"body\":{\"type\":\"request\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"participant\":\"L7aKBVrqCDqSmx4VPLvGYde8E4bzaAceLRxmG-VZJx0\",\"sign\":\"U7Ew1lOhitZiM5o-_PyVRcJx6-pMnQ5Gt4JOmM6p-tU\",\"agree\":\"6g7UgLeWRFUmwoC27nhFRx6D4-ehLfDFDa3oJtsMUys\",\"label\":\"Alice’s iPhone\",\"how\":2,\"authority\":\"W7zl_3Gad3MopG3wWSw9ou6aJhrQii9bA5WWYqYCRLk\",\"enrollment\":\"t7GzWItOBIEvgBxeCXKV3g\",\"self\":\"FvAMr_95VmCScE6rQqMsNaxORFvqvIYJ74SBZhrxZfVILF2CXLQdEyjuxrC-HQ4JHMKLayC42Ze6sDV1dE2KDg\",\"approver\":\"_Z9fi_nIIV7g0X0rlgTvjHTpkOywJ2Mt_m_EVa_dBFE88EifL8bHN_ZymQ1fMvQZAKDKffMTNOZsdEskcDDeCw\"}}",
+      "input": "54414e44454d2d434552542d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5286f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa656a4858c4098a86814dd7fbfaf6408aa1f172bcf17c167688f9f9e2d3aa79fd000000000",
+      "id": "297cf998172dd7283972263c58ff75b8afa27a593e2bef68bd2b7304a40ef7c4",
+      "signers": {
+        "sig": "815422b4ece644ee799c929db0b1b41eb2cc590d640a74c1b45c25b97a522906"
+      }
+    },
+    {
+      "name": "invitation cancelled",
+      "kind": "receipt",
+      "json": "{\"type\":\"receipt\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"outcome\":3,\"subject\":\"W7zl_3Gad3MopG3wWSw9ou6aJhrQii9bA5WWYqYCRLk\",\"signer\":null,\"sig\":\"QZTY-U8UGrhQ1dcDRApo1OkPa6fwmri9oszBGeUIftXCXO5Qoa_PKZGERijzGHh-P_lYNKq4gQ0DmwqyNZblDw\"}",
+      "input": "54414e44454d2d524543454950542d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5286f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa6035bbce5ff719a777328a46df0592c3da2ee9a261ad08a2f5b03959662a60244b90000000000000000000000000000000000000000000000000000000000000000",
+      "id": "8e3c14dee9989c9f13141488a1ed4b68565a8e78533814d9b573a41806fea1be",
+      "signers": {
+        "sig": "c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c528"
+      }
+    },
+    {
+      "name": "delegation",
+      "kind": "delegation",
+      "json": "{\"type\":\"delegation\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"participant\":\"L7aKBVrqCDqSmx4VPLvGYde8E4bzaAceLRxmG-VZJx0\",\"source\":\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\",\"key\":\"wHP2G6C7TWuAZpnfdE-tKP90TITZiwUe00hxOPo6NPQ\",\"token\":\"Lts_HkmPKzD8HNGnv1ZsaQ\",\"expires\":1800000000000,\"package\":\"m231lvM8NVhrjByjwXyk-5r2gGqXPetVLk0ZFvDJLxg\",\"gate\":\"VzoDFQevV2qwB8rikPoqC790YRLpipwiuMzk_pxWEoQ\",\"sig\":\"liLYjvF2Fc4fV-a_RBC32MKNGtJ54pfvRKgBRtqC4EbbtRRbECKEtKpB4PxNaQKS3-JGBw7HzY5JsFtgawVPCA\"}",
+      "input": "54414e44454d2d44454c45474154494f4e2d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5286f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa62fb68a055aea083a929b1e153cbbc661d7bc1386f368071e2d1c661be559271d297cf998172dd7283972263c58ff75b8afa27a593e2bef68bd2b7304a40ef7c4c073f61ba0bb4d6b806699df744fad28ff744c84d98b051ed3487138fa3a34f42edb3f1e498f2b30fc1cd1a7bf566c69000001a3185c50009b6df596f33c35586b8c1ca3c17ca4fb9af6806a973deb552e4d1916f0c92f18573a031507af576ab007cae290fa2a0bbf746112e98a9c22b8cce4fe9c561284",
+      "id": "97fa9468990b38cb5bb7ee162eb2e9b613aa6fde3ec101751d32a5f0dd84ae5f",
+      "signers": {
+        "sig": "53b130d653a18ad662339a3efcfc9545c271ebea4c9d0e46b7824e98cea9fad5"
+      }
+    },
+    {
+      "name": "alice tablet request",
+      "kind": "request",
+      "json": "{\"type\":\"request\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"participant\":\"L7aKBVrqCDqSmx4VPLvGYde8E4bzaAceLRxmG-VZJx0\",\"sign\":\"UHvR8KiKPxwIwOEcOpSuiGgIkbS54CeTql2hxr2P8xw\",\"agree\":\"5FIYrJ_K7T-l0-MMKtQmLBGreCDw4I18MXj8bzWk3Wg\",\"label\":\"Tablet\",\"how\":4,\"authority\":\"l_qUaJkLOMtbt-4WLrLpthOqb94-wQF1HTKl8N2Erl8\",\"enrollment\":\"AAAAAAAAAAAAAAAAAAAAAA\",\"self\":\"1D5abjilp91dZrYFmqFxTUE9z_cqaeb-rLxeSN5oMHEcQZdicZcMbHo4efxJaUmVVuB3bw_oKWYoycvJwz0EDA\",\"approver\":\"yvVN2lC3SRFX_2LUGrrK9V6g-wFbXRWXw0dREAl6YpPVbGWT3JGPN_lSnlz9WW83iVOqbmFZuhEZQj_um_0aCw\"}",
+      "input": "54414e44454d2d524551554553542d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5286f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa62fb68a055aea083a929b1e153cbbc661d7bc1386f368071e2d1c661be559271d507bd1f0a88a3f1c08c0e11c3a94ae88680891b4b9e02793aa5da1c6bd8ff31ce45218ac9fcaed3fa5d3e30c2ad4262c11ab7820f0e08d7c3178fc6f35a4dd68000000065461626c65740497fa9468990b38cb5bb7ee162eb2e9b613aa6fde3ec101751d32a5f0dd84ae5f00000000000000000000000000000000",
+      "id": "adec95b73a362d4028772699c639fadc3fa5d57ac37be44f8d0b36381dd2939a",
+      "signers": {
+        "self": "507bd1f0a88a3f1c08c0e11c3a94ae88680891b4b9e02793aa5da1c6bd8ff31c",
+        "approver": "c073f61ba0bb4d6b806699df744fad28ff744c84d98b051ed3487138fa3a34f4"
+      }
+    },
+    {
+      "name": "alice tablet certificate",
+      "kind": "certificate",
+      "json": "{\"type\":\"certificate\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"request\":\"reyVtzo2LUAodyaZxjn63D-l1XrDe-RPjQs2OB3Sk5o\",\"issued\":[],\"sig\":\"vxTw1I1Y3ayOJmwSqO-b3QpLENQxhLBWoOLJOcd4NfCLth8c3OrISQiufisGbIEoYkYYFFnmXgapnghdOFv9AA\",\"body\":{\"type\":\"request\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"participant\":\"L7aKBVrqCDqSmx4VPLvGYde8E4bzaAceLRxmG-VZJx0\",\"sign\":\"UHvR8KiKPxwIwOEcOpSuiGgIkbS54CeTql2hxr2P8xw\",\"agree\":\"5FIYrJ_K7T-l0-MMKtQmLBGreCDw4I18MXj8bzWk3Wg\",\"label\":\"Tablet\",\"how\":4,\"authority\":\"l_qUaJkLOMtbt-4WLrLpthOqb94-wQF1HTKl8N2Erl8\",\"enrollment\":\"AAAAAAAAAAAAAAAAAAAAAA\",\"self\":\"1D5abjilp91dZrYFmqFxTUE9z_cqaeb-rLxeSN5oMHEcQZdicZcMbHo4efxJaUmVVuB3bw_oKWYoycvJwz0EDA\",\"approver\":\"yvVN2lC3SRFX_2LUGrrK9V6g-wFbXRWXw0dREAl6YpPVbGWT3JGPN_lSnlz9WW83iVOqbmFZuhEZQj_um_0aCw\"}}",
+      "input": "54414e44454d2d434552542d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5286f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa6adec95b73a362d4028772699c639fadc3fa5d57ac37be44f8d0b36381dd2939a00000000",
+      "id": "a8ff43a9cb80d07de651bca9aec54642c39431f5977ce2474741b103a2a3d5a3",
+      "signers": {
+        "sig": "c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c528"
+      }
+    },
+    {
+      "name": "pairing completed",
+      "kind": "receipt",
+      "json": "{\"type\":\"receipt\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"outcome\":4,\"subject\":\"qP9DqcuA0H3mUbyprsVGQsOUMfWXfOJHR0GxA6Kj1aM\",\"signer\":\"qP9DqcuA0H3mUbyprsVGQsOUMfWXfOJHR0GxA6Kj1aM\",\"sig\":\"KYfZchRzjAW7ByBn2BBI9_y_o8GpiM7EYqFVhOLQGvRC7vHKoExwVJuyWOfFofK8g_FElpZvO14cE6UjJJbuDg\"}",
+      "input": "54414e44454d2d524543454950542d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5286f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa604a8ff43a9cb80d07de651bca9aec54642c39431f5977ce2474741b103a2a3d5a3a8ff43a9cb80d07de651bca9aec54642c39431f5977ce2474741b103a2a3d5a3",
+      "id": "f95aaf334ce796559248771b5c5b67951e8ab004417c0081e4431da8ae0c782b",
+      "signers": {
+        "sig": "507bd1f0a88a3f1c08c0e11c3a94ae88680891b4b9e02793aa5da1c6bd8ff31c"
+      }
+    },
+    {
+      "name": "rejected claim",
+      "kind": "request",
+      "json": "{\"type\":\"request\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"participant\":\"L7aKBVrqCDqSmx4VPLvGYde8E4bzaAceLRxmG-VZJx0\",\"sign\":\"TyluXLlS_-A4xR-A63lerrQhjICfw8J6k9a_mbjaIvM\",\"agree\":\"K57UzTcli__6AD1nUlS9GQ41EUb3aPNlvuva8YcDLD0\",\"label\":\"Laptop\",\"how\":4,\"authority\":\"l_qUaJkLOMtbt-4WLrLpthOqb94-wQF1HTKl8N2Erl8\",\"enrollment\":\"AAAAAAAAAAAAAAAAAAAAAA\",\"self\":\"GeOf0gxPImVzQAI-s3obzmzSnZ8_hi2y9yd7FcWUo5TIKzDIp9UxvQNK5TmBw3VG4HxKsSFAKIGfDEIaooXKDw\",\"approver\":\"bXGcKCJDzNR4T2vQ7w-CqvJEdgyZkZWErqVACkFRawxZb6Jsc3CzapqcCKeD8otsq5mubfRpx89lQh7p3u1EDg\"}",
+      "input": "54414e44454d2d524551554553542d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5286f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa62fb68a055aea083a929b1e153cbbc661d7bc1386f368071e2d1c661be559271d4f296e5cb952ffe038c51f80eb795eaeb4218c809fc3c27a93d6bf99b8da22f32b9ed4cd37258bfffa003d675254bd190e351146f768f365beebdaf187032c3d000000064c6170746f700497fa9468990b38cb5bb7ee162eb2e9b613aa6fde3ec101751d32a5f0dd84ae5f00000000000000000000000000000000",
+      "id": "7332c451c89d0f121cde91de6037a7525fb4a9c9f20aa69850a6fe202ed74d39",
+      "signers": {
+        "self": "4f296e5cb952ffe038c51f80eb795eaeb4218c809fc3c27a93d6bf99b8da22f3",
+        "approver": "c073f61ba0bb4d6b806699df744fad28ff744c84d98b051ed3487138fa3a34f4"
+      }
+    },
+    {
+      "name": "rejection",
+      "kind": "receipt",
+      "json": "{\"type\":\"receipt\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"outcome\":1,\"subject\":\"czLEUcidDxIc3pHeYDenUl-0qcnyCqaYUKb-IC7XTTk\",\"signer\":null,\"sig\":\"IRaVSJZLUijw9kQaCBybRmncN85c3T_bv43U9InjDyMcoL7BAXmQoC0HhHfgpaxS5EgN6M7l-4YF_ZBT6sz6CA\"}",
+      "input": "54414e44454d2d524543454950542d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5286f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa6017332c451c89d0f121cde91de6037a7525fb4a9c9f20aa69850a6fe202ed74d390000000000000000000000000000000000000000000000000000000000000000",
+      "id": "367d7cd7ce7327f592e337cdefa550cd330089ca001fdc08cb749897749a67a9",
+      "signers": {
+        "sig": "c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c528"
+      }
+    },
+    {
+      "name": "tablet revoked",
+      "kind": "revocation",
+      "json": "{\"type\":\"revocation\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"target\":\"qP9DqcuA0H3mUbyprsVGQsOUMfWXfOJHR0GxA6Kj1aM\",\"retained\":[\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\"],\"sig\":\"9xfJUm9htGE-8FIZxFMasGIeIMKobYTVtAU-8BCaakhHQLZFwHWd7n3i7wraoFFXauc4XlF65gQQqYUINQYvDg\"}",
+      "input": "54414e44454d2d5245564f4b452d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5286f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa6a8ff43a9cb80d07de651bca9aec54642c39431f5977ce2474741b103a2a3d5a300000001297cf998172dd7283972263c58ff75b8afa27a593e2bef68bd2b7304a40ef7c4",
+      "id": "7b3f531186cea40515d3bfd8f2763f85843006a4562fa64538596a1efff168fd",
+      "signers": {
+        "sig": "c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c528"
+      }
+    },
+    {
+      "name": "alice snapshot",
+      "kind": "snapshot",
+      "json": "{\"type\":\"snapshot\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"participant\":\"L7aKBVrqCDqSmx4VPLvGYde8E4bzaAceLRxmG-VZJx0\",\"certs\":[\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\",\"qP9DqcuA0H3mUbyprsVGQsOUMfWXfOJHR0GxA6Kj1aM\"],\"revocations\":[\"ez9TEYbOpAUV07_Y8nY_hYQwBqRWL6ZFOFlqHv_xaP0\"]}",
+      "input": "74616e64656d2f76322f617574682d736e617073686f74c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5286f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa62fb68a055aea083a929b1e153cbbc661d7bc1386f368071e2d1c661be559271d00000002297cf998172dd7283972263c58ff75b8afa27a593e2bef68bd2b7304a40ef7c4a8ff43a9cb80d07de651bca9aec54642c39431f5977ce2474741b103a2a3d5a3000000017b3f531186cea40515d3bfd8f2763f85843006a4562fa64538596a1efff168fd",
+      "id": "fc01302921bab251c56d67679183776b1079a3a49cd277c36cc07b1fd7ba95b8",
+      "signers": {}
+    },
+    {
+      "name": "alice home epoch",
+      "kind": "home-epoch",
+      "json": "{\"type\":\"home-epoch\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"participant\":\"L7aKBVrqCDqSmx4VPLvGYde8E4bzaAceLRxmG-VZJx0\",\"n\":0,\"parents\":[],\"key\":\"XRagxKxWjGA70oyoLFYaTcspuALMSbET7qxld2Yxwb0\",\"recipients\":[\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\"],\"snapshot\":\"3z9hmASpL9tAVxktxD3XSOp3itxSvEmM6AUkwBS4ERk\",\"signer\":\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\",\"auth\":\"_AEwKSG6slHFbWdnkYN3axB5o6Sc0nfDbMB7H9e6lbg\",\"sig\":\"dJ2h5F4sZ1KBcspqDGmN2-1QTSe3OzOWy8C3PVPFCDRsk7uIRexf79_--nkse1tvCnNil4LRL_Uv2UY8bI4pBw\"}",
+      "input": "54414e44454d2d484f4d452d45504f43482d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5286f66af8d8402dfc94259df39da7a9788475e0d31ecfc38b2ffcc817406e1eaa62fb68a055aea083a929b1e153cbbc661d7bc1386f368071e2d1c661be559271d00000000000000005d16a0c4ac568c603bd28ca82c561a4dcb29b802cc49b113eeac65776631c1bd00000001297cf998172dd7283972263c58ff75b8afa27a593e2bef68bd2b7304a40ef7c4df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119297cf998172dd7283972263c58ff75b8afa27a593e2bef68bd2b7304a40ef7c4fc01302921bab251c56d67679183776b1079a3a49cd277c36cc07b1fd7ba95b8",
+      "id": "cc8b73f20d364c9de07405a058da9a45e4d76c5c6a565b82dd72b6b68791d061",
+      "signers": {
+        "sig": "53b130d653a18ad662339a3efcfc9545c271ebea4c9d0e46b7824e98cea9fad5"
+      }
+    },
+    {
+      "name": "grant",
+      "kind": "grant",
+      "json": "{\"type\":\"grant\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"collection\":\"LzN6TtXrOnOnnmRGstN3UQ\",\"recipient\":\"L7aKBVrqCDqSmx4VPLvGYde8E4bzaAceLRxmG-VZJx0\",\"admission\":\"VJLkfJaWSzoObTNIzC3bSdGoWJSTPSo7j83JE4dd3L0\",\"at\":\"VJLkfJaWSzoObTNIzC3bSdGoWJSTPSo7j83JE4dd3L0\",\"epoch\":\"iFw5C50Gj4KGANY9oyl4FO1rVNT7x1wLien6XBxTzQw\",\"key\":\"31FtIgxoYAJJYSuDdxVI0Ltrm0Cr3GdGaDbyZlt6emQ\",\"signer\":\"0Uk4xKwtqah7x4CDoxyvFzmS3JpldYwt1tb-AHJRBPI\",\"auth\":\"_AEwKSG6slHFbWdnkYN3axB5o6Sc0nfDbMB7H9e6lbg\",\"sig\":\"8vOaTHGpXr3IvDa7rrghfn_bKSYwqLZiOXQb_JCKHLniPxu4o30m5KDmQVPwGyBAY0wHVZ4Mq-7iAbRqe7z6CA\"}",
+      "input": "54414e44454d2d4752414e542d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5282f337a4ed5eb3a73a79e6446b2d377512fb68a055aea083a929b1e153cbbc661d7bc1386f368071e2d1c661be559271d5492e47c96964b3a0e6d3348cc2ddb49d1a85894933d2a3b8fcdc913875ddcbd5492e47c96964b3a0e6d3348cc2ddb49d1a85894933d2a3b8fcdc913875ddcbd885c390b9d068f828600d63da3297814ed6b54d4fbc75c0b89e9fa5c1c53cd0cdf516d220c68600249612b83771548d0bb6b9b40abdc67466836f2665b7a7a64d14938c4ac2da9a87bc78083a31caf173992dc9a65758c2dd6d6fe00725104f2fc01302921bab251c56d67679183776b1079a3a49cd277c36cc07b1fd7ba95b8",
+      "id": "a81c327968d4e938cc79d7b08dead5e0ac229273b223afb8e89bae17583f2ec1",
+      "signers": {
+        "sig": "4d9a44f8611c8567556731db41e85c6356a6b1c5d6251fa14338986c08eb1acf"
+      }
+    },
+    {
+      "name": "key request",
+      "kind": "key-request",
+      "json": "{\"type\":\"key-request\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"collection\":\"LzN6TtXrOnOnnmRGstN3UQ\",\"participant\":\"L7aKBVrqCDqSmx4VPLvGYde8E4bzaAceLRxmG-VZJx0\",\"have\":\"VJLkfJaWSzoObTNIzC3bSdGoWJSTPSo7j83JE4dd3L0\",\"signer\":\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\",\"auth\":\"_AEwKSG6slHFbWdnkYN3axB5o6Sc0nfDbMB7H9e6lbg\",\"sig\":\"syehtDCALBMNFjQkBo-y_Vw7VeYf0Ikoxh2yasc57vNZn2jmBVBsFEwgAzGAkcWmY4NGlORWQhPlAm0qise8CA\"}",
+      "input": "54414e44454d2d4b45595245512d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5282f337a4ed5eb3a73a79e6446b2d377512fb68a055aea083a929b1e153cbbc661d7bc1386f368071e2d1c661be559271d5492e47c96964b3a0e6d3348cc2ddb49d1a85894933d2a3b8fcdc913875ddcbd297cf998172dd7283972263c58ff75b8afa27a593e2bef68bd2b7304a40ef7c4fc01302921bab251c56d67679183776b1079a3a49cd277c36cc07b1fd7ba95b8",
+      "id": "5c7be3af713a197905abb8eeb19a2f2ae33e18e470ee7184ff25de8cfee755ac",
+      "signers": {
+        "sig": "53b130d653a18ad662339a3efcfc9545c271ebea4c9d0e46b7824e98cea9fad5"
+      }
+    },
+    {
+      "name": "leave",
+      "kind": "leave",
+      "json": "{\"type\":\"leave\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"collection\":\"LzN6TtXrOnOnnmRGstN3UQ\",\"participant\":\"L7aKBVrqCDqSmx4VPLvGYde8E4bzaAceLRxmG-VZJx0\",\"at\":\"VJLkfJaWSzoObTNIzC3bSdGoWJSTPSo7j83JE4dd3L0\",\"signer\":\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\",\"auth\":\"_AEwKSG6slHFbWdnkYN3axB5o6Sc0nfDbMB7H9e6lbg\",\"sig\":\"2g04uOp2NG1OjT4NucCc8eBZHDm02mi1VNjAs3PtvoTfrXnxNhnRLpNkCALGssTHQsohG5raRvQZeRhgzP0pBQ\"}",
+      "input": "54414e44454d2d4c454156452d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5282f337a4ed5eb3a73a79e6446b2d377512fb68a055aea083a929b1e153cbbc661d7bc1386f368071e2d1c661be559271d5492e47c96964b3a0e6d3348cc2ddb49d1a85894933d2a3b8fcdc913875ddcbd297cf998172dd7283972263c58ff75b8afa27a593e2bef68bd2b7304a40ef7c4fc01302921bab251c56d67679183776b1079a3a49cd277c36cc07b1fd7ba95b8",
+      "id": "a97b63445aaba1ac9c864a3e8f8aa28a29fa85470f83c7d523488287b05a8dd8",
+      "signers": {
+        "sig": "53b130d653a18ad662339a3efcfc9545c271ebea4c9d0e46b7824e98cea9fad5"
+      }
+    },
+    {
+      "name": "answer",
+      "kind": "answer",
+      "json": "{\"type\":\"answer\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"collection\":\"LzN6TtXrOnOnnmRGstN3UQ\",\"participant\":\"L7aKBVrqCDqSmx4VPLvGYde8E4bzaAceLRxmG-VZJx0\",\"admission\":\"VJLkfJaWSzoObTNIzC3bSdGoWJSTPSo7j83JE4dd3L0\",\"answer\":\"a\",\"event\":\"vjO3ZVzyrH5l-CRuxtTsOQ\",\"signer\":\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\",\"auth\":\"_AEwKSG6slHFbWdnkYN3axB5o6Sc0nfDbMB7H9e6lbg\",\"sig\":\"I6MM16Na9jMLlEG30msY_kDAki6PrbcyYgmsvMp49G4dxYFB9oAbow1ZRtXH8OJ3T1SiI4p6WTkg_mtINQlnAw\"}",
+      "input": "54414e44454d2d414e535745522d5632c56bf937d90502c98bd109fb2ee4c5e5c0bbc50fb2e075e8a5c70dd0c343c5282f337a4ed5eb3a73a79e6446b2d377512fb68a055aea083a929b1e153cbbc661d7bc1386f368071e2d1c661be559271d5492e47c96964b3a0e6d3348cc2ddb49d1a85894933d2a3b8fcdc913875ddcbd61be33b7655cf2ac7e65f8246ec6d4ec39297cf998172dd7283972263c58ff75b8afa27a593e2bef68bd2b7304a40ef7c4fc01302921bab251c56d67679183776b1079a3a49cd277c36cc07b1fd7ba95b8",
+      "id": "9f452765a95efab268798c865303c301c3b641784c7bc41f0389bc93f28bb3ed",
+      "signers": {
+        "sig": "53b130d653a18ad662339a3efcfc9545c271ebea4c9d0e46b7824e98cea9fad5"
+      }
+    }
+  ],
+  "rejects": [
+    {
+      "why": "unknown type",
+      "json": "{\"type\":\"revocations\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"target\":\"qP9DqcuA0H3mUbyprsVGQsOUMfWXfOJHR0GxA6Kj1aM\",\"retained\":[\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\"],\"sig\":\"9xfJUm9htGE-8FIZxFMasGIeIMKobYTVtAU-8BCaakhHQLZFwHWd7n3i7wraoFFXauc4XlF65gQQqYUINQYvDg\"}"
+    },
+    {
+      "why": "missing field",
+      "json": "{\"type\":\"revocation\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"retained\":[\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\"],\"sig\":\"9xfJUm9htGE-8FIZxFMasGIeIMKobYTVtAU-8BCaakhHQLZFwHWd7n3i7wraoFFXauc4XlF65gQQqYUINQYvDg\"}"
+    },
+    {
+      "why": "missing signature",
+      "json": "{\"type\":\"revocation\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"target\":\"qP9DqcuA0H3mUbyprsVGQsOUMfWXfOJHR0GxA6Kj1aM\",\"retained\":[\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\"]}"
+    },
+    {
+      "why": "set not sorted",
+      "json": "{\"type\":\"revocation\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"target\":\"qP9DqcuA0H3mUbyprsVGQsOUMfWXfOJHR0GxA6Kj1aM\",\"retained\":[\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\",\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"],\"sig\":\"9xfJUm9htGE-8FIZxFMasGIeIMKobYTVtAU-8BCaakhHQLZFwHWd7n3i7wraoFFXauc4XlF65gQQqYUINQYvDg\"}"
+    },
+    {
+      "why": "set with a duplicate",
+      "json": "{\"type\":\"revocation\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"target\":\"qP9DqcuA0H3mUbyprsVGQsOUMfWXfOJHR0GxA6Kj1aM\",\"retained\":[\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\",\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\"],\"sig\":\"9xfJUm9htGE-8FIZxFMasGIeIMKobYTVtAU-8BCaakhHQLZFwHWd7n3i7wraoFFXauc4XlF65gQQqYUINQYvDg\"}"
+    },
+    {
+      "why": "id of the wrong length",
+      "json": "{\"type\":\"revocation\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"target\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"retained\":[\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\"],\"sig\":\"9xfJUm9htGE-8FIZxFMasGIeIMKobYTVtAU-8BCaakhHQLZFwHWd7n3i7wraoFFXauc4XlF65gQQqYUINQYvDg\"}"
+    },
+    {
+      "why": "id in a second spelling",
+      "json": "{\"type\":\"revocation\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"target\":\"qP9DqcuA0H3mUbyprsVGQsOUMfWXfOJHR0GxA6Kj1aM=\",\"retained\":[\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\"],\"sig\":\"9xfJUm9htGE-8FIZxFMasGIeIMKobYTVtAU-8BCaakhHQLZFwHWd7n3i7wraoFFXauc4XlF65gQQqYUINQYvDg\"}"
+    },
+    {
+      "why": "signature of the wrong length",
+      "json": "{\"type\":\"revocation\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"target\":\"qP9DqcuA0H3mUbyprsVGQsOUMfWXfOJHR0GxA6Kj1aM\",\"retained\":[\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\"],\"sig\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+    },
+    {
+      "why": "uppercase mailbox host",
+      "json": "{\"type\":\"genesis\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"hubkey\":\"lw-VyxQmbcegQ6qVOnFXx8FDq5EDwvA9m7SNSMk7ygc\",\"creator\":\"ljzy8Xni3z3PHgqKo1Oz8qXkwnjDbxQE-U6qZUAcdBM\",\"mailboxes\":[{\"host\":\"IMAP.EXAMPLE.ORG\",\"port\":993,\"user\":\"hub@example.org\"}],\"sig\":\"xioHiRzpjSykTK4MczquRzlRsvjYKxh8f5hPboPEglgVYGiEv4I3GcMhK9zQKLwxznZwUbaOnSIcr05RenjFAA\"}"
+    },
+    {
+      "why": "mailboxes not sorted",
+      "json": "{\"type\":\"genesis\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"hubkey\":\"lw-VyxQmbcegQ6qVOnFXx8FDq5EDwvA9m7SNSMk7ygc\",\"creator\":\"ljzy8Xni3z3PHgqKo1Oz8qXkwnjDbxQE-U6qZUAcdBM\",\"mailboxes\":[{\"host\":\"imap.fastmail.com\",\"port\":993,\"user\":\"hub@example.org\"},{\"host\":\"imap.example.org\",\"port\":993,\"user\":\"hub@example.org\"}],\"sig\":\"xioHiRzpjSykTK4MczquRzlRsvjYKxh8f5hPboPEglgVYGiEv4I3GcMhK9zQKLwxznZwUbaOnSIcr05RenjFAA\"}"
+    },
+    {
+      "why": "text over 256 bytes",
+      "json": "{\"type\":\"invitation\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"key\":\"gVQitOzmRO55nJKdsLG0HrLMWQ1kCnTBtFwluXpSKQY\",\"invite\":\"MDvCLujxodPHwc4aLCagGA\",\"expires\":1800000000000,\"label\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"sig\":\"Juvsho3MCF_lvvK6QJfSo5DGnQQ1ixl3-WKDN0dQyg3w_4w7bsKXtX3VOskpweSWCgemjPTgufRLwNgfiPEgBA\"}"
+    },
+    {
+      "why": "number out of range",
+      "json": "{\"type\":\"receipt\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"outcome\":256,\"subject\":\"W7zl_3Gad3MopG3wWSw9ou6aJhrQii9bA5WWYqYCRLk\",\"signer\":null,\"sig\":\"QZTY-U8UGrhQ1dcDRApo1OkPa6fwmri9oszBGeUIftXCXO5Qoa_PKZGERijzGHh-P_lYNKq4gQ0DmwqyNZblDw\"}"
+    },
+    {
+      "why": "answer other than a, n or l",
+      "json": "{\"type\":\"answer\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"collection\":\"LzN6TtXrOnOnnmRGstN3UQ\",\"participant\":\"L7aKBVrqCDqSmx4VPLvGYde8E4bzaAceLRxmG-VZJx0\",\"admission\":\"VJLkfJaWSzoObTNIzC3bSdGoWJSTPSo7j83JE4dd3L0\",\"answer\":\"y\",\"event\":\"vjO3ZVzyrH5l-CRuxtTsOQ\",\"signer\":\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\",\"auth\":\"_AEwKSG6slHFbWdnkYN3axB5o6Sc0nfDbMB7H9e6lbg\",\"sig\":\"I6MM16Na9jMLlEG30msY_kDAki6PrbcyYgmsvMp49G4dxYFB9oAbow1ZRtXH8OJ3T1SiI4p6WTkg_mtINQlnAw\"}"
+    },
+    {
+      "why": "an all-zero optional id",
+      "json": "{\"type\":\"receipt\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"genesis\":\"b2avjYQC38lCWd852nqXiEdeDTHs_Diy_8yBdAbh6qY\",\"outcome\":3,\"subject\":\"W7zl_3Gad3MopG3wWSw9ou6aJhrQii9bA5WWYqYCRLk\",\"signer\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"sig\":\"QZTY-U8UGrhQ1dcDRApo1OkPa6fwmri9oszBGeUIftXCXO5Qoa_PKZGERijzGHh-P_lYNKq4gQ0DmwqyNZblDw\"}"
+    },
+    {
+      "why": "a property twice",
+      "json": "{\"type\":\"answer\",\"hub\":\"xWv5N9kFAsmL0Qn7LuTF5cC7xQ-y4HXopccN0MNDxSg\",\"collection\":\"LzN6TtXrOnOnnmRGstN3UQ\",\"participant\":\"L7aKBVrqCDqSmx4VPLvGYde8E4bzaAceLRxmG-VZJx0\",\"admission\":\"VJLkfJaWSzoObTNIzC3bSdGoWJSTPSo7j83JE4dd3L0\",\"answer\":\"a\",\"event\":\"vjO3ZVzyrH5l-CRuxtTsOQ\",\"signer\":\"KXz5mBct1yg5ciY8WP91uK-ielk-K-9ovStzBKQO98Q\",\"auth\":\"_AEwKSG6slHFbWdnkYN3axB5o6Sc0nfDbMB7H9e6lbg\",\"sig\":\"I6MM16Na9jMLlEG30msY_kDAki6PrbcyYgmsvMp49G4dxYFB9oAbow1ZRtXH8OJ3T1SiI4p6WTkg_mtINQlnAw\",\"sig\":\"I6MM16Na9jMLlEG30msY_kDAki6PrbcyYgmsvMp49G4dxYFB9oAbow1ZRtXH8OJ3T1SiI4p6WTkg_mtINQlnAw\"}"
+    }
+  ]
+}

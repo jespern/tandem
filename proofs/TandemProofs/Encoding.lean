@@ -200,17 +200,24 @@ theorem sigInput_inj {f g : SigFields} (hf : f.wf) (hg : g.wf) (h : sigInput f =
 
 /-! ## Domain separation -/
 
-/-- Prefixes of signed inputs and AEAD associated data that the design fixes so far (§5.5,
-§6.7). The other signed objects' prefixes are part of Q28 (§18) and join this list when they
-are fixed. -/
+/-- Prefixes of signed inputs and AEAD associated data (§5.5, §6.7, §10.8). -/
 def signedTags : List String :=
-  ["TANDEM-WRITE-V2", "TANDEM-ADMIN-CAPSULE-V2"]
+  ["TANDEM-WRITE-V2", "TANDEM-ADMIN-CAPSULE-V2",
+   "TANDEM-GENESIS-V2", "TANDEM-CAPSULE-V2", "TANDEM-REQUEST-V2", "TANDEM-CERT-V2",
+   "TANDEM-REVOKE-V2", "TANDEM-INVITE-V2", "TANDEM-DELEGATION-V2", "TANDEM-RECEIPT-V2",
+   "TANDEM-HOME-EPOCH-V2", "TANDEM-GRANT-V2", "TANDEM-KEYREQ-V2", "TANDEM-LEAVE-V2",
+   "TANDEM-ANSWER-V2", "TANDEM-PAIR-PACKAGE-V2", "TANDEM-PAIR-GATE-V2", "TANDEM-HOME-RECOVERY-V2"]
 
-/-- Labels hashed in front of data: key IDs, key commitments, named record IDs, home scopes
-(§5.4, §5.7, §7.3, §6.2). Write IDs hash `sigInput`, which starts with `TANDEM-WRITE-V2`, so it
-joins them. -/
+/-- Labels hashed in front of data: key IDs, key commitments, named record IDs, home and
+directory scopes, participant registrations and authorization snapshots (§5.4, §5.7, §7.3, §6.2,
+§10.8). Every object ID hashes its signed input, so the signed tags join them. -/
 def hashTags : List String :=
-  ["TANDEM-WRITE-V2", "tandem/v2/kid", "tandem/v2/commit", "tandem/v2/named", "tandem/v2/home"]
+  ["TANDEM-WRITE-V2", "tandem/v2/kid", "tandem/v2/commit", "tandem/v2/named", "tandem/v2/home",
+   "tandem/v2/directory", "tandem/v2/auth-snapshot", "TANDEM-REGISTRATION-V2",
+   "TANDEM-GENESIS-V2", "TANDEM-CAPSULE-V2", "TANDEM-REQUEST-V2", "TANDEM-CERT-V2",
+   "TANDEM-REVOKE-V2", "TANDEM-INVITE-V2", "TANDEM-DELEGATION-V2", "TANDEM-RECEIPT-V2",
+   "TANDEM-HOME-EPOCH-V2", "TANDEM-GRANT-V2", "TANDEM-KEYREQ-V2", "TANDEM-LEAVE-V2",
+   "TANDEM-ANSWER-V2"]
 
 def PrefixFree (l : List String) : Prop :=
   ∀ a ∈ l, ∀ b ∈ l, a ≠ b → ¬ a.toList <+: b.toList
@@ -238,7 +245,8 @@ theorem hash_domains_separate {a b : String} (ha : a ∈ hashTags) (hb : b ∈ h
 
 /-- HKDF uses, as (input key, info label) (§5.3, §5.4, §5.6, §6.3, §6.7). The same `info` is
 used twice only with different input keys. `DirK` is the directory key, `PairK` a pairing
-session key, `CK` the stretched hub password. -/
+session key, `L` a pairing link secret, `s` an invitation secret, `CK` the stretched hub
+password. -/
 def kdfUses : List (String × String) :=
   [("MS", "tandem/v2/manager-sign"), ("MS", "tandem/v2/manager-agree"),
    ("CK", "tandem/v2/admin-capsule"),
@@ -248,6 +256,8 @@ def kdfUses : List (String × String) :=
    ("DirK", "tandem/v2/msg"),
    ("PairK", "tandem/v2/msg"),
    ("L || A", "tandem/v2/pair-package"),
+   ("L", "tandem/v2/pair-invite"), ("L", "tandem/v2/pair-key"), ("L", "tandem/v2/pair-tag"),
+   ("s", "tandem/v2/invite-key"),
    ("uid", "tandem/v2/inbox-tag")]
 
 /-- From any one input key, every derived key has its own label. -/

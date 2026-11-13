@@ -8,13 +8,12 @@ Public, deterministic test material, shared by all four SDKs.
 | `ed25519.json` | Version-independent strict verification cases, carried from the v1 harness, including valid mixed-order cases and forbidden encodings. |
 | `json.json` | Version-independent strict JSON acceptance/rejection cases from the v1 harness. |
 | `b64u.json` | Version-independent canonical base64url cases from the v1 harness. |
+| `control.json` | The control-object schema of §10.8, one small hub's signed objects (genesis, capsules, registrations, requests, certificates, an invitation, a pairing with its package and gate, receipts, a revocation, an authorization snapshot, a home epoch, a grant, a key request, a leave notice and an answer), derivations, sealed boxes, and JSON every reader must reject. |
 
-Regenerate with `sdk/python/.venv/bin/python -B vectors/v2/generate.py`. Use `--check`
+Regenerate with `sdk/python/.venv/bin/python -B vectors/v2/generate.py` and `vectors/v2/generate_control.py`. Use `--check`
 to detect drift. The generator uses fixed public test keys and explicit test-only
 salt/ephemeral material; SDK sealing APIs always draw fresh random material.
 
 The full [SDK check](../../sdk/README.md#checks) also tests native encryption and
 signing in all 16 sender/receiver combinations with temporary artifacts, and can
-compare the shared merge relation against Lean. These are core vectors, not a
-final v2 control-object schema: invitations, certificates and other Q28 formats
-are deliberately absent.
+compare the shared merge relation against Lean.
