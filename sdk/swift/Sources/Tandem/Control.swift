@@ -356,28 +356,40 @@ extension ControlObject {
 }
 
 /// Compact JSON written like Python's `json.dumps(ensure_ascii=False, separators=(",", ":"))`,
-/// so every SDK writes a control object with the same bytes.
-struct JSONWriter {
-    var bytes = Bytes()
+/// so every SDK writes protocol JSON with the same bytes.
+public struct JSONWriter: Sendable {
+    public private(set) var bytes = Bytes()
     var first = [true]
 
-    mutating func comma() { if first[first.count - 1] { first[first.count - 1] = false } else { bytes.append(0x2c) } }
-    mutating func open() { bytes.append(0x7b); first.append(true) }
-    mutating func close() { bytes.append(0x7d); first.removeLast() }
-    mutating func raw(_ s: String) { bytes += Bytes(s.utf8) }
-    mutating func raw(_ b: Bytes) { bytes += b }
+    public init() {}
 
-    mutating func member(_ name: String, _ value: (inout JSONWriter) -> Void) {
+    /// One object: `build` adds its members in order.
+    public static func object(_ build: (inout JSONWriter) -> Void) -> Bytes {
+        var w = JSONWriter(); w.open(); build(&w); w.close(); return w.bytes
+    }
+
+    public mutating func member(_ name: String, b64u value: Bytes) { member(name) { $0.string(Bytes(B64u.encode(value).utf8)) } }
+    public mutating func member(_ name: String, text value: Bytes) { member(name) { $0.string(value) } }
+    public mutating func member(_ name: String, int value: UInt64) { member(name) { $0.raw(String(value)) } }
+    public mutating func member(_ name: String, json value: Bytes) { member(name) { $0.raw(value) } }
+
+    mutating func comma() { if first[first.count - 1] { first[first.count - 1] = false } else { bytes.append(0x2c) } }
+    public mutating func open() { bytes.append(0x7b); first.append(true) }
+    public mutating func close() { bytes.append(0x7d); first.removeLast() }
+    public mutating func raw(_ s: String) { bytes += Bytes(s.utf8) }
+    public mutating func raw(_ b: Bytes) { bytes += b }
+
+    public mutating func member(_ name: String, _ value: (inout JSONWriter) -> Void) {
         comma(); string(Bytes(name.utf8)); bytes.append(0x3a); value(&self)
     }
 
-    mutating func array<T>(_ xs: [T], _ each: (inout JSONWriter, T) -> Void) {
+    public mutating func array<T>(_ xs: [T], _ each: (inout JSONWriter, T) -> Void) {
         bytes.append(0x5b); first.append(true)
         for x in xs { comma(); each(&self, x) }
         bytes.append(0x5d); first.removeLast()
     }
 
-    mutating func string(_ s: Bytes) {
+    public mutating func string(_ s: Bytes) {
         bytes.append(0x22)
         for c in s {
             switch c {
