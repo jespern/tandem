@@ -204,10 +204,14 @@ Conformance tests check the real primitives,
 and mail-transport probes check real servers.
 The step-by-step procedures, such as rotating a key after a crash,
 and the mail binding itself are tested rather than proved.
-Development SDKs in Go, Python, TypeScript and Swift implement the protocol core
+SDKs in Go, Python, TypeScript and Swift implement the protocol core and the complete wire format,
 and check each other’s signatures and envelopes.
-The complete wire format, a production implementation
-and an independent security review are still to come.
+A <a href="https://github.com/jespern/tandem/tree/main/sdk/swift">production engine in Swift</a>
+runs whole hubs over IMAP, live:
+sharing, pairing, removing devices and changing keys,
+with a crash tested at every step of a key change.
+An adversarial review of it found seven bugs, each now fixed and pinned by a test.
+An independent security review by people is still to come.
 </p>
 
 <h2 id="airforce">Why .airforce?</h2>
