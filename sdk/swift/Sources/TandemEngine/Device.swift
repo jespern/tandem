@@ -13,7 +13,7 @@ public struct Me: Sendable {
 /// One installation on one hub (§6). Everything it knows is in its `Store`; everything it shares goes
 /// through its `PushStore`. Work happens on a push, a local action or `sync()`, never on a timer.
 public actor Device {
-    public let pin: HubPin
+    public nonisolated let pin: HubPin
     let store: Store
     let hub: any PushStore
     let directoryKey: Bytes

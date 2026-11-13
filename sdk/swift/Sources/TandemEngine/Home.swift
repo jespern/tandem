@@ -99,6 +99,7 @@ extension Device {
             }
             guard !entries.isEmpty else { return .ignored }
             try merge(entries, record: state.record, scope: scope)
+            try store.noteContents(message: m.id, record: state.record, writes: entries.map(\.id))
             return .applied
         default:
             return .ignored
@@ -247,12 +248,21 @@ extension Device {
         changed(.home)
         if name.hasPrefix("membership:") { changed(.lists) }
         flushEvents()
+        try await publishHome(record, epoch: epoch, writes: home[record]?.kept.map(\.write) ?? writes)
+    }
+
+    /// One home record's state, in a home epoch's channel (§10.7).
+    func publishHome(_ record: Bytes, epoch: ID, writes: [Write]) async throws {
+        guard let me, let key = homeKeys[epoch] else { return }
         let tag = Tandem.homeTag(key: key, hub: pin.hub, uid: me.participant, epoch: epoch)
         let envelope = try Envelope.seal(key: key, hub: pin.hub, kind: 1, tag: tag,
                                          plaintext: try recordPayload(record: record, writes: writes))
         let id = try await hub.append(channel: tag, body: envelope)
-        try store.noteMessage(id: id, channel: tag, hash: H(envelope))
-        try store.markApplied(id)
+        try store.transaction {
+            try store.noteMessage(id: id, channel: tag, hash: H(envelope))
+            try store.markApplied(id)
+            try store.noteContents(message: id, record: record, writes: try writes.map { try $0.id() })
+        }
     }
 
     private func sign(me: Me, scope: Bytes, record: ID, epoch: ID, field: String, op: Op, value: Bytes, element: Bytes?,

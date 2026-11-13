@@ -162,6 +162,13 @@ public final class Store: @unchecked Sendable {
         }
     }
 
+    /// The hub messages of one channel this device merged, with their envelope hashes (§10.7).
+    public func merged(channel: String) throws -> [(id: String, hash: Bytes)] {
+        var out: [(String, Bytes)] = []
+        try run("SELECT id, hash FROM messages WHERE channel = ? ORDER BY rowid", [.text(channel)]) { out.append((Self.text($0, 0), Self.blob($0, 1))) }
+        return out
+    }
+
     /// The hub messages known in one channel, oldest first.
     public func messages(channel: String) throws -> [String] {
         var out: [String] = []

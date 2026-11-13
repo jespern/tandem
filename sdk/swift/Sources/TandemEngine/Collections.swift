@@ -174,7 +174,8 @@ extension Device {
         changed(.items(list: cid, records: [record]))
         if record == Self.meta { changed(.lists) }
         flushEvents()
-        try await publish(cid: cid, epoch: epoch, record: record, writes: writes)
+        // A record is published with its whole current state, so this message dominates the ones before it (§10.7).
+        try await publish(cid: cid, epoch: epoch, record: record, writes: r.kept.map(\.write))
     }
 
     private func signRecord(_ c: CollectionState, me: Me, record: Bytes, field: Bytes, op: Op, value: Bytes, element: Bytes?,
