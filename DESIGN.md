@@ -1102,7 +1102,7 @@ A device that already follows the collection checks the roster it is given again
 
 A device learning of an epoch whose key it lacks waits for normal grant delivery. After 10 minutes it may send one request to the owner's admitted device inboxes and post it as a kind-3 notice in the last epoch channel it can read. This timeout is a safety net behind grant/channel events, not a polling schedule. Owner devices keep watching earlier epoch tags through one hub change feed. Revoked devices receive no new key even if their participant remains a collection member; a stale certificate cannot be used as a key-request alias.
 
-Any device of the owner answers. A currently admitted device of a current member gets the current key in an envelope bound to that exact recipient certificate. Someone since removed gets no key. They get `{ "type": "roster", "c", "statements": [ … ] }`: the signed roster statements from `have` up to the one that removed them, which prove themselves and are how a device that was away for several epochs learns of its removal. Answering is not a roster change, so two devices answering is harmless.
+Any device of the owner answers. A currently admitted device of a current member gets the current key in an envelope bound to that exact recipient certificate. Someone since removed gets no key. They get the roster reply of §10.8: the signed roster statements from `have` up to the one that removed them, which prove themselves and are how a device that was away for several epochs learns of its removal. Answering is not a roster change, so two devices answering is harmless.
 
 ### 11.5 Leaving
 
