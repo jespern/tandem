@@ -43,7 +43,25 @@ func (d *Device) Revoke(ctx context.Context, certificate, ms []byte) error {
 	if _, err := d.registry.Add(snapshot); err != nil {
 		return err
 	}
+	// Journalled with its exact bytes before it leaves: a revocation this device shows must reach
+	// the hub, so an interrupted one is sent by the next sync (§6.4 step 1, §6.9).
+	var out []tagged
+	for _, o := range []*tandem.Control{r, snapshot} {
+		j, err := cjson(o)
+		if err != nil {
+			return err
+		}
+		env, err := tandem.Seal(d.directoryChannelKey(), d.pin.Hub, tandem.KindRequest, d.directoryTag(), j)
+		if err != nil {
+			return err
+		}
+		out = append(out, tagged{d.directoryTag(), env})
+	}
+	step := "revoke." + hexs(oid(r))
 	err = d.store.Transaction(func() error {
+		if err := d.store.SetJournal(step, pack(out)); err != nil {
+			return err
+		}
 		for _, o := range []*tandem.Control{r, snapshot} {
 			if _, err := d.store.PutObject(o); err != nil {
 				return err
@@ -54,7 +72,7 @@ func (d *Device) Revoke(ctx context.Context, certificate, ms []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := d.publishObjects(ctx, r, snapshot); err != nil {
+	if err := d.export(ctx, out, step); err != nil {
 		return err
 	}
 	return d.followUp(ctx)

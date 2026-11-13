@@ -112,6 +112,22 @@ func TestSecondReviewARevokedKeychainCantBranchTheHome(t *testing.T) {
 	}
 }
 
+// 3. The admin's revocation can't reach the hub; after a restart the device sends it, and the others see it.
+func TestSecondReviewAnInterruptedRevocationIsSentLater(t *testing.T) {
+	w := newSecondWorld(t, false)
+	store := MemoryStore()
+	admin := open(t, w.f, nil, store, failingAppends{w.hub.Connect()})
+	syncAll(t, admin)
+	if err := admin.Revoke(bg, w.tabletCert, w.f.ManagementSeed); err == nil {
+		t.Fatal("offline")
+	}
+	again := open(t, w.f, nil, store, w.hub.Connect())
+	syncAll(t, again, w.phone)
+	if v := w.phone.Registry().Activity(w.tabletCert); !v.Is("revoked") {
+		t.Fatal(v)
+	}
+}
+
 // Liveness and crash safety
 
 type bobAndCarol struct {

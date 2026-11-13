@@ -527,7 +527,7 @@ func (d *Device) Reject(ctx context.Context, claim, ms []byte) error {
 	return d.keepReceipt(ctx, r)
 }
 
-// finishJournals finishes approvals and home rekeys a crash interrupted: lost
+// finishJournals finishes approvals, home rekeys and revocations a crash interrupted: lost
 // acknowledgements retry the same bytes (§6.3 step 4).
 func (d *Device) finishJournals(ctx context.Context) error {
 	steps, err := d.store.JournalSteps()
@@ -535,7 +535,7 @@ func (d *Device) finishJournals(ctx context.Context) error {
 		return err
 	}
 	for _, step := range steps {
-		if !strings.HasPrefix(step, "approve.") && !strings.HasPrefix(step, "home.") {
+		if !strings.HasPrefix(step, "approve.") && !strings.HasPrefix(step, "home.") && !strings.HasPrefix(step, "revoke.") {
 			continue
 		}
 		j, ok := d.store.Journal(step)
