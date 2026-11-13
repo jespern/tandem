@@ -12,7 +12,7 @@ One `Device` per installation per hub, an actor. Everything it knows is in a `St
 | Password stretching | `Argon2id` in the core, for the admin capsule | §6.7 | In progress on `swift/argon2` |
 | Registry | `Registry`: certificates, revocations, snapshots, floors | §6.9 | **Done**, tested against the vectors and the Lean attacks |
 | Durable state | `Store`: values, control objects, message index, writes, journal; SQLite from the SDK (`import SQLite3`, a system library), WAL with full synchronous commits | §11.6 journal rules | **Done** (tables and transactions; the engine decides what goes in them) |
-| Hub authority | genesis pin, directory channel, capsule unlock, profiles | §5.3, §6.6–6.8, §10.8 | Founding **done** (`Founder`: genesis, creator certificate, snapshot, first home epoch, inbox delivery, recovery box); capsule waits on Argon2id; publishing and the directory reader to do |
+| Hub authority | genesis pin, directory channel, capsule unlock, profiles | §5.3, §6.6–6.8, §10.8 | Founding **done** (`Founder`: genesis, creator certificate, snapshot, first home epoch, inbox delivery, recovery box); capsule waits on Argon2id. `Device` publishes a founding (journal first, no duplicates on resume) and syncs the directory channel into its registry **done** |
 | Homes | home epochs (several heads), home records, recovery box | §6.2, §10.8 | To do |
 | Collections | roster chain (statement JSON v2), epochs, inventories, data writes, merge, grants, answers, leave, key requests | §7–9, §11 | To do; port `testbed:sdk/go/device` (rotate.go, resign.go, ops.go) |
 | Flows | create hub, accept invitation, pair (both sides), approve/reject, revoke, share, rotate | §6.1–6.4, §11, §13 | To do |
@@ -29,7 +29,7 @@ One `Device` per installation per hub, an actor. Everything it knows is in a `St
 ## Order of work
 
 1. ~~Registry~~.
-2. `MemoryHub` and `Store`; a `Device` that creates a hub (genesis, creator certificate, capsule, first home epoch) and another device that opens it from the saved setup.
+2. ~~`MemoryHub` and `Store`; a `Device` that founds a hub and another that reads it~~ (the capsule follows Argon2id).
 3. Collections end to end on one participant's two devices: create a list, write records, see them on the other device.
 4. Invitations: a second participant joins; sharing, answering, grants, leave.
 5. Pairing with approval and rejection; revocation with home and list rekeys.
