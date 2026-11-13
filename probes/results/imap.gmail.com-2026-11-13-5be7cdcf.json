@@ -1,0 +1,61 @@
+{
+  "capabilities": [
+    "APPENDLIMIT=35651584",
+    "CHILDREN",
+    "COMPRESS=DEFLATE",
+    "CONDSTORE",
+    "ENABLE",
+    "ESEARCH",
+    "ID",
+    "IDLE",
+    "IMAP4REV1",
+    "LIST-EXTENDED",
+    "LIST-STATUS",
+    "LITERAL-",
+    "MOVE",
+    "NAMESPACE",
+    "QUOTA",
+    "SPECIAL-USE",
+    "UIDPLUS",
+    "UNSELECT",
+    "UTF8=ACCEPT",
+    "X-GM-EXT-1",
+    "XLIST"
+  ],
+  "cleanup": "clean",
+  "compare": {
+    "reidle-2s": [
+      {
+        "pushed": 8.495,
+        "restarts": 3
+      },
+      {
+        "pushed": 8.541,
+        "restarts": 3
+      },
+      {
+        "pushed": 8.836,
+        "restarts": 3
+      }
+    ]
+  },
+  "date": "2026-11-13",
+  "has": {
+    "CONDSTORE": true,
+    "LITERAL+": false,
+    "LITERAL-": true,
+    "MOVE": true,
+    "MULTIAPPEND": false,
+    "NAMESPACE": true,
+    "QRESYNC": false,
+    "SPECIAL-USE": true
+  },
+  "host": "imap.gmail.com",
+  "missing_required": [],
+  "port": 993,
+  "run": "5be7cdcf",
+  "special_folders": {
+    "\\All": "[Gmail]/All Mail",
+    "\\Trash": "[Gmail]/Trash"
+  }
+}
