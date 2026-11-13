@@ -16,8 +16,8 @@ extension Device {
     /// Add `participant` to a list this participant owns, as a writer or reader, in the current epoch, and send them a grant.
     public func share(list cid: Bytes, with participant: ID, role: Statement.Role, name: String = "") async throws {
         guard role != .owner, let me, var c = collections[cid], !c.dead, c.owner == me.participant, let head = c.head,
-              let current = c.statements[head], let epoch = c.epoch(of: head), let key = c.keys[epoch]
-        else { throw TandemError.invalid("share: not a list this participant owns") }
+              let current = c.statements[head], let epoch = c.epoch(of: head), let key = c.keys[epoch], !current.statement.deleted
+        else { throw TandemError.invalid("share: not a list this participant owns, or it was deleted") }
         if let note = flightNote(cid) { throw ChangeError.pending(note) }
         guard !current.statement.members.contains(where: { $0.uid == participant }) else { return }
         let floor = try await publishedSnapshot(of: participant)
@@ -150,5 +150,6 @@ extension Device {
         try await setHome(membership, field: "owner", value: owner)
         try await setHome(membership, field: "role", value: Bytes(member.role.rawValue.utf8))
         try await addHome(membership, field: "keys", element: Self.keyElement(epoch: o.epoch, key: o.key))
+        try await sendAnswer(cid, admission: o.admission, answer: UInt8(ascii: "a"), me: me)
     }
 }

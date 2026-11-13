@@ -137,7 +137,7 @@ extension Device {
         let edit: ([Statement.Member]) -> [Statement.Member] = { ms in
             ms.map { m in var m = m; if m.uid == participant { m.role = role }; return m }
         }
-        if rank(role) > rank(old) { try await sameEpoch(cid, edit: edit) } else { try await change(cid, what: "change a role", edit: edit) }
+        if rank(role) > rank(old) { try await sameEpoch(cid) { $0.members = edit($0.members) } } else { try await change(cid, what: "change a role", edit: edit) }
     }
 
     /// Start a new epoch with the same members: after a device revocation, or when the owner asks (§6.4, §11.6).
@@ -145,16 +145,17 @@ extension Device {
         try await change(cid, what: "a new key") { $0 }
     }
 
-    /// A same-epoch roster statement (§8.2): only adds access, keeps every floor.
-    func sameEpoch(_ cid: Bytes, edit: ([Statement.Member]) -> [Statement.Member]) async throws {
+    /// A same-epoch roster statement (§8.2): only adds access or deletes the list, keeps every floor.
+    func sameEpoch(_ cid: Bytes, edit: (inout Statement) -> Void) async throws {
         guard let me, var c = collections[cid], !c.dead, c.owner == me.participant, let head = c.head,
-              let current = c.statements[head], let epoch = c.epoch(of: head)
+              let current = c.statements[head], let epoch = c.epoch(of: head), !current.statement.deleted
         else { throw TandemError.invalid("roster: not a list this participant owns") }
         if let note = flightNote(cid) { throw ChangeError.pending(note) }
         var next = current.statement
         next.n += 1
         next.nonce = nil
-        next.members = edit(next.members).sorted { $0.uid.lexicographicallyPrecedes($1.uid) }
+        edit(&next)
+        next.members.sort { $0.uid.lexicographicallyPrecedes($1.uid) }
         var w = Write(hub: pin.hub, certificate: me.certificate, authorization: me.auth, scope: cid, record: Roster.record,
                       field: Roster.field, op: .assign, value: next.json(), author: me.participant, dot: try nextDot(me), ref: head)
         try w.sign(with: me.keys.signing)

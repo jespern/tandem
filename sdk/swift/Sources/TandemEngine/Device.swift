@@ -38,6 +38,8 @@ public actor Device {
     var receipts: [ID: ControlObject] = [:]
     /// This device's own claim, while it waits for the admin (§6.3).
     var pairing: PendingPairing?
+    /// Directory profiles, by record ID (§10.8).
+    var profiles: [Bytes: Record] = [:]
     /// Tests stop a key change here (§11.6's crash points).
     var crashPoint: String?
 
@@ -71,6 +73,16 @@ public actor Device {
                 home[r] = try Self.loadRecord(store: store, hub: pin.hub, scope: scope, record: r, epochs: homeEpochs,
                                               heads: heads.isEmpty ? nil : heads, inventories: inventories)
             }
+        }
+        let dirScope = Control.directoryScope(hub: pin.hub)
+        for record in try store.records(scope: dirScope) {
+            var r = try Record(hub: pin.hub, scope: dirScope, id: record)
+            try r.merge(try store.writes(scope: dirScope, record: record).compactMap { row -> Entry? in
+                guard case let .record(state) = try Kind1.parse(row.payload, hub: pin.hub, scope: dirScope), let w = state.writes.first
+                else { return nil }
+                return try Entry(w, epoch: pin.genesis, epochNumber: 0)
+            })
+            profiles[record] = r
         }
         collections = try Self.loadCollections(store: store, hub: pin.hub, home: home, inventories: inventories)
         for (_, data) in try store.values(prefix: "claim.") {
@@ -208,7 +220,11 @@ public actor Device {
 
     /// One message, by its channel: the directory, this participant's inbox, or a home epoch.
     func apply(_ m: Message) throws -> Outcome {
-        if m.channel == directoryTag { return try applyDirectory(m) ? .applied : .ignored }
+        if m.channel == directoryTag {
+            if let (kind, plaintext) = try? Envelope.open(key: directoryChannelKey, hub: pin.hub, tag: m.channel, envelope: m.body),
+               kind == 1 { return try applyProfile(plaintext) }
+            return try applyDirectory(m) ? .applied : .ignored
+        }
         guard let me else { return .waiting }
         if m.channel == Tandem.inboxTag(uid: me.participant, hub: pin.hub) { return try applyInbox(m, me) }
         for (epoch, key) in homeKeys where m.channel == Tandem.homeTag(key: key, hub: pin.hub, uid: me.participant, epoch: epoch) {

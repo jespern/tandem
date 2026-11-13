@@ -133,7 +133,7 @@ extension Device {
 
     /// The lists this participant is a member of, with their names where known: those its home records (§6.2).
     public func lists() -> [(id: Bytes, name: String?)] {
-        collections.values.filter { homeValue("membership:" + B64u.encode($0.id), field: "owner") != nil }.map { c in
+        collections.values.filter { following($0.id) }.map { c in
             (c.id, c.records[Self.meta]?.value(Bytes("name".utf8)).map { String(decoding: $0, as: UTF8.self) })
         }.sorted { $0.id.lexicographicallyPrecedes($1.id) }
     }
@@ -148,8 +148,9 @@ extension Device {
     public func isDead(list cid: Bytes) -> Bool { collections[cid]?.dead ?? false }
 
     func writeRecord(_ cid: Bytes, record: Bytes, field: Bytes, op: Op, value: Bytes = [], element: Bytes? = nil) async throws {
-        guard let me, var c = collections[cid], !c.dead, let head = c.head, let epoch = c.epoch(of: head), c.keys[epoch] != nil
-        else { throw TandemError.invalid("device: no such list, no key for its current epoch yet, or it can't sync any more") }
+        guard let me, var c = collections[cid], !c.dead, let head = c.head, let epoch = c.epoch(of: head), c.keys[epoch] != nil,
+              c.statements[head]?.statement.deleted == false
+        else { throw TandemError.invalid("device: no such list, no key for its current epoch yet, or it can't sync or was deleted") }
         guard let member = c.statements[head]?.statement.members.first(where: { $0.uid == me.participant }),
               member.role != .reader, record != Self.meta || member.role == .owner
         else { throw TandemError.invalid("device: this participant may not write here") }
@@ -302,9 +303,15 @@ extension Device {
     }
 
     func applyCollection(_ m: Message, cid: Bytes, epoch: ID, key: Bytes) throws -> Outcome {
-        guard let (kind, plaintext) = try? Envelope.open(key: key, hub: pin.hub, tag: m.channel, envelope: m.body), kind == 1,
-              let parsed = try? Kind1.parse(plaintext, hub: pin.hub, scope: cid)
-        else { return .ignored }
+        guard let (kind, plaintext) = try? Envelope.open(key: key, hub: pin.hub, tag: m.channel, envelope: m.body) else { return .ignored }
+        if kind == 3 {
+            guard let j = try? JSON.parse(plaintext), case let .string(type)? = j["type"] else { return .ignored }
+            switch String(decoding: type, as: UTF8.self) {
+            case "leave": return try receiveLeave(j, cid: cid)
+            default: return .ignored
+            }
+        }
+        guard kind == 1, let parsed = try? Kind1.parse(plaintext, hub: pin.hub, scope: cid) else { return .ignored }
         guard case let .record(state) = parsed else {
             guard case let .inventory(f) = parsed else { return .ignored }
             guard let s = collections[cid]?.statements[epoch]?.statement, let commitment = s.snapshot else { return .waiting }
