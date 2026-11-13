@@ -929,7 +929,7 @@ A device publishes a record by appending a kind-1 message with the record's curr
 
 ### 10.8 Control objects
 
-Everything that is not a record write is a **control object**: the hub's genesis, admin capsules, registrations, enrollment requests, certificates, revocations, invitation capabilities, pairing delegations, receipts, authorization snapshots, home-epoch starts, grants, key requests, leave notices and sharing answers. Each has a fixed signed input built only from the types below, and its ID is the hash of that input, so signatures never enter an ID (§5.5). Each signed input starts with its own `TANDEM-…-V2` tag; no tag is a prefix of another, so a signature for one kind can't be read as another (`proofs/TandemProofs/Encoding.lean`).
+Everything that is not a record write is a **control object**: the hub's genesis, admin capsules, registrations, enrollment requests, certificates, revocations, invitation capabilities, pairing delegations, receipts, authorization snapshots, home-epoch starts, grants, key requests, leave notices and sharing answers. Each has a fixed signed input built only from the types below, and its ID is the hash of that input, so signatures never enter an ID (§5.5). Each input starts with its own tag, `TANDEM-…-V2` for a signed object and a `tandem/v2/` label for the one hashed object, the authorization snapshot. No tag is a prefix of another, so a signature for one kind can't be read as another (`proofs/TandemProofs/Encoding.lean`).
 
 | Type | Bytes |
 |---|---|
@@ -937,9 +937,12 @@ Everything that is not a record write is a **control object**: the hub's genesis
 | `id16` | 16 bytes: a collection ID, an enrollment reference, a token or invite ID |
 | `text` | `lp(UTF-8)`; at most 256 bytes, compared as bytes (§10.5) |
 | `set` | `u32(n)` followed by `n` sorted, unique `id`s; at most 65,536 |
-| `none` | 32 zero bytes, where an `id` is optional |
+| `none` | 32 zero bytes, where an `id` is optional; an optional `id` that is all zeros is invalid |
+| `u8` … `u64` | Unsigned big-endian integers of that width; at most 2^53 in JSON |
+| `answer` | One ASCII byte: `a`, `n` or `l` |
+| `mailboxes` | `u32(n)`, then `n` entries `host` text, `port` u16, `user` text, sorted by their bytes and unique; at most 64. `host` is ASCII, lowercase (an IDNA A-label for a non-ASCII name) |
 
-**Transport.** A control object travels as one strict JSON object (§10.5) with `"type"` set to the name in the table, one property per field, named as in the table and spelled as follows: `id` and `id16` in b64u, `text` as a JSON string, integers as JSON numbers (a `u64` time is Unix milliseconds), a `set` as an array of b64u strings in its sorted order, `none` as JSON `null`, and each signature as b64u under the name the table gives. A reader rebuilds the signed input from the parsed fields, checks the signatures, and computes the ID itself; it never trusts an ID that came in a message.
+**Transport.** A control object travels as one strict JSON object (§10.5) with `"type"` set to the name in the table, one property per field, named as in the table and spelled as follows: `id` and `id16` in b64u, `text` as a JSON string, integers as JSON numbers (a `u64` time is Unix milliseconds), an `answer` as a one-letter JSON string, `mailboxes` as an array of `{"host","port","user"}` objects, a `set` as an array of b64u strings in its sorted order, `none` as JSON `null`, and each signature as b64u under the name the table gives. An optional signature that is absent is left out; a reader also takes `null` for it. A reader rebuilds the signed input from the parsed fields, checks the signatures, and computes the ID itself; it never trusts an ID that came in a message. Data an object carries beside its fields must match what they commit to: a capsule's `capsule` bytes must hash to `sealed`, and a certificate's `body` must be the request its `request` names. A reader rejects the object otherwise.
 
 #### The hub
 
@@ -949,7 +952,7 @@ Everything that is not a record write is a **control object**: the hub's genesis
 | `capsule`<br>`TANDEM-CAPSULE-V2` | `hub` id, `genesis` id, `sealed` id (`H(salt ‖ nonce ‖ ciphertext)`, §6.7), `supersedes` set (capsule IDs) | `MKs`, as `sig`; the JSON also carries `capsule`, the sealed bytes, in b64u | capsule ID |
 | `snapshot`<br>`tandem/v2/auth-snapshot` (hashed, not signed) | `hub` id, `genesis` id, `participant` id, `certs` set, `revocations` set | nobody | authorization snapshot ID (§6.9) |
 
-`mailboxes` lists the permitted descriptors without credentials; IMAP host names are compared lowercased. A device that pins a hub pins `hubID` and `genesisID` together and refuses a second genesis (§6.9). The capsule ID is what a later capsule names in `supersedes` (§6.7). An authorization snapshot is a hash, not a signature: anyone can publish one, and it means only the exact sets it names.
+`mailboxes` lists the permitted descriptors without credentials. A device that pins a hub pins `hubID` and `genesisID` together and refuses a second genesis (§6.9). The capsule ID is what a later capsule names in `supersedes` (§6.7). An authorization snapshot is a hash, not a signature: anyone can publish one, and it means only the exact sets it names.
 
 #### Participants and devices
 

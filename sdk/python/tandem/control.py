@@ -17,6 +17,7 @@ from .signature import verify_strict
 MAX_TEXT = 256
 MAX_SET = 65536
 MAX_JSON_INTEGER = 2**53
+MAX_MAILBOXES = 64
 
 
 def _f(name, kind):
@@ -88,8 +89,8 @@ def _need(cond, what):
 
 def _mailbox_bytes(m):
     host, port, user = m["host"], m["port"], m["user"]
-    _need(isinstance(host, str) and host == host.lower(), "mailbox host must be lowercase text")
-    _need(isinstance(port, int) and 0 < port < 65536, "mailbox port")
+    _need(isinstance(host, str) and host.isascii() and host == host.lower(), "mailbox host must be lowercase ASCII")
+    _need(isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536, "mailbox port")
     return _text(host) + port.to_bytes(2, "big") + _text(user)
 
 
@@ -128,7 +129,7 @@ def _field_bytes(kind, value):
         _need(value in ANSWERS, "answer must be a, n or l")
         return value
     if kind == "mailboxes":
-        _need(isinstance(value, (list, tuple)), "mailboxes")
+        _need(isinstance(value, (list, tuple)) and len(value) <= MAX_MAILBOXES, "mailboxes")
         encoded = [_mailbox_bytes(m) for m in value]
         _need(all(a < b for a, b in zip(encoded, encoded[1:])), "mailboxes must be sorted and unique")
         return len(encoded).to_bytes(4, "big") + b"".join(encoded)
@@ -214,7 +215,7 @@ def parse_object(value, expect=None):
     field and recomputes nothing it trusts from the message."""
     _need(isinstance(value, dict), "object")
     kind = value.get("type")
-    _need(kind in SCHEMA, "unknown control type")
+    _need(isinstance(kind, str) and kind in SCHEMA, "unknown control type")
     _need(expect is None or kind == expect, "unexpected control type")
     _, layout, sig_names, extra_layout = SCHEMA[kind]
     fields = {}
@@ -234,7 +235,12 @@ def parse_object(value, expect=None):
     extras = {}
     for name, t in extra_layout:
         if name in value:
+            _need(t != "bytes" or isinstance(value[name], str), name)
             extras[name] = unb64u(value[name]) if t == "bytes" else parse_object(value[name], t)
+    if kind == "capsule" and "capsule" in extras:
+        _need(sha(extras["capsule"]) == fields["sealed"], "capsule bytes do not hash to sealed")
+    if kind == "certificate" and "body" in extras:
+        _need(object_id("request", extras["body"][1]) == fields["request"], "body is not the named request")
     return kind, fields, signatures, extras
 
 

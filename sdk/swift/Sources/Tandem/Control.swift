@@ -52,7 +52,7 @@ public struct ControlObject: Equatable, Sendable {
 }
 
 public enum Control {
-    public static let maxText = 256, maxSet = 65_536
+    public static let maxText = 256, maxSet = 65_536, maxMailboxes = 64
     public static let first: UInt64 = 1, invited: UInt64 = 2, byDevice: UInt64 = 3, byPairing: UInt64 = 4,
                       creatorRecovery: UInt64 = 5
     public static let rejected: UInt64 = 1, pairingCancelled: UInt64 = 2, inviteCancelled: UInt64 = 3, paired: UInt64 = 4
@@ -113,7 +113,7 @@ public enum Control {
     }
 
     static func mailboxBytes(_ m: Mailbox) throws -> Bytes {
-        guard !m.host.contains(where: { (0x41...0x5a).contains($0) }) else { throw fail("mailbox host must be lowercase") }
+        guard m.host.allSatisfy({ $0 < 0x80 && !(0x41...0x5a).contains($0) }) else { throw fail("mailbox host must be lowercase ASCII") }
         guard m.port > 0 else { throw fail("mailbox port") }
         var out = try textBytes(m.host); out.u16(m.port); out += try textBytes(m.user); return out
     }
@@ -137,6 +137,7 @@ public enum Control {
         case let (.u64, .int(n)) where n <= 1 << 53: var o = Bytes(); o.u64(n); return o
         case let (.answer, .answer(a)) where [0x61, 0x6e, 0x6c].contains(a): return [a]
         case let (.mailboxes, .mailboxes(ms)):
+            guard ms.count <= maxMailboxes else { throw fail("too many mailboxes") }
             let encoded = try ms.map(mailboxBytes)
             guard zip(encoded, encoded.dropFirst()).allSatisfy({ $0.lexicographicallyPrecedes($1) })
             else { throw fail("mailboxes must be sorted and unique") }
@@ -313,6 +314,12 @@ extension ControlObject {
             case .request: object.extras[e.name] = .object(try parse(v, expect: "request"))
             default: throw Control.fail("extra \(e.name)")
             }
+        }
+        if case let .bytes(sealed)? = object.extras["capsule"], case let .id(h)? = fields["sealed"], H(sealed) != h {
+            throw Control.fail("capsule bytes do not hash to sealed")
+        }
+        if case let .object(body)? = object.extras["body"], case let .id(r)? = fields["request"], try body.id() != r {
+            throw Control.fail("body is not the named request")
         }
         return object
     }

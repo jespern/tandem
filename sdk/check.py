@@ -91,7 +91,7 @@ def main():
         run(["go", "test", "-race", "-count=1", "./..."], ROOT / "sdk/go", env)
         run([sys.executable, "-B", "-W", "error::ResourceWarning", "-m", "unittest", "discover", "-s", "sdk/python/tests", "-q"], env=env)
         run([node, "node_modules/typescript/bin/tsc"], ROOT / "sdk/typescript", env)
-        run([node, "--test", "test/core.test.mjs"], ROOT / "sdk/typescript", env)
+        run([node, "--test", "test/core.test.mjs", "test/control.test.mjs"], ROOT / "sdk/typescript", env)
         run(["swift", "test", "--quiet"], ROOT, env)
         env["TANDEM_VERIFY_INTEROP"] = "1"
         run(["go", "test", "-count=1", "-run", "TestCrossSDK", "./..."], ROOT / "sdk/go", env)

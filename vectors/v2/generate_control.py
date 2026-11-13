@@ -197,6 +197,13 @@ def generate():
                                         outcome=256)),
         bad("answer other than a, n or l", dict(json.loads(next(o["json"] for o in objects if o["kind"] == "answer")),
                                                 answer="y")),
+        bad("mailbox host not ASCII", dict(genesis_json, mailboxes=[dict(genesis_json["mailboxes"][0], host="imap.exämple.org")])),
+        bad("mailbox port a boolean", dict(genesis_json, mailboxes=[dict(genesis_json["mailboxes"][0], port=True)])),
+        bad("type not a string", dict(good, type=["revocation"])),
+        bad("capsule bytes that are not the sealed ones", dict(json.loads(next(o["json"] for o in objects if o["kind"] == "capsule")),
+                                                             capsule=t.b64u(b"other bytes"))),
+        bad("certificate body that is not its request", (lambda cj: dict(cj, body=dict(cj["body"], label="Someone else")))(
+            json.loads(next(o["json"] for o in objects if o["kind"] == "certificate")))),
         bad("an all-zero optional id", dict(json.loads(next(o["json"] for o in objects if o["kind"] == "receipt")),
                                             signer=t.b64u(bytes(32)))),
     ]

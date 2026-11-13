@@ -117,11 +117,12 @@ export const aad = (kind: number, hub: Uint8Array, tag: string): Buffer => Buffe
 function context(key: Uint8Array, hub: Uint8Array, tag: string): void {
   bytes(key, 32); bytes(hub, 32); if (unb32(tag).length !== 20) throw new Error('invalid channel tag');
 }
-function encrypt(key: Uint8Array, nonce: Uint8Array, ad: Uint8Array, plain: Uint8Array): Buffer {
+/** Raw ChaCha20-Poly1305 with an explicit nonce: ciphertext || tag. */
+export function encrypt(key: Uint8Array, nonce: Uint8Array, ad: Uint8Array, plain: Uint8Array): Buffer {
   const c = createCipheriv('chacha20-poly1305', key, nonce, {authTagLength: 16}); c.setAAD(ad, {plaintextLength: plain.length});
   return Buffer.concat([c.update(plain), c.final(), c.getAuthTag()]);
 }
-function decrypt(key: Uint8Array, nonce: Uint8Array, ad: Uint8Array, sealed: Uint8Array): Buffer {
+export function decrypt(key: Uint8Array, nonce: Uint8Array, ad: Uint8Array, sealed: Uint8Array): Buffer {
   if (sealed.length < 16) throw new Error('short ciphertext');
   const d = createDecipheriv('chacha20-poly1305', key, nonce, {authTagLength: 16});
   d.setAuthTag(sealed.subarray(-16)); d.setAAD(ad, {plaintextLength: sealed.length - 16});
