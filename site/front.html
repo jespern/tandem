@@ -206,11 +206,14 @@ The step-by-step procedures, such as rotating a key after a crash,
 and the mail binding itself are tested rather than proved.
 SDKs in Go, Python, TypeScript and Swift implement the protocol core and the complete wire format,
 and check each other’s signatures and envelopes.
-A <a href="https://github.com/jespern/tandem/tree/main/sdk/swift">production engine in Swift</a>
-runs whole hubs over IMAP, live:
+Production engines in <a href="https://github.com/jespern/tandem/tree/main/sdk/swift">Swift</a>
+and <a href="https://github.com/jespern/tandem/tree/main/sdk/go/engine">Go</a>
+run whole hubs over IMAP, live:
 sharing, pairing, removing devices and changing keys,
 with a crash tested at every step of a key change.
-An adversarial review of it found seven bugs, each now fixed and pinned by a test.
+Written apart, they share hubs with each other:
+a Swift device and a Go device invite, pair, share and change keys on one mailbox.
+An adversarial review of the Swift engine found seven bugs, each now fixed and pinned by a test in both.
 An independent security review by people is still to come.
 </p>
 
