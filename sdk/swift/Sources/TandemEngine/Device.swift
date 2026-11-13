@@ -26,6 +26,8 @@ public actor Device {
     /// Home epochs this device holds the key of, by epoch ID (§6.2, §10.8).
     var homeKeys: [ID: Bytes] = [:]
     var homeEpochs: [ID: ControlObject] = [:]
+    /// Assembled snapshot inventories, by epoch ID, for home and collections (§8.3).
+    var inventories: [ID: Inventory] = [:]
     var home: [ID: Record] = [:]
     var collections: [Bytes: CollectionState] = [:]
     var offers: [Bytes: Offer] = [:]
@@ -56,10 +58,15 @@ public actor Device {
             me = Me(keys: keys, participant: p, certificate: c, auth: a, installation: i)
         }
         for e in homeEpochs.keys { if let k = try store.value("home.key." + e.hex) { homeKeys[e] = k } }
+        for (name, bytes) in try store.values(prefix: "inv.") {
+            if let e = Bytes(hex: String(name.dropFirst(4))), let inv = try? Inventory.parse(bytes) { inventories[e] = inv }
+        }
         if let me {
             let scope = Tandem.homeScope(hub: pin.hub, uid: me.participant)
+            let heads = Self.heads(homeEpochs, keys: homeKeys)
             for r in try store.records(scope: scope) {
-                home[r] = try Self.loadRecord(store: store, hub: pin.hub, scope: scope, record: r, epochs: homeEpochs)
+                home[r] = try Self.loadRecord(store: store, hub: pin.hub, scope: scope, record: r, epochs: homeEpochs,
+                                              heads: heads.isEmpty ? nil : heads, inventories: inventories)
             }
         }
         collections = try Self.loadCollections(store: store, hub: pin.hub, home: home)
@@ -154,7 +161,7 @@ public actor Device {
     /// Returns how many messages it applied.
     @discardableResult
     public func sync() async throws -> Int {
-        try await finishApprovals()
+        try await finishJournals()
         let cursor = try store.value("cursor").map { String(decoding: $0, as: UTF8.self) } ?? ""
         let batch = try await hub.changes(since: cursor)
         try store.transaction {

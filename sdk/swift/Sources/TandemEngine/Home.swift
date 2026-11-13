@@ -8,13 +8,14 @@ extension Device {
     var homeScope: Bytes? { me.map { Tandem.homeScope(hub: pin.hub, uid: $0.participant) } }
 
     /// Home epochs no announced epoch names as a parent (§10.8).
-    var homeHeads: [ID] {
-        let named = Set(homeEpochs.values.flatMap { e -> [ID] in
+    var homeHeads: [ID] { Self.heads(homeEpochs, keys: homeKeys) }
+
+    static func heads(_ epochs: [ID: ControlObject], keys: [ID: Bytes]) -> [ID] {
+        let named = Set(epochs.values.flatMap { e -> [ID] in
             guard case let .set(p)? = e.fields["parents"] else { return [] }
             return p
         })
-        return homeEpochs.keys.filter { !named.contains($0) && homeKeys[$0] != nil }
-            .sorted { $0.lexicographicallyPrecedes($1) }
+        return epochs.keys.filter { !named.contains($0) && keys[$0] != nil }.sorted { $0.lexicographicallyPrecedes($1) }
     }
 
     /// The epoch this device writes to: the smallest current head (§10.8).
@@ -44,6 +45,7 @@ extension Device {
             }
             homeKeys[epoch] = key
             try store.setValue("home.key." + epoch.hex, key)
+            try moveHome()
             return .applied
         case "grant":
             return try receiveGrant(plaintext, json, me: me)
@@ -66,12 +68,18 @@ extension Device {
             guard let o = try? ControlObject.parse(plaintext, expect: "home-epoch") else { return .ignored }
             return try acceptHomeEpoch(o, me: me)
         case 1:
-            guard let scope = homeScope, case let .record(state)? = try? Kind1.parse(plaintext, hub: pin.hub, scope: scope)
-            else { return .ignored }
+            guard let scope = homeScope, let parsed = try? Kind1.parse(plaintext, hub: pin.hub, scope: scope) else { return .ignored }
+            guard case let .record(state) = parsed else {
+                guard case let .inventory(f) = parsed else { return .ignored }
+                guard case let .id(commitment)? = homeEpochs[epoch]?.fields["snapshot"] else { return .waiting }
+                guard try receiveFragment(f, epoch: epoch, commitment: commitment) else { return .ignored }
+                try moveHome()
+                return .applied
+            }
             var entries: [Entry] = []
             for w in state.writes {
                 switch homeWriteValidity(w, epoch: epoch, me: me) {
-                case .valid: entries.append(try Entry(w, epoch: epoch, epochNumber: epochNumber(epoch)))
+                case .valid: entries.append(try Entry(w, epoch: w.ref, epochNumber: epochNumber(w.ref)))
                 case .pending: return .waiting
                 case .invalid: continue   // dropped; the rest of the message still counts
                 }
@@ -100,18 +108,67 @@ extension Device {
         if let key = homeKeys[id], o.fields["key"] != .id(Tandem.commit(key)) { return .ignored }
         homeEpochs[id] = o
         try store.putObject(o)
+        try moveHome()
         return .applied
     }
 
-    /// Whether `w` is a valid home write in `epoch`: by this participant, under an admitted keychain and its
-    /// snapshot, signed, and written in exactly this epoch (§6.2, §8.3 rule 1).
+    /// Whether `w` is a valid home write in the channel of `epoch` (§6.2, §8.3): by this participant, under an admitted
+    /// keychain and its snapshot, signed; and either written in this very epoch under a snapshot extending the epoch's
+    /// policy, or written earlier and listed in this epoch's inventory.
     func homeWriteValidity(_ w: Write, epoch: ID, me: Me) -> Validity {
-        guard w.author == me.participant, w.hub == pin.hub, w.ref == epoch else { return .invalid("not a write in this home epoch") }
-        let ok = registry.authorizes(snapshot: w.authorization, certificate: w.certificate)
+        guard w.author == me.participant, w.hub == pin.hub else { return .invalid("not this participant's home write") }
+        guard let start = homeEpochs[epoch], case let .id(floor)? = start.fields["auth"] else { return .pending([epoch]) }
+        var ok = registry.authorizes(snapshot: w.authorization, certificate: w.certificate)
+        if w.ref == epoch {
+            ok = Validity.all([ok, registry.extends(w.authorization, floor: floor), lateness(w, epoch: epoch)])
+        } else {
+            guard let inv = inventory(epoch) else { return .pending([epoch]) }
+            guard let id = try? w.id(), inv.entries[w.record]?.contains(id) == true else { return .invalid("not carried into this epoch") }
+            ok = Validity.all([ok, homeAncestry(w.ref, of: epoch)])
+        }
         guard ok.isValid else { return ok }
         guard let cert = registry.certificate(w.certificate), cert.participant == me.participant,
               (try? w.verify(publicKey: cert.sign)) != nil else { return .invalid("bad signature") }
         return .valid
+    }
+
+    /// Home epochs that name `epoch` as a parent.
+    func homeChildren(_ epoch: ID) -> [ID] {
+        homeEpochs.filter { e in
+            guard case let .set(p)? = e.value.fields["parents"] else { return false }
+            return p.contains(epoch)
+        }.map(\.key)
+    }
+
+    /// A write in an epoch that a later one replaced counts only if a later inventory carries it (§8.3, §11.6):
+    /// what arrives late in an old channel, a revoked device's included, doesn't enter the current home.
+    func lateness(_ w: Write, epoch: ID) -> Validity {
+        let children = homeChildren(epoch)
+        guard !children.isEmpty, let id = try? w.id() else { return .valid }
+        var missing: [ID] = []
+        for c in children {
+            guard let inv = inventory(c) else { missing.append(c); continue }
+            if inv.entries[w.record]?.contains(id) == true { return .valid }
+        }
+        return missing.isEmpty ? .invalid("late write in a replaced home epoch") : .pending(missing)
+    }
+
+    /// Whether an entry belongs to the current home: written in a current head, or carried by a head's inventory.
+    static func homeEligible(_ entry: Entry, heads: [ID], inventories: [ID: Inventory]) -> Bool {
+        heads.contains(entry.epoch) || heads.contains { inventories[$0]?.entries[entry.write.record]?.contains(entry.id) == true }
+    }
+
+    /// Move to the current heads (§11.6, "Moving over"): rebuild every home record from the stored writes that the
+    /// heads keep. Waits while a head's inventory is incomplete.
+    func moveHome() throws {
+        guard let scope = homeScope else { return }
+        let heads = homeHeads
+        // With no head it holds the key of (a revoked device), the replica stays as it was, read-only.
+        guard !heads.isEmpty, heads.allSatisfy({ inventory($0) != nil || homeEpochs[$0]?.fields["parents"] == .set([]) }) else { return }
+        for record in try store.records(scope: scope) {
+            home[record] = try Self.loadRecord(store: store, hub: pin.hub, scope: scope, record: record, epochs: homeEpochs,
+                                               heads: heads, inventories: inventories)
+        }
     }
 
     func merge(_ entries: [Entry], record: ID, scope: Bytes) throws {
@@ -127,12 +184,15 @@ extension Device {
     }
 
     /// A record as the store holds it: every write kept, merged again.
-    static func loadRecord(store: Store, hub: Bytes, scope: Bytes, record: ID, epochs: [ID: ControlObject]) throws -> Record {
+    static func loadRecord(store: Store, hub: Bytes, scope: Bytes, record: ID, epochs: [ID: ControlObject],
+                           heads: [ID]? = nil, inventories: [ID: Inventory] = [:]) throws -> Record {
         var r = try Record(hub: hub, scope: scope, id: record)
         let entries = try store.writes(scope: scope, record: record).compactMap { row -> Entry? in
             guard case let .record(state) = try Kind1.parse(row.payload, hub: hub, scope: scope), let w = state.writes.first
             else { return nil }
-            return try Entry(w, epoch: row.epoch, epochNumber: number(row.epoch, in: epochs))
+            let e = try Entry(w, epoch: row.epoch, epochNumber: number(row.epoch, in: epochs))
+            if let heads, !homeEligible(e, heads: heads, inventories: inventories) { return nil }
+            return e
         }
         try r.merge(entries)
         return r

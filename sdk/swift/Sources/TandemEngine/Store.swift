@@ -179,6 +179,12 @@ public final class Store: @unchecked Sendable {
         return true
     }
 
+    public func hasWrite(_ id: Bytes) throws -> Bool {
+        var held = false
+        try run("SELECT 1 FROM writes WHERE id = ?", [.blob(id)]) { _ in held = true }
+        return held
+    }
+
     public func writes(scope: Bytes, record: Bytes) throws -> [(epoch: Bytes, payload: Bytes)] {
         var out: [(Bytes, Bytes)] = []
         try run("SELECT epoch, payload FROM writes WHERE scope = ? AND record = ? ORDER BY rowid", [.blob(scope), .blob(record)]) {

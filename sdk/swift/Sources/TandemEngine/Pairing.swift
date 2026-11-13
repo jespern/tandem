@@ -333,9 +333,9 @@ extension Device {
         try store.clearJournal(step)
     }
 
-    /// Finish approvals a crash interrupted (§6.3 step 4: lost acknowledgements retry the same bytes).
-    func finishApprovals() async throws {
-        for step in try store.journalSteps() where step.hasPrefix("approve.") {
+    /// Finish approvals and home rekeys a crash interrupted: lost acknowledgements retry the same bytes (§6.3 step 4).
+    func finishJournals() async throws {
+        for step in try store.journalSteps() where step.hasPrefix("approve.") || step.hasPrefix("home.") {
             guard let journalled = try store.journal(step) else { continue }
             try await export(try Self.unpack(journalled), step: step)
         }
@@ -402,13 +402,17 @@ extension Device {
             try store.setValue("pairing.done." + pending.token.hex, me.certificate)
         }
         pairing = nil
+        try moveHome()
         return .applied
     }
 
     /// After a sync: record finished pairings and hand this home's current keys to admitted keychains of this
     /// participant that no epoch was sealed to, such as a device paired after the package was staged (§6.3).
     func followUp() async throws {
-        guard let me, registry.activity(me.certificate).isValid else { return }
+        guard self.me != nil, registry.activity(self.me!.certificate).isValid else { return }
+        try await refreshAuth()
+        if homeNeedsRotation(self.me!) { try await rotateHome() }
+        guard let me else { return }
         for (name, cert) in try store.values(prefix: "pairing.done.") {
             guard let token = Bytes(hex: String(name.dropFirst("pairing.done.".count))), currentHomeEpoch != nil else { continue }
             let receipt = try await publishReceipt(outcome: Control.paired, subject: cert, me: me)
