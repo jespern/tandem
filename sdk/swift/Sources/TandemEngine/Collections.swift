@@ -361,7 +361,7 @@ extension Device {
         guard case let .record(state) = parsed else {
             guard case let .inventory(f) = parsed else { return .ignored }
             guard let s = collections[cid]?.statements[epoch]?.statement, let commitment = s.snapshot else { return .waiting }
-            try store.setValue("fragmsg." + m.id, epoch)   // which messages carry fragments, for healing (§12.2)
+            try store.setValue("fragmsg." + m.id, epoch + H(f.bytes))   // which part each message carries, for healing (§12.2)
             guard try receiveFragment(f, epoch: epoch, commitment: commitment) else { return .ignored }
             try moveCollection(cid)
             return .applied

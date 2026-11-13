@@ -108,7 +108,7 @@ extension Device {
             guard case let .record(state) = parsed else {
                 guard case let .inventory(f) = parsed else { return .ignored }
                 guard case let .id(commitment)? = homeEpochs[epoch]?.fields["snapshot"] else { return .waiting }
-                try store.setValue("fragmsg." + m.id, epoch)
+                try store.setValue("fragmsg." + m.id, epoch + H(f.bytes))
                 guard try receiveFragment(f, epoch: epoch, commitment: commitment) else { return .ignored }
                 try moveHome()
                 return .applied
@@ -301,6 +301,8 @@ extension Device {
     /// Sign one home write on `name` and publish it in the current home epoch.
     func writeHome(_ name: String, field: String, op: Op, value: Bytes = [], element: Bytes? = nil) async throws {
         try takeExternalChanges()
+        // A revocation not yet reflected in home: rekey before writing, so nothing new goes into the exposed epoch.
+        if let me, homeNeedsRotation(me), registry.activity(me.certificate).isValid { try await rotateHome() }
         guard let me, let scope = homeScope, let epoch = currentHomeEpoch, let key = homeKeys[epoch]
         else { throw TandemError.invalid("device: no home to write to") }
         let record = Tandem.namedID(Bytes(name.utf8))

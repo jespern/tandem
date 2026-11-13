@@ -206,16 +206,25 @@ extension Device {
 
         let pending = PendingPairing(secret: link.secret, token: link.token, participant: link.participant,
                                      request: try request.id(), delegation: try delegation.id(), package: package)
+        // The exact claim envelopes are kept with the pending pairing: each sync while it waits sends any that the
+        // hub lacks (§12.2, "Pending pairing claims").
+        let inbox = Tandem.inboxTag(uid: pin.creator, hub: pin.hub), body = try claim.json()
+        let envelopes = try admins.map { (inbox, try Envelope.sealInbox(hub: pin.hub, uid: pin.creator, agreement: $0.agree, plaintext: body)) }
         try store.transaction {
             try store.putObject(delegation)
             try store.setValue("pairing.pending", pending.json())
+            try store.setValue("pairing.claims", Self.pack(envelopes))
         }
         pairing = pending
-        let inbox = Tandem.inboxTag(uid: pin.creator, hub: pin.hub), body = try claim.json()
-        for admin in admins {
-            let envelope = try Envelope.sealInbox(hub: pin.hub, uid: pin.creator, agreement: admin.agree, plaintext: body)
-            let id = try await hub.append(channel: inbox, body: envelope)
-            try store.noteMessage(id: id, channel: inbox, hash: H(envelope))
+        try await repairClaim()
+    }
+
+    /// Send whichever claim envelopes the hub lacks, while this device waits for the admin.
+    func repairClaim() async throws {
+        guard pairing != nil, let packed = try store.value("pairing.claims") else { return }
+        for (tag, envelope) in try Self.unpack(packed) where try store.messages(withHash: H(envelope)).isEmpty {
+            let id = try await hub.append(channel: tag, body: envelope)
+            try store.noteMessage(id: id, channel: tag, hash: H(envelope))
             try store.markApplied(id)
         }
     }
@@ -335,7 +344,7 @@ extension Device {
 
     /// Finish approvals and home rekeys a crash interrupted: lost acknowledgements retry the same bytes (§6.3 step 4).
     func finishJournals() async throws {
-        for step in try store.journalSteps() where ["approve.", "home.", "revoke."].contains(where: step.hasPrefix) {
+        for step in try store.journalSteps() where step == "admit" || ["approve.", "home.", "revoke."].contains(where: step.hasPrefix) {
             guard let journalled = try store.journal(step) else { continue }
             try await export(try Self.unpack(journalled), step: step)
         }
@@ -399,6 +408,7 @@ extension Device {
         try offerHomeKey(epoch, key)
         try store.transaction {
             try store.removeValue("pairing.pending")
+            try store.removeValue("pairing.claims")
             try store.setValue("pairing.done." + pending.token.hex, me.certificate)
         }
         pairing = nil

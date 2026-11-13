@@ -55,6 +55,8 @@ public struct FlightNote: Equatable, Sendable {
 struct RotationJournal {
     var cid: Bytes, parent: ID, oldEpoch: ID, statement: Write, id: ID, key: Bytes, inventory: Bytes, what: String
     var step: Int, noteWritten: Bool
+    /// The note's append was tried: it may be on the hub even if its answer never came (§10.3, "Lost answers").
+    var noteAttempted = false
 
     func json() throws -> Bytes {
         let payload = try recordPayload(record: Roster.record, writes: [statement])
@@ -68,6 +70,7 @@ struct RotationJournal {
             w.member("what", text: Bytes(what.utf8))
             w.member("step", int: UInt64(step))
             w.member("note", int: noteWritten ? 1 : 0)
+            w.member("attempted", int: noteAttempted ? 1 : 0)
         }
     }
 
@@ -79,7 +82,7 @@ struct RotationJournal {
         return RotationJournal(cid: cid, parent: try j.bytes("parent", count: 32), oldEpoch: try j.bytes("old", count: 32),
                                statement: w, id: try w.id(), key: try j.bytes("k", count: 32), inventory: try j.bytes("inv"),
                                what: String(decoding: try j.text("what"), as: UTF8.self), step: Int(try j.int("step")),
-                               noteWritten: try j.int("note") == 1)
+                               noteWritten: try j.int("note") == 1, noteAttempted: (try? j.int("attempted")) == 1)
     }
 }
 
@@ -165,12 +168,15 @@ extension Device {
         try w.sign(with: me.keys.signing)
         let id = try w.id()
         try await sync()
-        guard var now = collections[cid], now.head == head, !now.dead else { throw ChangeError.superseded }
+        guard collections[cid]?.head == head, collections[cid]?.dead == false else { throw ChangeError.superseded }
         if let note = flightNote(cid) { throw ChangeError.pending(note) }
+        // On the hub first, then here: a statement whose publish failed must not become this device's head alone. One
+        // whose answer was lost comes back with the next sync like any other.
+        try await publish(cid: cid, epoch: epoch, record: Roster.record, writes: [w])
+        guard var now = collections[cid] else { throw ChangeError.superseded }
         now.statements[id] = (w, next)
         collections[cid] = now
         try store.putWrite(id: id, scope: cid, record: Roster.record, epoch: epoch, payload: try recordPayload(record: Roster.record, writes: [w]))
-        try await publish(cid: cid, epoch: epoch, record: Roster.record, writes: [w])
         return (id, epoch, key)
     }
 
@@ -270,6 +276,8 @@ extension Device {
                     guard let s = try? Statement.parse(j.statement.value) else { throw TandemError.invalid("journal: statement") }
                     let note = FlightNote(parent: j.parent, statement: j.id, key: j.key, members: s.members, what: j.what,
                                           device: deviceName)
+                    j.noteAttempted = true
+                    try store.setJournal("rotate." + cid.hex, try j.json())
                     try await setHome(name, field: "flight", value: note.json())
                     j.noteWritten = true
                     try store.setJournal("rotate." + cid.hex, try j.json())
@@ -397,8 +405,9 @@ extension Device {
                 // Its own note is in home, whatever the journal says: an append whose answer was lost may have landed.
                 if !j.noteWritten { j.noteWritten = true; j.step = max(j.step, 3) }
             } else if !j.noteWritten {
-                // Nothing but the journal left the device; usable only if nothing moved meanwhile.
-                if c == nil || note != nil || !headIsParent {
+                // Nothing but the journal left the device, unless the note's append was tried: then a note that isn't in
+                // home was discarded by another device, and the note in home outweighs this device's record (§11.6).
+                if c == nil || note != nil || !headIsParent || j.noteAttempted {
                     try await clearOwnNote(j.cid, statement: j.id)
                     try dropRotation(j.cid); failure = failure ?? ChangeError.superseded; continue
                 }

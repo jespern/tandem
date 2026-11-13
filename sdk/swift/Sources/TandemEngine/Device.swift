@@ -244,6 +244,7 @@ public actor Device {
                 }
             }
         }
+        try await repairClaim()
         try await followUp()
         return applied
     }

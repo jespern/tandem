@@ -124,7 +124,7 @@ try await device.leave(list: list)                             // the owner sees
 
 - "Stop sharing" is removing every member. Their devices keep a read-only replica; `role(list:)` is nil for them, the list leaves `lists()` and appears in `removedLists()`, for Liszto's rescue into the Inbox.
 - A removed member's edits that never reached the list stay in their replica. For a member who is still in the list, edits that a key change may have left behind are listed by `unshared(list:)`; offer to recover or dismiss them (`dismissUnshared`). Liszto's "rescue into Inbox" fits both.
-- Removing someone or lowering a role is a key change: it needs the network and takes a few round trips. It is journalled, so a crash resumes it (`resume()`, which `run()` calls). If another device of the same owner was in the middle of one, `pendingChange(list:)` describes it and `finish(list:seen:)` or `discard(list:seen:)` settles it; until then sharing changes on that list throw `ChangeError.pending`.
+- Removing someone or lowering a role is a key change: it needs the network and takes a few round trips. It is journalled, so a crash resumes it, in `resume()`, which `run()` calls first. Call one of them when the app starts: `sync()` alone doesn't resume a key change, and until it is resumed the removed member can still read what's written in the old epoch. If another device of the same owner was in the middle of one, `pendingChange(list:)` describes it and `finish(list:seen:)` or `discard(list:seen:)` settles it; until then sharing changes on that list throw `ChangeError.pending`.
 - `isDead(list:)`: two devices of the owner changed sharing at the same instant. The list is read-only for good; offer to copy it into a new list.
 
 ## Hubs, people and devices

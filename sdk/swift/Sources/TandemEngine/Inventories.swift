@@ -8,13 +8,18 @@ extension Device {
     /// Fragments stay under the 64 KiB a message should keep to.
     static let fragmentSize = 48 * 1024
 
-    /// The kind-1 payloads that carry `inventory` for the epoch `epoch`.
-    static func fragments(_ inventory: Inventory, epoch: ID) throws -> [Bytes] {
+    /// The inventory's bytes cut into fragment-sized parts.
+    static func slices(_ inventory: Inventory) throws -> [Bytes] {
         let bytes = try inventory.bytes()
         let parts = max(1, (bytes.count + fragmentSize - 1) / fragmentSize)
-        return (0..<parts).map { part in
-            let slice = Array(bytes[min(bytes.count, part * fragmentSize)..<min(bytes.count, (part + 1) * fragmentSize)])
-            return JSONWriter.object { w in
+        return (0..<parts).map { Array(bytes[min(bytes.count, $0 * fragmentSize)..<min(bytes.count, ($0 + 1) * fragmentSize)]) }
+    }
+
+    /// The kind-1 payloads that carry `inventory` for the epoch `epoch`.
+    static func fragments(_ inventory: Inventory, epoch: ID) throws -> [Bytes] {
+        let all = try slices(inventory), parts = all.count
+        return all.enumerated().map { part, slice in
+            JSONWriter.object { w in
                 w.member("inventory", json: JSONWriter.object { f in
                     f.member("epoch", b64u: epoch)
                     f.member("part", int: UInt64(part))
@@ -47,7 +52,8 @@ extension Device {
         guard candidates.allSatisfy({ !$0.isEmpty }) else { return false }
         // Honest epochs have one version of each part; bound the search when someone added others.
         // One part (the usual case) tries every version; several parts bound the search.
-        guard f.parts == 1 || candidates.reduce(1, { $0 * $1.count }) <= 4096 else { return false }
+        // Counted with a cap, so many parts with several versions each can't overflow the product (a review finding).
+        guard f.parts == 1 || candidates.reduce(1, { min($0 * $1.count, 4097) }) <= 4096 else { return false }
         var found: Inventory?
         func search(_ i: Int, _ acc: Bytes) {
             guard found == nil else { return }
