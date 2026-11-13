@@ -142,6 +142,30 @@ class Watcher:
             return {'pushed': round(state['at'] - state['sent'], 3)}
         return {'pushed': None, 'seen_on_noop': bool(set(kinds) & set(self.drain()))}
 
+    def wait_restarting(self, kinds, action, every):
+        """Like wait_for, but end and restart IDLE every `every` seconds, which
+        makes some servers hand over updates they were holding back. Returns
+        the latency and how many restarts it took."""
+        self.drain()
+        state, restarts = {}, 0
+        start = time.monotonic()
+        while 'at' not in state and time.monotonic() - start < self.wait:
+            with self.m.idle(duration=every) as idler:
+                if 'sent' not in state:
+                    time.sleep(0.2)
+                    state['sent'] = time.monotonic()
+                    action()
+                for typ, data in idler:
+                    if typ in kinds:
+                        state['at'] = time.monotonic()
+                        break
+            if 'at' not in state and any(self.m.response(k)[1] != [None] for k in kinds):
+                state['at'] = time.monotonic()  # arrived while ending IDLE
+            restarts += 'at' not in state
+        if 'at' not in state:
+            return {'pushed': None, 'restarts': restarts}
+        return {'pushed': round(state['at'] - state['sent'], 3), 'restarts': restarts}
+
 
 def connections(host, port, user, password, limit):
     open_, error = [], None
@@ -158,7 +182,7 @@ def connections(host, port, user, password, limit):
     return {'opened': len(open_), 'asked': limit, 'refusal': error}
 
 
-def probe(host, port, user, password, want_connections, samples=3, wait=120, compare=False):
+def probe(host, port, user, password, want_connections, samples=3, wait=120, compare=False, reidle=5):
     run = os.urandom(4).hex()
     folder = f'Tandem-probe-{run}'
     r = {'host': host, 'port': port, 'date': time.strftime('%Y-%m-%d'), 'run': run}
@@ -190,7 +214,7 @@ def probe(host, port, user, password, want_connections, samples=3, wait=120, com
 
     try:
         if compare:
-            r['compare'] = compare_pushes(a, b, folder, special, run, samples, wait, append)
+            r['compare'] = compare_pushes(a, b, folder, special, run, samples, wait, append, reidle)
             return r
 
         # Live updates: how long an append takes to reach an idling connection.
@@ -253,10 +277,11 @@ def probe(host, port, user, password, want_connections, samples=3, wait=120, com
     return r
 
 
-def compare_pushes(a, b, folder, special, run, samples, wait, append):
+def compare_pushes(a, b, folder, special, run, samples, wait, append, reidle):
     """Push latency for the same kind of change made in different ways, to
     find one a provider passes on promptly: the Tandem folder itself, the
-    inbox, the folder watched through All Mail, and a flag change."""
+    inbox, the folder watched through All Mail, a flag change, and the
+    folder with IDLE restarted every `reidle` seconds."""
     out = {}
 
     def to_inbox(n):
@@ -283,6 +308,14 @@ def compare_pushes(a, b, folder, special, run, samples, wait, append):
         out[name] = []
         for _ in range(samples):
             out[name].append(watcher.wait_for(kinds, lambda n=n: change(n)))
+            log(f'{name}:', out[name][-1])
+            n += 1
+    if reidle:
+        watcher = Watcher(b, folder, wait)
+        name = f'reidle-{reidle}s'
+        out[name] = []
+        for _ in range(samples):
+            out[name].append(watcher.wait_restarting({'EXISTS'}, lambda n=n: append(n), reidle))
             log(f'{name}:', out[name][-1])
             n += 1
     return out
@@ -335,6 +368,8 @@ def main():
     p.add_argument('--wait', type=int, default=120, metavar='SECONDS', help='how long to wait for each push (default 120)')
     p.add_argument('--compare', action='store_true',
                    help='only compare push latency for the folder, the inbox, All Mail and a flag change')
+    p.add_argument('--reidle', type=int, default=5, metavar='SECONDS',
+                   help='with --compare, also restart IDLE this often (default 5; 0 to skip)')
     p.add_argument('--out', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results'))
     args = p.parse_args()
     if not hasattr(imaplib.IMAP4, 'idle'):
@@ -349,7 +384,7 @@ def main():
         password = found.stdout.rstrip('\n')
     else:
         password = getpass.getpass(f'Password for {args.user} at {args.host}: ')
-    report = probe(args.host, args.port, args.user, password, args.connections, args.samples, args.wait, args.compare)
+    report = probe(args.host, args.port, args.user, password, args.connections, args.samples, args.wait, args.compare, args.reidle)
     os.makedirs(args.out, exist_ok=True)
     path = os.path.join(args.out, f"{args.host}-{report['date']}-{report['run']}.json")
     with open(path, 'w') as f:
