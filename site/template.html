@@ -49,6 +49,8 @@ pre.diagram{white-space:pre;line-height:1.25;font-size:min(.88rem,calc((100cqw -
 pre code{font-size:inherit}
 figure{max-width:48rem;margin:1.6rem 0 2rem}
 figure svg{display:block;width:100%;height:auto}
+figure .narrow{display:none;max-width:26rem}
+@media (max-width:48rem){figure .wide{display:none}figure .narrow{display:block}}
 figcaption{max-width:37rem;margin-top:.7rem;font-size:.94rem;color:var(--dim)}
 @media (max-width:40rem){body{padding-top:1.5rem;font-size:1rem}h1{font-size:1.7rem}h2{font-size:1.3rem}}
 </style>
