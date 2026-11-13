@@ -10,7 +10,7 @@ The Node and browser builds share write/control encodings, strict JSON/base64url
 Ed25519 acceptance, inventories and record merging. Node keeps native crypto.
 The browser backend uses Noble hashes, curves and ciphers with Web Crypto's
 random source; `buffer` supplies the existing byte API. The SDK bundle costs
-about 53 KB gzip; the Argon2 worker loads separately.
+about 55 KB gzip; the Argon2 worker loads separately.
 
 Private keys now use an opaque SDK `PrivateKey` handle in both runtimes. Construct
 them with `privateKey(seed, algorithm)`; pass that handle to signing/agreement
@@ -84,6 +84,21 @@ Swift builds TandemArgon2 optimized even in debug, while the rest stays debuggab
 It changes no bytes or costs. SwiftPM consumers use a branch/revision because
 the optimized target uses unsafe build flags.
 
+`parsePairingLink` accepts native v2 links without using their IMAP credentials
+for JMAP. `pairingRegistry` pins the exact signed genesis and directory-key
+commitment. `proposePairing` validates the source device, expiry and package/gate
+hashes, and prepares exact HPKE claim envelopes. Persist its pending secrets in
+`BrowserKeychain` before committing those envelopes to `BrowserJournal`.
+`releasePairing` requires the exact admitted request, recipient keys, certificate,
+delegation and package hash before opening the gated package. Its home key is
+still a candidate for `HomePolicy`. These functions do not yet run enrollment
+as an app workflow or implement admin approval in the browser.
+
+`InventoryAssembler` keeps competing fragment versions separately and accepts
+only canonical bytes matching the signed commitment. Defaults: 4,096 parts,
+16 MiB buffered/assembled bytes and 4,096 alternative assemblies, all configurable.
+`inventoryPayloads` uses the native engine's 48 KiB fragment size by default.
+
 ## Build and checks
 
 ```sh
@@ -106,12 +121,15 @@ capsule vector. From the repository root:
 ```sh
 python3 -B sdk/check.py --browser
 python3 -B sdk/check_browser.py
+python3 -B sdk/check_browser.py --native
 ```
 
 The first checks all 25 sender/receiver combinations across the four native SDKs
 and the browser. The second requires Docker and adds direct JMAP/CORS, push,
 pagination, replay, deletion and lost-ack recovery against disposable Stalwart.
-Only that fixture accepts self-signed TLS; production SDK checks stay enabled.
+With `--native`, it also builds the Swift driver and proves real browser claim →
+Swift approval over IMAP → browser page reload → gated JMAP push release → signed
+home-key confirmation. All 11 scenarios passed locally. Only that fixture accepts self-signed TLS; production SDK checks stay enabled.
 It explicitly enables browser CORS and publishes real loopback URLs, with no proxy.
 
 ## Remaining acceptance gates

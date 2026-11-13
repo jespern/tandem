@@ -1,3 +1,6 @@
+import {spawn} from 'node:child_process';
+import {createInterface} from 'node:readline';
+import {once} from 'node:events';
 import {test, expect} from '@playwright/test';
 import {createServer} from 'node:http';
 import {readFile, writeFile, readdir} from 'node:fs/promises';
@@ -61,7 +64,7 @@ test('real browser: every control vector and strict Ed25519 case, and Node inter
   }
 });
 
-test('browser home and collection policies verify commitments and reject late data', async ({page}) => {
+test('browser home, collection and inventory policies verify commitments and owner forks', async ({page}) => {
   const result=await page.evaluate(async()=>{
     const t=window.t,rows=(await(await fetch('/control.json')).json()).objects;
     const objects=new Map(rows.map(row=>[row.name,t.controlFromJSON(new TextEncoder().encode(row.json))]));
@@ -78,8 +81,11 @@ test('browser home and collection policies verify commitments and reject late da
     const accepted=collection.accept(w,id).kind;const {nonce,...base}=statement;
     const next=n=>t.signWrite({...w,scope:id.subarray(0,16),ref:id,dot:{...w.dot,counter:n},value:t.statementJSON({...base,n})},signing);
     collection.accept(next(1),id);collection.accept(next(3),id);
-    return{before,after,accepted,fork:collection.dead};
-  });expect(result).toEqual({before:true,after:true,accepted:'valid',fork:true});
+    const data=t.inventoryBytes(new Map()),assembler=new t.InventoryAssembler(epoch,t.sha(data));
+    const fragments=t.inventoryPayloads(data,epoch,2).map(data=>t.parseKind1(data,registry.pin.hub,new Uint8Array(16)));
+    assembler.add({...fragments[0],bytes:t.randomBytes(2)});for(const fragment of fragments.reverse())assembler.add(fragment);
+    return{before,after,accepted,fork:collection.dead,inventory:t.b64u(assembler.complete)===t.b64u(data)};
+  });expect(result).toEqual({before:true,after:true,accepted:'valid',fork:true,inventory:true});
 });
 
 test('real IndexedDB: failed preparation rolls back clock and bytes; inbox/cursor/outbox commit together', async ({page}) => {
@@ -231,4 +237,58 @@ test('real JMAP and IndexedDB: lost acknowledgement recovers without resending t
       return {pending:(await reopened.pending('hub')).length,appended,cursor:!!await reopened.cursor('hub')};
     }finally{abort.abort();await running.catch(()=>{});reopened.close();}
   },cfg);expect(result).toEqual({pending:0,appended:0,cursor:true});
+});
+
+
+test('native Swift approves a browser claim over IMAP; browser reload receives the exact gated release through JMAP push',async({page})=>{
+  test.skip(!process.env.TANDEM_NATIVE_FIXTURE,'run sdk/check_browser.py --native');
+  test.setTimeout(90_000);
+  const native=JSON.parse(process.env.TANDEM_NATIVE_FIXTURE),cfg=JSON.parse(process.env.TANDEM_JMAP_FIXTURE);
+  const driver=spawn(native.binary,[],{stdio:['pipe','pipe','inherit']}),lines=createInterface({input:driver.stdout})[Symbol.asyncIterator]();
+  const command=async(op,args={})=>{driver.stdin.write(JSON.stringify({op,...args})+'\n');const line=await lines.next();if(line.done)throw new Error('native driver ended');const result=JSON.parse(line.value);if(!result.ok)throw new Error(`native ${op}: ${result.error}`);return result;};
+  try{
+    await command('hub',native);await command('found',{label:'Native Mac'});
+    const {link}=await command('startPairing',{label:'Browser'});
+    const staged=await page.evaluate(async({cfg,link})=>{
+      const t=window.t,parsed=t.parsePairingLink(link),keychain=await t.BrowserKeychain.open('native-pair-keys'),keys=await keychain.deviceKeys();
+      const store=await t.JMAPStore.open(cfg),abort=new AbortController(),messages=[];let cursor='';
+      try{let batch;do{batch=await store.changes(cursor,abort.signal);cursor=batch.cursor;messages.push(...batch.added);}while(batch.more);}finally{await store.close();}
+      const registry=t.pairingRegistry(parsed,messages),proposal=t.proposePairing(parsed,registry,messages,keys,'Browser');if(!proposal)throw new Error('native pairing not readable');
+      // Secrets are wrapped before any exact claim bytes can leave the journal.
+      await keychain.save('native-pending',t.pendingPairingJSON(proposal.pending));keychain.close();
+      const journal=await t.BrowserJournal.open('native-pair'),installation=await journal.installation(),hub=t.b64u(parsed.hub);
+      await journal.commit(hub,installation,Date.now(),()=>({state:t.objectID('request',proposal.pending.request.fields),messages:proposal.messages}));
+      window.nativeAbort=new AbortController();window.nativeReplica=new t.BrowserReplica(journal,hub);window.nativeJournal=journal;
+      window.nativeRun=window.nativeReplica.run(()=>t.JMAPStore.open(cfg),window.nativeAbort.signal);void window.nativeRun.catch(()=>{});
+      const pending=new Set(proposal.messages.map(message=>message.id));
+      for await(const event of window.nativeReplica.events(0,window.nativeAbort.signal)){if(event.kind==='received')pending.delete(event.id);if(!pending.size)break;}
+      return{confirmed:(await journal.pending(hub)).length===0,request:t.b64u(t.objectID('request',proposal.pending.request.fields))};
+    },{cfg,link});expect(staged.confirmed).toBe(true);
+    // Page destruction releases the old Web Lock/SSE; no explicit graceful shutdown.
+    await page.reload();await page.evaluate(async()=>{window.t=await import('/sdk.js');});
+    await page.evaluate(async cfg=>{
+      const t=window.t,keychain=await t.BrowserKeychain.open('native-pair-keys'),keys=await keychain.deviceKeys(),pending=t.parsePendingPairing(await keychain.get('native-pending'));keychain.close();
+      const journal=await t.BrowserJournal.open('native-pair'),hub=t.b64u(pending.link.hub),abort=new AbortController(),replica=new t.BrowserReplica(journal,hub);
+      window.nativeJournal=journal;window.nativeAbort=abort;window.nativeRun=replica.run(()=>t.JMAPStore.open(cfg),abort.signal);void window.nativeRun.catch(()=>{});
+      window.nativeReleased=(async()=>{
+        const messages=[];for await(const event of replica.events(0,abort.signal)){
+          if(event.kind==='removed')continue;messages.push(event);
+          const registry=t.pairingRegistry(pending.link,messages);if(!registry)continue;
+          const released=t.releasePairing(pending,registry,messages,keys);if(!released)continue;
+          const home=new t.HomePolicy(pending.link.participant,registry);home.offerKey(released.epoch,released.key);
+          const tag=t.homeTag(released.key,pending.link.hub,pending.link.participant,released.epoch);
+          for(const message of messages)if(message.channel===tag){try{const opened=t.openEnvelope(released.key,pending.link.hub,tag,message.body);if(opened.kind===3)home.accept(t.controlFromJSON(opened.plaintext,'home-epoch'));}catch{}}
+          if(!home.key(released.epoch))continue;
+          return{certificate:t.b64u(released.certificate.id),request:t.b64u(released.certificate.requestID),participant:t.b64u(released.certificate.participant),confirmedHome:home.heads().length>0};
+        }
+        throw new Error('browser stopped before release');
+      })();void window.nativeReleased.catch(()=>{});
+    },cfg);
+    await command('sync');const claims=(await command('claims')).claims;expect(claims).toHaveLength(1);expect(claims[0].id).toBe(staged.request);expect(claims[0].label).toBe('Browser');
+    await command('approve',{claim:claims[0].id});
+    const release=await page.evaluate(()=>window.nativeReleased);expect(release.request).toBe(staged.request);expect(release.confirmedHome).toBe(true);expect(release.participant).toBe((await command('me')).participant);
+  }finally{
+    await page.evaluate(async()=>{window.nativeAbort?.abort();await window.nativeRun?.catch(()=>{});window.nativeJournal?.close();});
+    driver.stdin.end();if(driver.exitCode===null)await once(driver,'exit');
+  }
 });
