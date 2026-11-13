@@ -7,4 +7,7 @@ require (
 	golang.org/x/text v0.44.0
 )
 
-require golang.org/x/sys v0.50.0 // indirect
+require (
+	github.com/mattn/go-sqlite3 v1.14.53 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+)
