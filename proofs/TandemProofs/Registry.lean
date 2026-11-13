@@ -3,14 +3,15 @@ import Mathlib.Data.List.Basic
 /-!
 # The device registry (§6.1, §6.3, §6.4, §6.8, §6.9)
 
-The registry is a set of manager-signed certificates and revocations, with members' pairing
+The registry is a set of manager-authorized certificates and manager-signed revocations, with members' pairing
 delegations. Objects are named by their content (IDs are collision-free), a signature is its
 signer's key name, and a valid set is whatever has been received: there is no order to it.
 `model/management_model.py` is the same model in Python.
 
 * **The manager can't make itself a device of an existing member**: a certificate for keys
   other than a participant's first ones needs a source device of that participant, or a
-  delegation it signed (`existing_member_needs_own_device`). Creator recovery is the only
+  delegation it signed (`existing_member_needs_own_device`). A hub invitation is no way round
+  it: it admits only the self-identifying registration of the claiming keys. Creator recovery is the only
   exception, and only for the creator (`recovery_only_for_the_creator`).
 * **A delegation can't be retargeted** to another member, and the claim must be signed by the
   link's key (`pairing_bound_to_delegation`).
@@ -35,6 +36,10 @@ inductive How where
   /-- A new participant's first admission: the participant ID is the registration of these
   very keys (§6.1, §13.1). -/
   | first (enrollment : String)
+  /-- A new participant's first admission through a hub invitation (§13.1): the manager-signed
+  capability, and the claim signed by its invite key. The participant ID is still the
+  registration of these very keys. -/
+  | invited (capability enrollment : String)
   /-- Approved by an admitted device of the same participant: the source certificate. -/
   | byDevice (source : String)
   /-- Through a pairing delegation (§6.3). -/
@@ -53,6 +58,8 @@ structure Cert where
   approver : String
   /-- The revocations in its issuance snapshot. -/
   issued : List String
+  /-- The certificate signer: the invite key for a capability-backed first admission,
+  otherwise the manager. -/
   signer : String
 deriving DecidableEq, Repr
 
@@ -63,6 +70,17 @@ structure Delegation where
   inviteKey : String
   signer : String
   expires : Nat
+deriving DecidableEq, Repr
+
+/-- A manager-signed new-member invitation capability (§13.1). -/
+structure Capability where
+  id : String
+  /-- The hub it is for: `hubID`, which is `pub(MKs)`. -/
+  hub : String
+  inviteKey : String
+  purpose : String
+  expires : Nat
+  signer : String
 deriving DecidableEq, Repr
 
 structure Rev where
@@ -83,9 +101,10 @@ structure Registry where
   certs : List Cert
   revs : List Rev
   dels : List Delegation
+  caps : List Capability := []
 
 def Registry.Sub (R R' : Registry) : Prop :=
-  R.certs ⊆ R'.certs ∧ R.revs ⊆ R'.revs ∧ R.dels ⊆ R'.dels
+  R.certs ⊆ R'.certs ∧ R.revs ⊆ R'.revs ∧ R.dels ⊆ R'.dels ∧ R.caps ⊆ R'.caps
 
 /-- IDs are content hashes: two objects with one ID are one object. -/
 def Registry.Unique (R : Registry) : Prop :=
@@ -106,12 +125,19 @@ def survives (R : Registry) (rs : List Rev) (c : Cert) : Prop :=
 def issuedRevs (R : Registry) (c : Cert) : List Rev := R.revs.filter (fun r => decide (r.id ∈ c.issued))
 
 /-- §6.9: a valid certificate. -/
+def authoritySigner (H : Hub) (c : Cert) : String :=
+  match c.how with
+  | .invited _ _ => c.approver
+  | _ => H.manager
+
 def certOK (H : Hub) (R : Registry) (c : Cert) : Prop :=
-  c.signer = H.manager ∧
+  c.signer = authoritySigner H c ∧
   -- its issuance snapshot is held, targets included
   (∀ rid ∈ c.issued, ∃ r ∈ R.revs, r.id = rid ∧ ∃ t ∈ R.certs, t.id = r.target) ∧
   match c.how with
   | .first e => c.member = H.reg c.keys e ∧ c.approver = c.keys
+  | .invited k e => ∃ cap ∈ R.caps, cap.id = k ∧ cap.signer = H.manager ∧ cap.hub = H.manager ∧
+      cap.purpose = "new-member" ∧ c.member = H.reg c.keys e ∧ c.approver = cap.inviteKey
   | .creatorRecovery => c.member = H.creator ∧ c.approver = c.keys
   | .byDevice s => ∃ src ∈ R.certs, src.id = s ∧ src.member = c.member ∧ c.approver = src.keys ∧
       survives R (issuedRevs R c) src
@@ -140,6 +166,10 @@ theorem existing_member_needs_own_device {H : Hub} {R : Registry} {c : Cert} (h 
   obtain ⟨-, -, h⟩ := h
   cases hh : c.how with
   | first e => rw [hh] at h; exact absurd h.1 (hfirst e)
+  | invited k e =>
+    rw [hh] at h
+    obtain ⟨-, -, -, -, -, -, hm, -⟩ := h
+    exact absurd hm (hfirst e)
   | creatorRecovery => rw [hh] at h; exact absurd h.1 hcreator
   | byDevice s =>
     rw [hh] at h
@@ -176,9 +206,22 @@ theorem pairing_bound_to_delegation {H : Hub} {R : Registry} {c : Cert} {d : Str
   obtain ⟨dl, hd, hid, hdm, ha, src, hs, hsid, hm, hsig, -⟩ := h
   exact ⟨dl, hd, hid, hdm, ha, src, hs, hsid, hm.trans hdm.symm, hsig⟩
 
-/-- Every certificate is signed by the manager: a member alone can't admit anyone. -/
+/-- Every certificate carries the manager's authority (for an invitation, through the
+manager-signed capability): a member alone can't admit anyone. -/
 theorem needs_manager {H : Hub} {R : Registry} {c : Cert} (h : certOK H R c) :
-    c.signer = H.manager := h.1
+    c.signer = H.manager ∨ ∃ cap ∈ R.caps, cap.signer = H.manager ∧
+      cap.hub = H.manager ∧ cap.purpose = "new-member" ∧ c.signer = cap.inviteKey := by
+  cases hh : c.how with
+  | invited k e =>
+    obtain ⟨hs, -, hc⟩ := h
+    rw [hh] at hc
+    obtain ⟨cap, hcap, -, hsig, hhub, hp, -, ha⟩ := hc
+    have hsigner : c.signer = c.approver := by simpa [authoritySigner, hh] using hs
+    exact Or.inr ⟨cap, hcap, hsig, hhub, hp, hsigner.trans ha⟩
+  | first e => exact Or.inl (by simpa [authoritySigner, hh] using h.1)
+  | byDevice s => exact Or.inl (by simpa [authoritySigner, hh] using h.1)
+  | byPairing d => exact Or.inl (by simpa [authoritySigner, hh] using h.1)
+  | creatorRecovery => exact Or.inl (by simpa [authoritySigner, hh] using h.1)
 
 theorem only_manager_revokes {H : Hub} {R : Registry} {r : Rev} (h : revOK H R r) :
     r.signer = H.manager := h.1
@@ -253,6 +296,10 @@ theorem valid_mono {H : Hub} {R R' : Registry} (hsub : R.Sub R') (hu : R'.Unique
     exact ⟨r, hsub.2.1 hr, hrid', t, hsub.1 ht, htid⟩
   · cases hh : c.how with
     | first e => rw [hh] at h; exact h
+    | invited k e =>
+      rw [hh] at h
+      obtain ⟨cap, hc, rest⟩ := h
+      exact ⟨cap, hsub.2.2.2 hc, rest⟩
     | creatorRecovery => rw [hh] at h; exact h
     | byDevice s =>
       rw [hh] at h
@@ -261,7 +308,7 @@ theorem valid_mono {H : Hub} {R R' : Registry} (hsub : R.Sub R') (hu : R'.Unique
     | byPairing d =>
       rw [hh] at h
       obtain ⟨dl, hd, hdid, hdm, ha, src, hs, hsid, hm, hsig', hsurv⟩ := h
-      exact ⟨dl, hsub.2.2 hd, hdid, hdm, ha, src, hsub.1 hs, hsid, hm, hsig',
+      exact ⟨dl, hsub.2.2.1 hd, hdid, hdm, ha, src, hsub.1 hs, hsid, hm, hsig',
         survives_issued_mono hsub hu hdep hsurv⟩
 
 /-! ## Policy snapshots and floors -/
@@ -303,7 +350,7 @@ def phone : Cert := ⟨"c-phone", "phone/invite", "phone", .first "invite", "pho
 def laptop : Cert := ⟨"c-laptop", "phone/invite", "laptop", .byDevice "c-phone", "phone", [], "MKs"⟩
 def dlg : Delegation := ⟨"d1", "phone/invite", "c-phone", "invite-key", "phone", 100⟩
 def ipad : Cert := ⟨"c-ipad", "phone/invite", "ipad", .byPairing "d1", "invite-key", [], "MKs"⟩
-def R0 : Registry := ⟨[phone, laptop, ipad], [], [dlg]⟩
+def R0 : Registry := ⟨[phone, laptop, ipad], [], [dlg], []⟩
 
 example : certOK H0 R0 phone ∧ certOK H0 R0 laptop ∧ certOK H0 R0 ipad := by decide
 
@@ -316,17 +363,17 @@ example : ¬ certOK H0 R0 ⟨"c-x", "phone/invite", "mgr-device", .first "invite
 -- test_revoking_first_device_preserves_member_group_and_its_other_device; and
 -- test_retired_key_never_returns_under_an_alias
 def revPhone : Rev := ⟨"r1", "c-phone", ["c-laptop", "c-ipad"], "MKs"⟩
-def R1 : Registry := ⟨[phone, laptop, ipad], [revPhone], [dlg]⟩
+def R1 : Registry := ⟨[phone, laptop, ipad], [revPhone], [dlg], []⟩
 def aliasCert : Cert := ⟨"c-aliasCert", "phone/invite", "phone", .byDevice "c-laptop", "laptop", ["r1"], "MKs"⟩
 
 example : survives R1 [revPhone] laptop ∧ survives R1 [revPhone] ipad ∧ ¬ survives R1 [revPhone] phone ∧
-    certOK H0 ⟨[phone, laptop, ipad, aliasCert], [revPhone], [dlg]⟩ aliasCert ∧
-    ¬ survives ⟨[phone, laptop, ipad, aliasCert], [revPhone], [dlg]⟩ [revPhone] aliasCert := by decide
+    certOK H0 ⟨[phone, laptop, ipad, aliasCert], [revPhone], [dlg], []⟩ aliasCert ∧
+    ¬ survives ⟨[phone, laptop, ipad, aliasCert], [revPhone], [dlg], []⟩ [revPhone] aliasCert := by decide
 
 -- test_old_phone_alias_omitted_at_cut_cannot_arrive_later: certified before the cut but not
 -- retained by it, and not issued after it
 def late : Cert := ⟨"c-late", "phone/invite", "watch", .byDevice "c-phone", "phone", [], "MKs"⟩
-example : certOK H0 ⟨[phone, laptop, ipad, late], [revPhone], [dlg]⟩ late ∧
-    ¬ survives ⟨[phone, laptop, ipad, late], [revPhone], [dlg]⟩ [revPhone] late := by decide
+example : certOK H0 ⟨[phone, laptop, ipad, late], [revPhone], [dlg], []⟩ late ∧
+    ¬ survives ⟨[phone, laptop, ipad, late], [revPhone], [dlg], []⟩ [revPhone] late := by decide
 
 end Tandem.Reg

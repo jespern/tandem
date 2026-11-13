@@ -16,5 +16,8 @@ import TandemProofs.HubPassword
 import TandemProofs.Registry
 import TandemProofs.Pairing
 import TandemProofs.Directory
+import TandemProofs.Invitation
+import TandemProofs.Receipts
+import TandemProofs.HomeRekey
 import TandemProofs.Encoding
 import TandemProofs.Examples
