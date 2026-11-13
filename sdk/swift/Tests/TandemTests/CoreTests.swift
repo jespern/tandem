@@ -150,6 +150,8 @@ private actor FakeStore: PushStore {
         let out = ChangeBatch(added: added, removed: [], cursor: String(calls)); added = []; return out
     }
     func append(channel: String, body: Bytes) async throws -> String { added.append(Message(id: "local", channel: channel, body: body)); return "local" }
+    func fetch(ids: [String]) async throws -> [Message] { [] }
+    func destroy(ids: [String]) async throws {}
     func close() async { closed = true; continuation.finish() }
     func wake() { continuation.yield(()) }
     func untilChanges(_ target: Int) async {

@@ -76,6 +76,11 @@ public actor MemoryHub {
         return entry.id
     }
 
+    func fetch(_ number: Int, _ ids: [String]) -> [Message] {
+        let hide = hidden[number] ?? []
+        return ids.compactMap { live[$0] }.filter { !hide.contains($0.channel) }.map { Message(id: $0.id, channel: $0.channel, body: $0.body) }
+    }
+
     func remove(_ ids: [String]) {
         var any = false
         for id in ids where live.removeValue(forKey: id) != nil { events.append(.removed(id)); any = true }
@@ -92,7 +97,8 @@ public actor MemoryHub {
         public func watch() async throws -> AsyncThrowingStream<Void, any Error> { await hub.watch(number) }
         public func changes(since cursor: String) async throws -> ChangeBatch { try await hub.changes(number, since: cursor) }
         public func append(channel: String, body: Bytes) async throws -> String { await hub.append(channel: channel, body: body) }
-        public func destroy(_ ids: [String]) async throws { await hub.remove(ids) }
+        public func fetch(ids: [String]) async throws -> [Message] { await hub.fetch(number, ids) }
+        public func destroy(ids: [String]) async throws { await hub.remove(ids) }
         public func close() async { await hub.close(number) }
     }
 }

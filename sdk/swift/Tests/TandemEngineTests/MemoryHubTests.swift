@@ -13,7 +13,7 @@ final class MemoryHubTests: XCTestCase {
         var batch = try await b.changes(since: "")
         XCTAssertEqual(batch.added.map(\.id), [id])
         XCTAssertEqual(batch.added.first?.body, [1, 2])
-        try await a.destroy([id])
+        try await a.destroy(ids: [id])
         _ = try await wakes.next()
         batch = try await b.changes(since: batch.cursor)
         XCTAssertEqual(batch.removed, [id])

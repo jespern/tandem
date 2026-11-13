@@ -10,12 +10,15 @@ public struct ChangeBatch: Sendable, Equatable {
     public init(added: [Message], removed: [String], cursor: String) { self.added = added; self.removed = removed; self.cursor = cursor }
 }
 
-/// watch returns after subscription is active; buffer invalidations, including
-/// reconnection. An IMAP adapter serializes commands with IDLE/DONE, then resumes IDLE.
+/// The abstract store of §10.1. watch returns after subscription is active; buffer
+/// invalidations, including reconnection. An IMAP adapter serializes commands with
+/// IDLE/DONE, then resumes IDLE. fetch leaves out messages that don't decode (§10.4).
 public protocol PushStore: Sendable {
     func watch() async throws -> AsyncThrowingStream<Void, any Error>
     func changes(since cursor: String) async throws -> ChangeBatch
     func append(channel: String, body: Bytes) async throws -> String
+    func fetch(ids: [String]) async throws -> [Message]
+    func destroy(ids: [String]) async throws
     func close() async
 }
 

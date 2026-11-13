@@ -1,8 +1,9 @@
 # Tandem SDKs
 
 Four native **v2 protocol cores**, with an event-driven session API. These are
-development SDKs. They do not yet implement a complete device controller or an
-IMAP adapter; the v1 implementations on `testbed` are separate.
+development SDKs. They do not yet implement a complete device controller; only Swift
+has an IMAP adapter ([`TandemIMAP`](swift/README.md#imap)). The v1 implementations on
+`testbed` are separate.
 
 | Language | Runtime | Changes arrive as | Runtime dependencies |
 | --- | --- | --- | --- |
