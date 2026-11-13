@@ -58,6 +58,8 @@ mkdir -p out
 rm -f out/decisions.html
 page index "Tandem" -V front=1 -M pagetitle="Tandem: $(printf %s "$tagline" | sed 's/^A /a /; s/\.$//')" -M description="$tagline" \
   --include-before-body="$tmp/front.html" < /dev/null
+page architecture "Architecture" -M pagetitle="Tandem: architecture" \
+  --include-before-body=architecture.html < /dev/null
 page spec "$title" --toc --toc-depth=3 --include-before-body="$tmp/status.html" < "$tmp/spec.md"
 page prior-art "Prior art" -M pagetitle="Tandem: prior art" < "$tmp/prior-art.md"
 page questions "Open questions" -M pagetitle="Tandem: open questions" < "$tmp/questions.md"
