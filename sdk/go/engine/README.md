@@ -1,0 +1,70 @@
+# The Go device engine
+
+`github.com/jespern/tandem/sdk/go/engine` is a Tandem v2 device for Go: one installation on one hub, a port of the Swift engine (`sdk/swift/Sources/TandemEngine`, described in `sdk/swift/ENGINE.md` and `INTEGRATING.md`). The protocol is `DESIGN.md` at the repository root. Every crypto and codec operation goes through the Go core (`github.com/jespern/tandem/sdk/go`), so the two engines read each other's messages.
+
+```sh
+cd sdk/go
+go test ./engine                               # about 20 s; the three 1 GiB Argon2id tests take most of it
+TANDEM_SKIP_ARGON2_GIB=1 go test -race ./...   # without them
+```
+
+It needs cgo: the store is SQLite through `github.com/mattn/go-sqlite3`.
+
+## Using it
+
+```go
+import (
+    tandem "github.com/jespern/tandem/sdk/go"
+    "github.com/jespern/tandem/sdk/go/engine"
+)
+
+keys, err := engine.LoadOrCreateDeviceKeys(filepath.Join(dir, "keys")) // or MarshalDeviceKeys into the platform's secret store
+store, err := engine.OpenStore(filepath.Join(dir, "hub-"+tandem.B64u(hubID)+".sqlite"))
+var hub tandem.PushStore = …                   // the mail binding; engine.NewMemoryHub().Connect() in tests
+
+device, err := engine.Reopen(store, keys, hub) // the usual case; nil if the store is new
+if device == nil {
+    device, err = engine.Open(genesis, directoryKey, keys, store, hub) // a hub this keychain already knows
+}
+defer device.Close()
+
+events, stop := device.Events()
+defer stop()
+go func() { err := device.Run(ctx) }()         // resumes interrupted work, then syncs on every push
+for e := range events { refresh(e) }
+```
+
+Every method that talks to the hub takes a `context.Context` and returns an error. Operations (syncs and the app's actions) run one at a time; getters (`Lists`, `Items`, `Members`, `People`, …) never wait for the network: they read between operations and while one waits on the hub. `Run` returns when its context ends or the push subscription does; a sync that fails is reported as `EventSyncFailed` and the next push tries again.
+
+**Creating a hub.** `engine.Found(account, keys, label, nil)`, then `f.Capsule, err = engine.NewCapsule(password, f.Pin, f.ManagementSeed, nil)` (about a second and 1 GiB), `engine.Open(f.Genesis, f.DirectoryKey, …)` and `device.Publish(ctx, f)`. Keep `f.Genesis` (its JSON) and `f.DirectoryKey` with the account details: they are what `Open` needs on another installation of the same keychain. `device.Unlock(password)` returns the management seed the admin calls take.
+
+**People.** `Invite(ctx, label, account, ms, validFor)` returns an `InvitationLink` (`JSON()`, `ParseInvitationLink`); the new member calls `engine.Join(ctx, link, keys, label, store, hub)`. `StartPairing` and `engine.Pair` add a device that doesn't share the keychain; the admin sees `PendingClaims()` and calls `Approve` or `Reject`. `Revoke(ctx, certificate, ms)`; the person's other devices rekey their home by themselves, and list owners see `ListsNeedingRekey()` and call `Rekey`. `SetName`, `People`, `NameOf`. `ChangePassword`, `Invitations`, `CancelInvitation`, `engine.RecoverCreator`.
+
+**Lists.** `CreateList`, `SetField`, `Add`, `Remove`, `DeleteRecord`, `Rename`; `Lists`, `Items` (immutable `Item` snapshots: `Text`, `Values` for conflicts, `Elements`, `Fields`, `CreatedBy`, `LastModifiedBy`), `Item`, `Value`, `Records`, `Name`, `Role`, `Members`. Sharing: `Share(ctx, list, participant, role, name)`, `PendingOffers`, `Accept`, `Decline`, `Leave`, `MemberStatus`, `SetRole`, `RemoveMember`, `Delete`, `IsDeleted`, `IsDead`, `RemovedLists`. A key change in flight on another device of the owner shows as `PendingChange(list)` and blocks sharing changes with a `*PendingError` until `Finish` or `Discard`; `Resume` (which `Run` calls) carries this device's own interrupted change on, or returns `ErrSuperseded` if another device discarded or overtook it. `Unshared` and `DismissUnshared` report late writes a key change may have left behind.
+
+**Home.** `SetHome`, `AddHome`, `HomeValue`, `HomeElements` for the app's own `settings:` records.
+
+**Events.** `Event.Kind` is one of `EventLists`, `EventItems` (with `List` and `Records`), `EventMembers` (with `List`), `EventOffers`, `EventClaims`, `EventPeople`, `EventHome`, `EventApproved`, `EventRevoked`, `EventSyncFailed` (with `Message`), `EventPublished` (send a wake hint naming `WakeTag()`, if the app has a hint channel). They are coarse refresh signals, sent at the end of each operation; each subscriber has its own unbounded queue, so a slow reader never holds the device up.
+
+**Keys.** The engine never stores the keychain's keys. `MarshalDeviceKeys`/`ParseDeviceKeys` give them a 64-byte form for a secret store; `LoadOrCreateDeviceKeys` keeps them in an owner-only file. A copy of the keys on another installation is the same keychain, as an iCloud-synced one is: it finds its identity on the hub by itself on the first sync.
+
+## What is done
+
+Everything the Swift engine does except what is Apple-specific, with the Swift tests ported scenario by scenario (69 test functions, 76 cases with the crash points as subtests): Store, MemoryHub, Registry (against `vectors/v2/control.json`), Founding, Device, Home, Collection, Sharing, Pairing, Revocation, Rotation (every crash point of §11.6, finish and discard from another owner device, late writes signed again), ListLife, Live, Hygiene, KeyRequest, Admin, App, and ReviewFinding: each of the seven attacks of the independent review, plus one that a write under a not-yet-counted epoch is held, not dropped. The core gained the admin capsule (Argon2id at m = 1 GiB, t = 3, p = 1, NFC, checked against `conformance/fixtures/tandem-v2-capsule.json`) and `JSONObject`, the Python-compatible JSON writer the engine's notices, links and statements use.
+
+## How it differs from the Swift engine, and why
+
+- **Concurrency.** Swift's `Device` is an actor whose methods interleave at every `await`, with syncs chained by hand. Here an operation holds the device until it ends, so no two operations interleave at all; the state lock alone is released while an operation waits on the hub, so getters stay responsive. Simpler to reason about, and it covers what Swift's `changing` set and sync chain guard against.
+- **`Run` subscribes first.** It calls `Watch` before resuming and syncing, so a change that lands during the first sync wakes the loop; Swift's `run()` resumes, then watches.
+- **Left out:** the Keychain wrapper, `ItemWriter` and the multi-process `data_version` check (there are no app extensions in Go; a `Store` belongs to one `Device` in one process). In their place, `MarshalDeviceKeys` and `LoadOrCreateDeviceKeys`.
+- **Records are copy-on-write**, so an `Item` the app holds never changes under it (Swift gets this from value types).
+- **`ChangePassword`** stretches the new password before taking the device, so syncs go on during the second of Argon2id.
+- **Names** follow Swift's where Go allows: `RemoveMember(participant, list)` because `Remove` is the set-element removal; `Name(list)` and `NameOf(participant)`; `Value`, `Item` and `HomeValue` return `(value, ok)`; `validFor` 0 means the default (7 days for invitations, a day for pairing links).
+- **Errors.** `ErrSuperseded`, `ErrNoteChanged`, `ErrCantFinish` and `*PendingError` are Swift's `ChangeError`. A key change's step 5 skips a member only when they have no admitted device (Swift skips on any `invalid` error).
+- Same-epoch roster changes also emit `EventMembers` and `EventLists` on the device that makes them.
+
+## What is left
+
+- An IMAP `PushStore` in Go (the Swift SDK has `TandemIMAP`); until then the engine runs on `MemoryHub` or an app's own binding.
+- What the Swift engine also lacks: restoring a wiped hub (§12.4) beyond record-by-record healing; another admin finishing a certified pairing whose release never went out; keeping a removed member's replica for 30 days and then dropping it (§11.6); runs against Stalwart, Fastmail and Gmail.
+- The core's `RecordPayload` writes with `encoding/json`, which escapes `<`, `>` and `&` in field names and so spells some record payloads differently from the Python and Swift writers. Readers accept both and nothing signs or compares those bytes across devices; worth aligning with `JSONObject` all the same.

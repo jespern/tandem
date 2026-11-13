@@ -27,5 +27,10 @@ for batch := range session.Updates() {
 
 Submit concurrently with `session.Submit(ctx, channelTag, persistedEnvelope)`.
 Cancel the run context and wait for `Run` to return during shutdown. No SDK timer
-initiates a network request. The IMAP adapter and complete device engine are not
-part of this core milestone.
+initiates a network request.
+
+`OpenCapsule`/`SealCapsule` are the admin capsule of §6.7 (Argon2id at 1 GiB, NFC
+passwords), and `JSONObject` writes payload JSON as the other SDKs do.
+
+The device engine is the `engine` package: see [engine/README.md](engine/README.md).
+An IMAP adapter is not written yet.
