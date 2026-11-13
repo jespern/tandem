@@ -1,9 +1,11 @@
 # Tandem SDKs
 
-Four native **v2 protocol cores**, with an event-driven session API. These are
-development SDKs. They do not yet implement a complete device controller; only Swift
-has an IMAP adapter ([`TandemIMAP`](swift/README.md#imap)). The v1 implementations on
-`testbed` are separate.
+Four native **v2 protocol cores**, with an event-driven session API and the complete
+control-object formats (DESIGN §10.8), checked against shared vectors. Swift and Go have IMAP
+bindings ([`TandemIMAP`](swift/README.md#imap), [`sdk/go/imap`](go/README.md)). Swift has the
+production device engine, `TandemEngine` ([INTEGRATING.md](swift/INTEGRATING.md)); a Go engine is
+being built. `interop/interop.py` runs devices on different engines against one hub. The v1
+implementations on `testbed` are separate.
 
 | Language | Runtime | Changes arrive as | Runtime dependencies |
 | --- | --- | --- | --- |
@@ -90,7 +92,7 @@ capacity is full; the other runtimes suspend queueing. Closing wakes blocked
 readers and submissions and closes the owned store. Go callers cancel `Run`'s
 context; the other SDKs expose `close`/`close()` or an async context manager.
 
-The forthcoming IMAP adapter must maintain IDLE and use DONE/command completion
+An IMAP binding must maintain IDLE and use DONE/command completion
 before submitting commands, then resume IDLE. EXISTS, EXPUNGE/VANISHED, socket
 failure and network reachability are event sources. Reconnection reconciles from
 the last saved cursor; UIDVALIDITY changes require a full resync. Protocol lease
@@ -129,12 +131,9 @@ the session tests; it is not a proof that a third-party transport never polls.
 
 ## What comes next
 
-The full SDKs still need the control formats in DESIGN Q21/Q28: registrations,
-certificates, exact policy snapshots, invitations, pairing, profiles, grants,
-receipts and home-epoch starts. They also need the device/roster controller,
-durable storage and crash-resumable outbox, platform key storage, admin-password
-capsule support, IMAP adapters, and end-to-end device scenarios. Neither the Lean
-proofs nor the core interoperability checks substitute for those layers.
+Python and TypeScript have the cores only: no IMAP binding and no device engine. The
+Lean proofs and the core interoperability checks don't substitute for an engine's own
+scenario tests.
 
 The first milestone deliberately implements the bytes already specified. It does
 not invent control formats independently in four languages.
