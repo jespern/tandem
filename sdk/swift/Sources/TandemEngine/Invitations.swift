@@ -84,6 +84,9 @@ extension Device {
         let genesis = try await findGenesis(hub: link.hub, genesis: link.genesis, directoryKey: link.directoryKey, on: hub)
         let device = try Device.open(genesis: genesis, directoryKey: link.directoryKey, keys: keys, store: store, hub: hub)
         try await device.sync()
+        guard await !device.receipt(Control.inviteCancelled, about: try inv.id()) else {
+            throw TandemError.invalid("invitation: the admin cancelled it")
+        }
         try await device.admit(invitation: inv, inviteKey: inviteKey, label: label)
         return device
     }

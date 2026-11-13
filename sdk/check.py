@@ -98,7 +98,7 @@ def main():
         run([node, "--test", "test/core.test.mjs", "test/control.test.mjs"], ROOT / "sdk/typescript", env)
         # The 1 GiB capsule vector takes over a minute in a debug build; it runs once, optimized, below.
         run(["swift", "test", "--quiet"], ROOT, dict(env, TANDEM_SKIP_ARGON2_GIB="1"))
-        run(["swift", "test", "--quiet", "-c", "release", "--filter", "CapsuleTests|testTheHubPasswordUnlocksManagement"], ROOT, env)
+        run(["swift", "test", "--quiet", "-c", "release", "--filter", "CapsuleTests|testTheHubPassword"], ROOT, env)
         env["TANDEM_VERIFY_INTEROP"] = "1"
         run(["go", "test", "-count=1", "-run", "TestCrossSDK", "./..."], ROOT / "sdk/go", env)
         run([sys.executable, "-B", "-m", "unittest", "discover", "-s", "sdk/python/tests", "-k", "cross_sdk", "-q"], env=env)

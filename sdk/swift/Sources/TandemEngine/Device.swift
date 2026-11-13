@@ -21,9 +21,9 @@ public actor Device {
     public internal(set) var registry: Registry
     public internal(set) var me: Me?
     /// Directory notices held: home-recovery boxes and the like.
-    public private(set) var notices: [Notice] = []
+    public internal(set) var notices: [Notice] = []
     /// Admin capsules held (§6.7), by ID.
-    public private(set) var capsules: [ID: ControlObject] = [:]
+    public internal(set) var capsules: [ID: ControlObject] = [:]
     /// Home epochs this device holds the key of, by epoch ID (§6.2, §10.8).
     var homeKeys: [ID: Bytes] = [:]
     var homeEpochs: [ID: ControlObject] = [:]
@@ -281,8 +281,10 @@ public actor Device {
             return false   // only the pinned genesis is ever accepted; another one is another hub (§6.9)
         case "capsule":
             guard let o = try? ControlObject.parse(json, expect: "capsule"), o.verify("sig", publicKey: pin.hub),
-                  case let .id(g)? = o.fields["genesis"], g == pin.genesis, let id = try? o.id(), capsules[id] == nil
-            else { return false }
+                  case let .id(g)? = o.fields["genesis"], g == pin.genesis, let id = try? o.id() else { return false }
+            // Which message carries it, so a password change can destroy it (§6.7).
+            try store.noteContents(message: m.id, record: Bytes(repeating: 0, count: 16), writes: [id])
+            guard capsules[id] == nil else { return false }
             capsules[id] = o
             return try store.putObject(o)
         case "receipt":
