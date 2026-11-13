@@ -50,6 +50,12 @@ theorem nextHLC_millis_ge (last : HLC) (now : Nat) :
 /-- The 64-bit wire order `millis · 2^16 + counter` (§5.5) agrees with `HLC.lt`. -/
 def HLC.toNat (h : HLC) : Nat := h.millis * 65536 + h.counter
 
+/-- On the wire a clock is `u64(millis) || u16(counter)`, and a write whose `millis` reaches
+2^48 is invalid (§9.1). With the counter in 16 bits, that is the packed value reaching 2^64. -/
+theorem HLC.toNat_lt_iff {h : HLC} (hc : h.counter ≤ counterMax) :
+    h.toNat < 2 ^ 64 ↔ h.millis < 2 ^ 48 := by
+  unfold HLC.toNat; unfold counterMax at hc; omega
+
 theorem HLC.toNat_lt {a b : HLC} (ha : a.counter ≤ counterMax)
     (h : HLC.lt a b) : a.toNat < b.toNat := by
   unfold HLC.toNat

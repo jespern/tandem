@@ -50,8 +50,8 @@ def normVV (v : VV) : VV :=
 def vvJson (v : VV) : Json := Json.arr ((normVV v).map fun (d, n) => Json.arr #[Json.str d, Json.num n]).toArray
 
 def member (j : Json) : Member :=
-  { uid := strD j "uid", role := Role.parse (strD j "role"), uka := strD j "uka",
-    name := strD j "name", via := str? j "via" }
+  { uid := strD j "uid", role := Role.parse (strD j "role"), name := strD j "name",
+    floor := strD j "floor" }
 
 def node (j : Json) : Node :=
   { id := strD j "id", parent := str? j "parent", signer := strD j "signer",
@@ -78,7 +78,7 @@ def writeOf (resolve : String → Stmt) (j : Json) : Write :=
     record := strD j "record", field := strD j "field",
     op := (Op.parse (strD j "op" "assign")).getD .assign, elem := strD j "elem",
     value := strD j "value", dev := strD j "dev", hlc := (nat? j "hlc").getD 0,
-    ctx := vv j "ctx", base := vv j "base" }
+    ctx := vv j "ctx", base := vv j "base", auth := strD j "auth" }
 
 def opName : Op → String
   | .assign => "assign" | .add => "add" | .remove => "remove" | .delete => "delete"
@@ -139,7 +139,10 @@ def handle (req : Json) : Except String Json := do
   let epochs := acc.map fun s => (s.id, (epochStart s).id)
   let resolve (id : String) : Stmt := (acc.find? (·.id == id)).getD (chain id)
   let writes := (arr req "writes").toList.map (writeOf resolve)
-  let R : Records := { metaRec := strD req "meta", named := strs req "named" }
+  -- a snapshot extends a floor if it is that floor or the request says so
+  let extends_ := (arr req "extends").toList.map fun p => (strD p "snapshot", strD p "floor")
+  let R : Records := { metaRec := strD req "meta", named := strs req "named",
+                       ext := fun a f => a == f || extends_.contains (a, f) }
   let E : Stmt := match str? req "channel" with
     | some id => chain id
     | none => epochStart hd
@@ -191,10 +194,20 @@ def handle (req : Json) : Except String Json := do
         | some n => match reissueIn hd st w with
           | none => (wid, Json.mkObj [("status", Json.str "skip")])
           | some _ => (wid, Json.mkObj [("status", Json.str "new"), ("write", writeJson n)])
-  let invites := (arr req "invites").toList.map fun i =>
-    let rec_ : InviteRec :=
-      { id := strD i "id", closed := boolD i "closed" false, maxUses := (nat? i "maxUses").getD 1 }
-    (rec_.id, Json.bool (inviteOpen hd rec_))
+  -- memberships: the state of each asked-about user (§11.2)
+  let kindOf : String → Option Kind
+    | "a" => some .add | "n" => some .no | "l" => some .leave | _ => none
+  let stateName : MState → String
+    | .removed => "removed" | .waiting => "none" | .offered => "offered" | .active => "active"
+    | .left => "left"
+  let memberships := (arr req "memberships").toList.map fun q =>
+    let u := strD q "uid"
+    let answers : Answers := (arr q "answers").toList.filterMap fun a => match a with
+      | .arr #[.str adm, .str k] => (kindOf k).map (adm, ·)
+      | _ => none
+    let heldAt := (strs q "held").map chain
+    (u, Json.mkObj [("state", Json.str (stateName (mstate hd u answers heldAt))),
+      ("admission", match admission u hd with | some a => Json.str a | none => Json.null)])
   let invBytes : List (String × Json) := match req.getObjVal? "inventoryBytes" with
     | .ok j =>
       let ps := (invPairs j).filterMap fun (r, w) => do
@@ -217,7 +230,7 @@ def handle (req : Json) : Except String Json := do
     ("dominated", pairs domPairs),
     ("mayDestroy", pairs mdPairs),
     ("reissue", Json.mkObj reissued),
-    ("invites", Json.mkObj invites)] ++ invBytes)
+    ("memberships", Json.mkObj memberships)] ++ invBytes)
 
 partial def loop (stdin : IO.FS.Stream) (stdout : IO.FS.Stream) : IO Unit := do
   let line ← stdin.getLine

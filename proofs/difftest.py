@@ -5,8 +5,12 @@ Needs the oracle built (lake build tandem-oracle). Standard library only.
 
 Each run builds a random roster history (valid and invalid statements, rotations with
 inventories, conflicting successors, statements signed by others), random writes, messages,
-invites and late writes; delivers a random subset in a random order to an OwnerLog; and asks
-both models the same questions. Any disagreement is printed with the seed that produced it.
+answers to admissions and late writes; delivers a random subset in a random order to an
+OwnerLog; and asks both models the same questions. Any disagreement is printed with the seed that produced it.
+
+Device floors: owner_model.py has none, so every member's floor and every write's policy
+snapshot are empty here, and every snapshot extends every floor. Eligibility below the floor
+is covered by the Lean examples instead.
 
 Deletes: owner_model.py has no ops; it compares every write by (record, field). Since
 2026-11-12 a delete (empty field, element and value) supersedes any write to its record that
@@ -25,8 +29,8 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "model"))
 
 import owner_model  # noqa: E402
-from owner_model import (META, OwnerLog, data_write, digest, dominated, inventory_bytes,  # noqa: E402
-                         inventory_hash, invite_open, may_destroy, reissue, statement,
+from owner_model import (META, OwnerLog, admission, data_write, digest, dominated,  # noqa: E402
+                         inventory_bytes, inventory_hash, may_destroy, reissue, state, statement,
                          write_valid)
 
 
@@ -54,12 +58,10 @@ RECORDS = [digest("r1")[:32], digest("r2")[:32], META]
 
 def node(s):
     b = s["body"]
-    via = b.get("via", {})
     return {"id": s["id"], "parent": s["parent"], "signer": s["signer"], "n": b["n"],
             "epoch": b["epoch"], "commit": b["commit"], "snapshot": b["snapshot"],
             "deleted": b["deleted"],
-            "members": [{"uid": u, "role": r, "uka": "uka-" + u, "name": u,
-                         **({"via": via[u]} if u in via else {})} for u, r in b["members"].items()]}
+            "members": [{"uid": u, "role": r, "name": u, "floor": ""} for u, r in b["members"].items()]}
 
 
 def wjson(w):
@@ -98,15 +100,12 @@ def history(rng):
         body["n"] = pb["n"] + (1 if rng.random() < 0.95 else 2)
         members = body["members"]
         kind = rng.choice(["add", "add", "promote", "demote", "remove", "rotate", "rotate",
-                           "rotate-add", "noop", "delete", "admin", "two-owners", "reuse-key",
-                           "via-change"])
+                           "rotate-add", "noop", "delete", "admin", "two-owners", "reuse-key"])
         others = [u for u in members if u != "O"]
         rotate = kind.startswith("rotate") or (kind in ("demote", "remove") and rng.random() < 0.8)
         if kind in ("add", "rotate-add"):
             u = rng.choice(["W", "R", "X", "Y"])
             members[u] = rng.choice(["writer", "reader"])
-            if rng.random() < 0.6:
-                body.setdefault("via", {})[u] = rng.choice(["i1", "i2"])
         elif kind == "promote" and others:
             members[rng.choice(others)] = "writer"
         elif kind == "demote" and others:
@@ -114,16 +113,12 @@ def history(rng):
         elif kind == "remove" and others:
             u = rng.choice(others)
             members.pop(u)
-            body.get("via", {}).pop(u, None)
         elif kind == "delete":
             body["deleted"] = True
         elif kind == "admin" and others:
             members[rng.choice(others)] = "admin"
         elif kind == "two-owners" and others:
             members[rng.choice(others)] = "owner"
-        elif kind == "via-change" and body.get("via"):
-            u = rng.choice(sorted(body["via"]))
-            body["via"][u] = "i3"
         if rotate:
             line = set(full.line(parent))
             mine = [w for w in writes if w["ref"] in line]
@@ -205,10 +200,16 @@ def compare(rng, oracle, seed):
     for i in range(rng.randint(0, 5)):
         ws = rng.sample(following, rng.randint(0, min(3, len(following))))
         msgs.append({"id": "m%d" % i, "hash": rng.randint(0, 3), "writes": [w["id"] for w in ws]})
-    invites = [{"id": i, "closed": rng.random() < 0.2, "maxUses": rng.randint(1, 3)} for i in ("i1", "i2")]
+    # answers to admissions (§11.2): real admission IDs and a stranger, and grants held at random statements
+    sids = sorted(log.st)
+    memberships = [{"uid": u,
+                    "answers": [[rng.choice(sids + ["elsewhere"]), rng.choice("anl")]
+                                for _ in range(rng.randint(0, 3))],
+                    "held": rng.sample(sids, rng.randint(0, min(2, len(sids))))}
+                   for u in USERS + ["Y"]]
     late = rng.sample(following, min(4, len(following)))
     states = {w["id"]: rng.sample(following, rng.randint(0, min(3, len(following)))) for w in late}
-    req = dict(base, messages=msgs, invites=invites,
+    req = dict(base, messages=msgs, memberships=memberships,
                reissue=[{"write": w["id"], "state": [x["id"] for x in states[w["id"]]]} for w in late])
     out = oracle.ask(req)
 
@@ -221,7 +222,8 @@ def compare(rng, oracle, seed):
                                      if ops[a] == ops[b] == "delete"))
     seen("may-destroy pairs", len(out["mayDestroy"]))
     seen("mutual domination", sum(1 for a, b in out["dominated"] if [b, a] in out["dominated"]))
-    seen("invites open", sum(out["invites"].values()))
+    for st in ("removed", "none", "offered", "active", "left"):
+        seen("membership " + st, sum(1 for v in out["memberships"].values() if v["state"] == st))
     check("accepted", sorted(log.st), sorted(out["accepted"]))
     check("dead", log.frozen, out["dead"])
     check("head", log.head(), out["head"])
@@ -236,8 +238,11 @@ def compare(rng, oracle, seed):
     check("mayDestroy", sorted([a, b] for a in mw for b in mw
                                if a != b and may_destroy(log, mw[a], mw[b], hs[a], hs[b])),
           sorted(out["mayDestroy"]))
-    for inv in invites:
-        check("invite " + inv["id"], invite_open(log, inv), out["invites"][inv["id"]])
+    for q in memberships:
+        u, theirs = q["uid"], out["memberships"][q["uid"]]
+        check("admission " + u, admission(log, u, log.head()), theirs["admission"])
+        check("membership " + u, state(log, u, {tuple(a) for a in q["answers"]}, [{"at": s} for s in q["held"]]),
+              theirs["state"])
     for w in late:
         try:
             new = reissue(log, w, states[w["id"]])

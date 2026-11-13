@@ -9,6 +9,7 @@ import TandemProofs.Roster
 import TandemProofs.Eligibility
 import TandemProofs.Reissue
 import TandemProofs.VectorLimit
-import TandemProofs.Invite
+import TandemProofs.Answers
+import TandemProofs.Capsule
 import TandemProofs.Encoding
 import TandemProofs.Examples

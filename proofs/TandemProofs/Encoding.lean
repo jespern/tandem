@@ -8,7 +8,7 @@ import Mathlib.Tactic.Ring
 
 * `sigInput` is injective: two different writes never produce the same signed bytes, so a
   signature and a write ID name exactly one write (`sigInput_inj`).
-* The `TANDEM-…-V1` prefixes, and the `tandem/v1/…` labels hashed in front of data, are
+* The `TANDEM-…-V2` prefixes, and the `tandem/v2/…` labels hashed in front of data, are
   pairwise prefix-free, so input for one kind of object is never input for another
   (`signed_domains_separate`, `hash_domains_separate`); the HKDF `info` labels are distinct
   for each key they derive from (`kdf_labels_distinct`).
@@ -137,6 +137,7 @@ def vv (v : List Entry) : List Byte := counted 2 Entry.bytes v
 
 /-- The fields a write signs. `vhash` is `H(value)`. -/
 structure SigFields where
+  hub : List Byte
   scope : List Byte
   record : List Byte
   field : List Byte
@@ -144,6 +145,8 @@ structure SigFields where
   elem : List Byte
   vhash : List Byte
   author : List Byte
+  cert : List Byte
+  snap : List Byte
   dev : List Byte
   millis : Nat
   counter : Nat
@@ -153,25 +156,29 @@ structure SigFields where
 deriving DecidableEq
 
 def SigFields.wf (f : SigFields) : Prop :=
-  f.scope.length = 16 ∧ f.record.length = 16 ∧ f.field.length < 256 ^ 4 ∧
-  f.elem.length < 256 ^ 4 ∧ f.vhash.length = 32 ∧ f.author.length = 32 ∧ f.dev.length = 8 ∧
+  f.hub.length = 32 ∧ f.scope.length = 16 ∧ f.record.length = 16 ∧ f.field.length < 256 ^ 4 ∧
+  f.elem.length < 256 ^ 4 ∧ f.vhash.length = 32 ∧ f.author.length = 32 ∧ f.cert.length = 32 ∧
+  f.snap.length = 32 ∧ f.dev.length = 8 ∧
   f.millis < 256 ^ 8 ∧ f.counter < 256 ^ 2 ∧ f.ref.length = 32 ∧
   (f.ctx.length < 256 ^ 2 ∧ ∀ e ∈ f.ctx, e.wf) ∧ (f.base.length < 256 ^ 2 ∧ ∀ e ∈ f.base, e.wf)
 
 def asciiBytes (s : String) : List Byte := s.toList.map fun c => ⟨c.toNat % 256, Nat.mod_lt _ (by norm_num)⟩
 
-def writeTag : List Byte := asciiBytes "TANDEM-WRITE-V1"
+def writeTag : List Byte := asciiBytes "TANDEM-WRITE-V2"
 
+/-- §5.5. -/
 def sigInput (f : SigFields) : List Byte :=
-  writeTag ++ f.scope ++ f.record ++ lp f.field ++ [f.op] ++ lp f.elem ++ f.vhash ++ f.author ++
-    f.dev ++ be 8 f.millis ++ be 2 f.counter ++ f.ref ++ vv f.ctx ++ vv f.base
+  writeTag ++ f.hub ++ f.scope ++ f.record ++ lp f.field ++ [f.op] ++ lp f.elem ++ f.vhash ++
+    f.author ++ f.cert ++ f.snap ++ f.dev ++ be 8 f.millis ++ be 2 f.counter ++ f.ref ++ vv f.ctx ++
+    vv f.base
 
 /-- **`sigInput` is injective** on well-formed fields: no two writes sign the same bytes. -/
 theorem sigInput_inj {f g : SigFields} (hf : f.wf) (hg : g.wf) (h : sigInput f = sigInput g) :
     f = g := by
-  obtain ⟨f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12⟩ := hf
-  obtain ⟨g1, g2, g3, g4, g5, g6, g7, g8, g9, g10, g11, g12⟩ := hg
+  obtain ⟨f0, f1, f2, f3, f4, f5, f6, f6a, f6b, f7, f8, f9, f10, f11, f12⟩ := hf
+  obtain ⟨g0, g1, g2, g3, g4, g5, g6, g6a, g6b, g7, g8, g9, g10, g11, g12⟩ := hg
   simp only [sigInput, vv, List.append_assoc, List.append_cancel_left_eq] at h
+  obtain ⟨e0, h⟩ := selfDelim_bytes 32 _ _ _ _ f0 g0 h
   obtain ⟨e1, h⟩ := selfDelim_bytes 16 _ _ _ _ f1 g1 h
   obtain ⟨e2, h⟩ := selfDelim_bytes 16 _ _ _ _ f2 g2 h
   obtain ⟨e3, h⟩ := selfDelim_lp _ _ _ _ f3 g3 h
@@ -180,6 +187,8 @@ theorem sigInput_inj {f g : SigFields} (hf : f.wf) (hg : g.wf) (h : sigInput f =
   obtain ⟨e5, h⟩ := selfDelim_lp _ _ _ _ f4 g4 h
   obtain ⟨e6, h⟩ := selfDelim_bytes 32 _ _ _ _ f5 g5 h
   obtain ⟨e7, h⟩ := selfDelim_bytes 32 _ _ _ _ f6 g6 h
+  obtain ⟨e7a, h⟩ := selfDelim_bytes 32 _ _ _ _ f6a g6a h
+  obtain ⟨e7b, h⟩ := selfDelim_bytes 32 _ _ _ _ f6b g6b h
   obtain ⟨e8, h⟩ := selfDelim_bytes 8 _ _ _ _ f7 g7 h
   obtain ⟨e9, h⟩ := selfDelim_be 8 _ _ _ _ f8 g8 h
   obtain ⟨e10, h⟩ := selfDelim_be 2 _ _ _ _ f9 g9 h
@@ -191,17 +200,17 @@ theorem sigInput_inj {f g : SigFields} (hf : f.wf) (hg : g.wf) (h : sigInput f =
 
 /-! ## Domain separation -/
 
-/-- Prefixes of signed inputs and of the pairing reply's AAD (§5.5, §6.3, §11). -/
+/-- Prefixes of signed inputs and AEAD associated data that the design fixes so far (§5.5,
+§6.7). The other signed objects' prefixes are part of Q28 (§18) and join this list when they
+are fixed. -/
 def signedTags : List String :=
-  ["TANDEM-WRITE-V1", "TANDEM-JOIN-V1", "TANDEM-INVITE-V1", "TANDEM-GRANT-V1",
-   "TANDEM-KEYREQ-V1", "TANDEM-LEAVE-V1", "TANDEM-PAIR-CODE-V1", "TANDEM-PAIR-V1"]
+  ["TANDEM-WRITE-V2", "TANDEM-ADMIN-CAPSULE-V2"]
 
-/-- Labels hashed in front of data: key IDs, key commitments, pairing codes, named record IDs,
-home scopes (§5.4, §5.7, §6.3, §7.3, §6.2). Write IDs hash `sigInput`, which starts with
-`TANDEM-WRITE-V1`, so it joins them. -/
+/-- Labels hashed in front of data: key IDs, key commitments, named record IDs, home scopes
+(§5.4, §5.7, §7.3, §6.2). Write IDs hash `sigInput`, which starts with `TANDEM-WRITE-V2`, so it
+joins them. -/
 def hashTags : List String :=
-  ["TANDEM-WRITE-V1", "tandem/v1/kid", "tandem/v1/commit", "tandem/v1/pair-code",
-   "tandem/v1/named", "tandem/v1/home"]
+  ["TANDEM-WRITE-V2", "tandem/v2/kid", "tandem/v2/commit", "tandem/v2/named", "tandem/v2/home"]
 
 def PrefixFree (l : List String) : Prop :=
   ∀ a ∈ l, ∀ b ∈ l, a ≠ b → ¬ a.toList <+: b.toList
@@ -227,17 +236,19 @@ theorem hash_domains_separate {a b : String} (ha : a ∈ hashTags) (hb : b ∈ h
     (hne : a ≠ b) (x y : List Char) : a.toList ++ x ≠ b.toList ++ y :=
   separate (hashTags_prefixFree a ha b hb hne) (hashTags_prefixFree b hb a ha (Ne.symm hne))
 
-/-- HKDF uses, as (input key, info label) (§5.3, §5.4, §5.6). The same `info` is used twice
-only with different input keys. -/
+/-- HKDF uses, as (input key, info label) (§5.3, §5.4, §5.6, §6.3, §6.7). The same `info` is
+used twice only with different input keys. `DirK` is the directory key, `PairK` a pairing
+session key, `CK` the stretched hub password. -/
 def kdfUses : List (String × String) :=
-  [("US", "tandem/v1/user-sign"), ("US", "tandem/v1/user-agree"), ("US", "tandem/v1/home"),
-   ("S", "tandem/v1/invite-sign"), ("S", "tandem/v1/invite-key"),
-   ("P", "tandem/v1/pair-key"), ("P", "tandem/v1/tag"),
-   ("K", "tandem/v1/msg"), ("K", "tandem/v1/collection-tag"),
-   ("HK", "tandem/v1/msg"), ("HK", "tandem/v1/tag"),
-   ("KI", "tandem/v1/msg"), ("KI", "tandem/v1/tag"),
-   ("PK", "tandem/v1/msg"),
-   ("uid", "tandem/v1/inbox-tag")]
+  [("MS", "tandem/v2/manager-sign"), ("MS", "tandem/v2/manager-agree"),
+   ("CK", "tandem/v2/admin-capsule"),
+   ("K", "tandem/v2/msg"), ("K", "tandem/v2/collection-tag"),
+   ("HK", "tandem/v2/msg"), ("HK", "tandem/v2/home-tag"),
+   ("HubK", "tandem/v2/directory-key"), ("HubK", "tandem/v2/directory-tag"),
+   ("DirK", "tandem/v2/msg"),
+   ("PairK", "tandem/v2/msg"),
+   ("L || A", "tandem/v2/pair-package"),
+   ("uid", "tandem/v2/inbox-tag")]
 
 /-- From any one input key, every derived key has its own label. -/
 theorem kdf_labels_distinct : kdfUses.Nodup := by decide

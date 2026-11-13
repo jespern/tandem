@@ -1,4 +1,5 @@
-import TandemProofs.Invite
+import TandemProofs.Answers
+import TandemProofs.Reissue
 
 /-!
 # The regression tests of `model/owner_model.py`, as Lean examples
@@ -12,7 +13,7 @@ differential test (`difftest.py`) compares the two models on random histories in
 
 namespace Tandem.Examples
 
-def m (u : String) (r : Role) (via : Option String := none) : Member := ⟨u, r, "uka-" ++ u, u, via⟩
+def m (u : String) (r : Role) (floor : String := "floor-" ++ u) : Member := ⟨u, r, u, floor⟩
 
 def mk (id : String) (parent : Option Node) (signer : String) (n epoch : Nat) (commit : String)
     (snapshot : Option String) (members : List Member) (deleted : Bool := false)
@@ -80,13 +81,15 @@ example : let bad := next "bad" "O" [m "O" .owner, m "W" .owner, m "R" .reader]
 example : dead g (base ++ [first, next "b" "O" dropR "K2" 1 "h" (announced := false)]) = false := by
   decide
 
--- test_how_a_member_came_in_cannot_be_rewritten
-def joinG : Node := mk "j" fam "O" 2 0 "K0" none
-  [m "O" .owner, m "W" .writer, m "R" .reader, m "G" .reader "party"]
-def afterJoin (id : String) (ms : List Member) : Stmt := [mk id joinG "O" 3 0 "K0" none ms, joinG, fam, g]
-example : ∀ via ∈ [some "other", none],
-    let s := afterJoin "x" [m "O" .owner, m "W" .writer, m "R" .reader, m "G" .reader via]
-    follows (base ++ [[joinG, fam, g], s]) s = false := by decide
+-- §8.2 (no Python counterpart: owner_model.py has no device floors): a same-epoch statement
+-- keeps every staying participant's floor, a new epoch may set new ones, and names may change
+example : follows (base ++ [next "x" "O" [m "O" .owner, m "W" .writer "newer", m "R" .reader]])
+      (next "x" "O" [m "O" .owner, m "W" .writer "newer", m "R" .reader]) = false ∧
+    follows (base ++ [next "x" "O" [m "O" .owner, m "W" .reader "newer", m "R" .reader] "K1" 1 "h"])
+      (next "x" "O" [m "O" .owner, m "W" .reader "newer", m "R" .reader] "K1" 1 "h") = true ∧
+    follows (base ++ [next "x" "O" [m "O" .owner, { m "W" .writer with name := "Wendy" }, m "R" .reader]])
+      (next "x" "O" [m "O" .owner, { m "W" .writer with name := "Wendy" }, m "R" .reader]) = true := by
+  decide
 
 -- test_a_deleted_collection_has_no_successors
 def del : Node := mk "del" fam "O" 2 0 "K0" none [m "O" .owner, m "W" .writer, m "R" .reader] true
@@ -97,11 +100,13 @@ example : let s : Stmt := [mk "x" del "O" 3 0 "K0" none
 
 /-! ## Data -/
 
-def R0 : Records := { metaRec := "meta", named := ["meta"] }
+/-- A snapshot extends a floor here iff it is that floor. -/
+def R0 : Records := { metaRec := "meta", named := ["meta"], ext := (· == ·) }
 
 def wr (id author : String) (ref : Stmt) (rec : String := "item") (field : String := "v")
-    (hlc : Nat := 1) (ctx base : VV := []) (op : Op := .assign) : Write :=
-  ⟨id, author, ref, rec, field, op, "", "x", "device", hlc, ctx, base⟩
+    (hlc : Nat := 1) (ctx base : VV := []) (op : Op := .assign) (auth : String := "floor-" ++ author) :
+    Write :=
+  ⟨id, author, ref, rec, field, op, "", "x", "device", hlc, ctx, base, auth⟩
 
 -- test_readers_and_strangers_cannot_write
 example : eligible g R0 base (wr "1" "R" famC) [g] none = false ∧
@@ -162,18 +167,35 @@ example : eligible g R0 base (wr "n" "W" famC "meta") [g] none = false ∧
 #guard eligible g R0 base (wr "fits" "W" famC (ctx := (List.range 1024).map fun i => (toString i, 1)))
     [g] none = true
 
-/-! ## Invites -/
+-- §6.9, §8.3: a write signed under a snapshot below its author's floor counts only through the
+-- inventory; and a clock past 2^48 ms is invalid (§9.1)
+example : eligible g R0 base (wr "s" "W" famC (auth := "stale")) [g] none = false ∧
+    eligible g R0 base (wr "c" "W" famC (hlc := 2 ^ 64)) [g] none = false ∧
+    eligible g R0 base (wr "c" "W" famC (hlc := 2 ^ 64 - 1)) [g] none = true := by decide
 
-def inv : InviteRec := { id := "party", closed := false, maxUses := 5 }
-def joined : Stmt := [joinG, fam, g]
-def gone : Stmt := [mk "gone" joinG "O" 3 1 "K1" "h" [m "O" .owner, m "W" .writer, m "R" .reader]] ++ joined
-def back2 : Stmt := [mk "back" (gone.head?.getD g) "O" 4 1 "K1" "h"
-  [m "O" .owner, m "W" .writer, m "R" .reader, m "G" .reader "other"]] ++ gone
+/-! ## Sharing and answers (§11.2, §11.3) -/
 
--- test_removing_a_member_closes_their_invite_without_a_second_write
-example : inviteOpen joined inv = true ∧ inviteOpen gone inv = false := by decide
+/-- The owner shares with G (`share`), removes her in a new epoch, then shares again. -/
+def shareG : Node := mk "share" fam "O" 2 0 "K0" none
+  [m "O" .owner, m "W" .writer, m "R" .reader, m "G" .reader]
+def shared : Stmt := [shareG, fam, g]
+def removed : Stmt := [mk "rm" shareG "O" 3 1 "K1" "h" [m "O" .owner, m "W" .writer, m "R" .reader]] ++ shared
+def again : Stmt := [mk "again" (removed.head?.getD g) "O" 4 1 "K1" "h"
+  [m "O" .owner, m "W" .writer, m "R" .reader, m "G" .reader]] ++ removed
 
--- test_an_invite_stays_closed_when_the_removed_member_comes_back_another_way
-example : inviteOpen back2 inv = false ∧ admit gone inv "G" false = .refused := by decide
+-- test_an_offer_can_never_overwrite_an_answer
+example : mstate shared "G" [] [shared] = .offered ∧
+    mstate shared "G" [("share", .no)] [shared] = .left := by decide
+
+-- test_two_answers_at_once_settle_on_no
+example : ∀ A ∈ [[("share", Kind.add), ("share", .no)], [("share", .no), ("share", .add)],
+      [("share", .add), ("share", .leave)]], mstate shared "G" A [] = .left := by decide
+example : mstate shared "G" [("share", .add)] [] = .active := by decide
+
+-- test_adding_again_is_a_new_offer_and_an_old_grant_is_not
+example : admission "G" shared = some "share" ∧ mstate removed "G" [("share", .no)] [] = .removed ∧
+    admission "G" again = some "again" ∧
+    mstate again "G" [("share", .no)] [shared] = .waiting ∧
+    mstate again "G" [("share", .no)] [shared, again] = .offered := by decide
 
 end Tandem.Examples

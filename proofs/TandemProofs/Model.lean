@@ -10,7 +10,10 @@ and the theorems in the other modules are about them.
 
 Cryptography is symbolic. A statement or write *is* its content; its ID stands for the
 SHA-256 of that content, and we assume no collisions. A signature is the `signer`/`author`
-name: whoever signed holds that key. A statement carries its whole ancestry (`Stmt` is a
+name, a participant: whoever signed holds an admitted device key of that participant. Device
+certificates and the registry (§6.9) are not modelled; a write carries the ID of the policy
+snapshot it was signed under (`auth`), and whether that snapshot extends a floor is a fixed
+relation given from outside (`Eligibility.lean`). A statement carries its whole ancestry (`Stmt` is a
 list of nodes, nearest first), because its ID commits to its parent's ID, which commits to
 the grandparent's, and so on: given an ID, the history behind it is fixed.
 -/
@@ -38,12 +41,13 @@ def parse : String → Role
   | "owner" => owner | "writer" => writer | "reader" => reader | s => other s
 end Role
 
+/-- A participant entry (§8.1): participant ID, role, display name, and the device-policy floor
+the epoch pins for them (§6.9), the ID of an exact certificate/revocation snapshot. -/
 structure Member where
   uid : String
   role : Role
-  uka : String
   name : String
-  via : Option String
+  floor : String
 deriving DecidableEq, Repr
 
 /-- A statement's body (§8.1). `epoch` is the key counter `key.n`, `commit` the key commitment. -/
@@ -80,8 +84,7 @@ end Body
 
 def genesisOK (x : Node) : Bool :=
   x.parent.isNone && x.body.wellFormed x.signer && x.body.members.length == 1 &&
-  x.body.n == 0 && x.body.epoch == 0 && x.body.snapshot.isNone && !x.body.deleted &&
-  x.body.members.all (·.via.isNone)
+  x.body.n == 0 && x.body.epoch == 0 && x.body.snapshot.isNone && !x.body.deleted
 
 /-- Whether `x` lowers or removes anyone `p` lists. -/
 def reducing (p x : Node) : Bool :=
@@ -90,17 +93,18 @@ def reducing (p x : Node) : Bool :=
     | some r => r.rank < q.role.rank
 
 /-- §8.2: is `x` a valid successor of `p`? `commits`: the key commitments of `p`'s line.
-This is the whole test. It looks at the parent and nothing else. -/
+This is the whole test. It looks at the parent and nothing else. Names are display hints and
+may change; a same-epoch statement keeps every staying participant's device floor, and a new
+epoch may set new ones (whether they extend the old is the registry's business, §6.9). -/
 def stepOK (p : Node) (commits : List String) (x : Node) : Bool :=
   x.parent == some p.id && x.body.wellFormed x.signer && !p.body.deleted &&
   x.body.n == p.body.n + 1 &&
-  (x.body.members.all fun m => p.body.members.all fun q =>
-      m.uid != q.uid || (m.uka == q.uka && m.name == q.name && m.via == q.via)) &&
   (if x.body.commit != p.body.commit then
       x.body.epoch == p.body.epoch + 1 && x.body.snapshot.isSome &&
       x.body.members.all (fun m => p.body.uids.contains m.uid) && !commits.contains x.body.commit
     else
-      !reducing p x && x.body.epoch == p.body.epoch && x.body.snapshot == p.body.snapshot)
+      !reducing p x && x.body.epoch == p.body.epoch && x.body.snapshot == p.body.snapshot &&
+      (x.body.members.all fun m => p.body.members.all fun q => m.uid != q.uid || m.floor == q.floor))
 
 /-- A statement that starts an epoch counts only once announced (§9.4, §11.6). -/
 def counted (p x : Node) : Bool := x.body.commit == p.body.commit || x.announced
@@ -225,6 +229,8 @@ structure Write where
   hlc : Nat
   ctx : VV
   base : VV
+  /-- The authorization snapshot its signature binds (§5.5, §6.9). -/
+  auth : String := ""
 deriving DecidableEq, Repr
 
 namespace Write
