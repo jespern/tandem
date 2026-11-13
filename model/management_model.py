@@ -1,8 +1,9 @@
 """Selected rules of DESIGN.md §6 (hub management), not a complete protocol/proof.
 
-The admin key is the hub's one root: it opens the capsule on the hub that holds the
-management key, and it is never replaced. A hub whose admin key may have leaked is
-abandoned for a new one (§6.8); there are no recovery generations or password wrappers.
+The hub password opens the capsule on the hub that holds the management key. The
+management key is never replaced: a hub whose password may have leaked is abandoned for a
+new one (§6.8). The password can be changed by writing a new capsule; there are no
+recovery generations.
 
 A signer string denotes a valid signature over the exact immutable object and
 possession of that private key. No real crypto, parser, storage, transport,
@@ -113,10 +114,11 @@ class Snapshot:
 
 
 class Hub:
-    def __init__(self, key="admin-key", manager="M0", creator_device="laptop"):
+    def __init__(self, key="hub-password", manager="M0", creator_device="laptop"):
         self.key = key
         self.creator = member_record_id(key, creator_device, "creator")
         self.roots, self.children, self.certificates, self.revocations = {}, {}, {}, {}
+        self.capsules = {"c0": (key, frozenset())}  # id -> (password, the capsules it replaces)
         self.delegations = {}
         self.current, self.frozen = None, False
         self.genesis = Root(None, 0, manager, creator_device, key)
@@ -158,14 +160,27 @@ class Hub:
         self.certificates[cert.id] = cert
         return True
 
-    def admin_key_opens(self, key):
-        """§6.7: the capsule on the hub holds the management key, sealed under the admin key."""
-        return not self.frozen and key == self.key
+    def current_capsules(self):
+        replaced = {c for _, gone in self.capsules.values() for c in gone}
+        return [c for c in self.capsules if c not in replaced]
+
+    def password_opens(self, password):
+        """§6.7: whether a current capsule on the hub opens with this password."""
+        return not self.frozen and any(self.capsules[c][0] == password for c in self.current_capsules())
+
+    def change_password(self, new, unlocked_with):
+        """§6.7: a device that has opened a capsule, by the password or from its keychain, writes a
+        new one naming every current capsule. Returns the new capsule's ID, or None."""
+        if not self.password_opens(unlocked_with):
+            return None
+        cid = "c%d" % len(self.capsules)
+        self.capsules[cid] = (new, frozenset(self.current_capsules()))
+        return cid
 
     def recover_creator(self, device, key):
-        """§6.8: whoever holds the admin key can give the creator, and only the creator, a new device,
+        """§6.8: whoever knows the hub password can give the creator, and only the creator, a new device,
         for instance after a move to a platform whose keychain doesn't carry the old keys."""
-        if not self.admin_key_opens(key):
+        if not self.password_opens(key):
             return None
         cert = Certificate(self.current, self.creator, device, "creator-recovery", None, device,
                            self.snapshot().revocations, self.roots[self.current].manager)
@@ -340,7 +355,7 @@ class Hub:
         recipients = {c.device for c in self.certificates.values()
                       if c.member == member and self.active(self.snapshot(), c)}
         if member == self.creator:
-            recipients.add("admin-key")
+            recipients.add("hub-password")
         return recipients
 
     def permits_after_floor(self, cert, source, floor):

@@ -17,8 +17,8 @@ class Administration(unittest.TestCase):
         alice = self.h.join("aimee-phone"); self.h.add_certificate(alice)
         self.assertEqual(self.h.home_recipients(alice.member), {"aimee-phone"})
         self.assertNotIn("laptop", self.h.home_recipients(alice.member))
-        self.assertNotIn("admin-key", self.h.home_recipients(alice.member))
-        self.assertIn("admin-key", self.h.home_recipients(self.creator))
+        self.assertNotIn("hub-password", self.h.home_recipients(alice.member))
+        self.assertIn("hub-password", self.h.home_recipients(self.creator))
         self.h.add_revocation(self.h.revoke(alice))
         self.assertEqual(self.h.home_recipients(alice.member), set())
 
@@ -186,7 +186,7 @@ class MemberInitiatedPairing(unittest.TestCase):
         self.assertEqual(self.h.home_recipients(self.alice.member), {"aimee-phone", "laptop"})
 
     def test_admin_without_bearer_claim_cannot_enroll_as_aimee(self):
-        self.assertIsNone(self.h.approve_pairing(self.delegation, "evil", "admin-key"))
+        self.assertIsNone(self.h.approve_pairing(self.delegation, "evil", "hub-password"))
 
     def test_bearer_without_admin_authority_cannot_enroll(self):
         self.assertIsNone(self.h.approve_pairing(self.delegation, "laptop", self.delegation.invite_key,
@@ -219,19 +219,36 @@ class MemberInitiatedPairing(unittest.TestCase):
         self.assertFalse(self.h.current_device(self.alice.member, "laptop"))
 
 
-class AdminKey(unittest.TestCase):
-    """§6.7–§6.8: one admin key per hub, never replaced."""
+class HubPassword(unittest.TestCase):
+    """§6.7–§6.8: the hub password opens the capsule; the management key is never replaced."""
 
-    def test_only_the_admin_key_opens_the_capsule(self):
+    def test_only_the_hub_password_opens_the_capsule(self):
         h = Hub()
-        self.assertTrue(h.admin_key_opens("admin-key"))
-        self.assertFalse(h.admin_key_opens("a-guess"))
+        self.assertTrue(h.password_opens("hub-password"))
+        self.assertFalse(h.password_opens("a-guess"))
+
+    def test_changing_the_password_keeps_the_management_key_and_devices(self):
+        h = Hub(); before = h.snapshot()
+        self.assertIsNone(h.change_password("new", "a-guess"))
+        self.assertIsNotNone(h.change_password("new", "hub-password"))
+        self.assertTrue(h.password_opens("new"))
+        self.assertFalse(h.password_opens("hub-password"))                    # the current capsule, that is
+        self.assertTrue(h.can_manage("M0"))                                    # a copied old capsule still opens: no reset
+        self.assertEqual(h.snapshot(), before)
+
+    def test_two_changes_at_once_leave_both_until_the_next(self):
+        h = Hub()
+        h.change_password("a", "hub-password")
+        h.capsules["c2"] = ("b", frozenset({"c0"}))                            # another device, at the same moment
+        self.assertTrue(h.password_opens("a")); self.assertTrue(h.password_opens("b"))
+        h.change_password("final", "b")
+        self.assertEqual([h.capsules[c][0] for c in h.current_capsules()], ["final"])
 
     def test_nothing_ever_follows_the_genesis(self):
         # There is no recovery generation to forge or race: a second root is refused, and the
         # hub keeps working rather than freezing.
         h = Hub()
-        for signer in ("admin-key", "M0", "M1"):
+        for signer in ("hub-password", "M0", "M1"):
             successor = Root(h.genesis.id, 1, "M1", "clean", signer)
             self.assertFalse(h.add_root(successor))
             self.assertFalse(h.add_root(replace(successor, generation=999)))
@@ -241,7 +258,7 @@ class AdminKey(unittest.TestCase):
 
     def test_another_genesis_is_another_hub(self):
         h = Hub()
-        other = Hub(key="other-admin-key", manager="M9")
+        other = Hub(key="other-password", manager="M9")
         self.assertFalse(h.add_root(other.genesis))
         self.assertEqual(h.current, h.genesis.id)
 
@@ -249,7 +266,7 @@ class AdminKey(unittest.TestCase):
         h = Hub()
         alice = h.join("aimee-phone"); self.assertTrue(h.add_certificate(alice))
         self.assertIsNone(h.recover_creator("new-mac", "a-guess"))
-        cert = h.recover_creator("new-mac", "admin-key")
+        cert = h.recover_creator("new-mac", "hub-password")
         self.assertTrue(h.add_certificate(cert))
         self.assertTrue(h.current_device(h.creator, "new-mac"))
         stolen = replace(cert, member=alice.member)                           # the same for Aimee
