@@ -52,6 +52,8 @@ public actor Device {
     /// Key requests (§11.4): the wait before asking, and the one timer that waits for it.
     var keyRequestDelay: Duration = .seconds(600)
     var keyRequestTimer: Task<Void, Never>?
+    /// The store's `data_version` when this device last took in other processes' writes (`takeExternalChanges`).
+    var seenDataVersion: Int64 = 0
     /// Lists with a key change running on this device.
     var changing: Set<Bytes> = []
     /// Tests stop a key change here (§11.6's crash points).
@@ -118,6 +120,7 @@ public actor Device {
             c.offer(key: key, epoch: o.epoch)
             collections[o.collection] = c
         }
+        seenDataVersion = try store.dataVersion()
         watch.device = self
     }
 
@@ -218,6 +221,7 @@ public actor Device {
     }
 
     func syncOnce() async throws -> Int {
+        try takeExternalChanges()
         try await finishJournals()
         let cursor = try store.value("cursor").map { String(decoding: $0, as: UTF8.self) } ?? ""
         let batch = try await hub.changes(since: cursor)

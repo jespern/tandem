@@ -52,12 +52,14 @@ public struct Item: Sendable {
 extension Device {
     /// One record of a list, deleted or not; nil if this device holds no write of it.
     public func item(list cid: Bytes, id: Bytes) -> Item? {
-        collections[cid]?.records[id].map { Item(id: id, record: $0) }
+        try? takeExternalChanges()
+        return collections[cid]?.records[id].map { Item(id: id, record: $0) }
     }
 
     /// The list's records that aren't deleted, without the named ones, by ID.
     public func items(list cid: Bytes) -> [Item] {
-        (collections[cid]?.records ?? [:]).filter { $0.key != Self.meta && !$0.value.deleted }
+        try? takeExternalChanges()
+        return (collections[cid]?.records ?? [:]).filter { $0.key != Self.meta && !$0.value.deleted }
             .sorted { $0.key.lexicographicallyPrecedes($1.key) }.map { Item(id: $0.key, record: $0.value) }
     }
 

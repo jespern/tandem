@@ -1209,7 +1209,7 @@ The cost is one small message per deleted record that never goes away. Dropping 
 
 ### 12.4 Hub loss
 
-Restoring a wiped hub at an already authorized descriptor is an explicit act of the user; moving it to a new mailbox additionally requires recovery-signed descriptor authorization (§5.3, §6.8), because silence can't establish that no newer roster exists. Devices then re-publish what they hold: home, and each collection with its roster. Restore home epoch metadata/device key boxes as well as encrypted home records. Paired devices retaining a home key can recover its contents; a new device still needs valid pairing/admission. Re-deliver missing current device grants, including offered lists not yet accepted. Everyone needs the new hub's credential, by hub invite (§13.1).
+Restoring a wiped hub at an already authorized descriptor is an explicit act of the user; moving it to a new mailbox additionally requires management-signed descriptor authorization (§5.3, §6.8), because silence can't establish that no newer roster exists. Devices then re-publish what they hold: home, and each collection with its roster. Restore home epoch metadata/device key boxes as well as encrypted home records. Paired devices retaining a home key can recover its contents; a new device still needs valid pairing/admission. Re-deliver missing current device grants, including offered lists not yet accepted. Everyone needs the new hub's credential, by hub invite (§13.1).
 
 ---
 
@@ -1245,7 +1245,7 @@ The admin's private home records **Pending invite: Alice**, creation/expiry, cre
 | Change the hub password | Enter the current one (or use Face ID on a device that keeps it), choose another. Devices and lists stay as they are. The app warns that an old copy of the capsule still opens with the old password. |
 | A new phone | Sign in to the same Apple account; the keychain brings the keys, and everything syncs. No pairing and no approval. |
 | A device broke or was replaced | Pair from a surviving enrolled device. Private device keys are not restored by cloning an app backup. |
-| Lost every device | Creator: explicit hub recovery using the saved key. Ordinary member: rejoin as a new participant, ask owners to share lists again; private data without a readable replica is lost. |
+| Lost every device | Creator: recovery with the hub password (§6.8). Ordinary member: rejoin as a new participant, ask owners to share lists again; private data without a readable replica is lost. |
 | A device was stolen | People → person → Devices → Remove. Admin unlocks management; surviving member devices rekey home and owners rekey lists. Show remaining rekeys and mailbox credential steps separately. Previously downloaded data stays readable. |
 | Share a list | "Share" → pick people from the hub's People, each as editor or read-only. Someone not on the hub yet first needs a hub invite. |
 | Someone shared a list with you | "Bob shared House with you. Add it?", once, on all your devices. |

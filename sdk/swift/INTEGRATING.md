@@ -180,7 +180,19 @@ try await admin.approve(claim: claim.id, ms: ms)   // or reject(claim:ms:)
 
 ## App extensions
 
-Share and widget extensions can't run the live sync, but they can write: open the same store from the App Group container with the same keychain access group, `Device.reopen(store:keys:hub:)`, call `setField`, and leave. The store is SQLite in WAL mode with a busy timeout, and each write reserves its clock value in a transaction, so the app and an extension never clash. If the extension can't reach the hub, the app sends the edit on its next sync.
+Extensions (share sheet, quick add, Shortcuts, widgets, Control Center) write with `ItemWriter`, not a full `Device`: it loads only the one list's roster, its current key, this participant's role and the one record, which keeps it inside an extension's memory limit.
+
+```swift
+let writer = try ItemWriter.open(store: try Store(path: sharedPath), keys: try keychain.deviceKeys(), list: inbox)
+let reached = try await writer.write(record: newID, [.set("title", title), .set("url", url), .add("tags", tag)],
+                                     hub: imap, timeout: .seconds(5))
+// then post a Darwin notification so a running app calls device.refresh()
+```
+
+- `write` signs every change of the record in one call, saves them in the shared store, and makes one attempt to put the record's state on the hub within the timeout. It returns whether it did. Pass `hub: nil` to only save.
+- Whatever didn't reach the hub stays in the store. The app's `Device` sends it: at once on `device.refresh()`, which Liszto calls when an extension's Darwin notification arrives; otherwise at the start of its next sync, write or read, where it checks the store for other processes' writes (`PRAGMA data_version`, one cheap query). Either way it emits `.items` for those records. A write that did reach the hub is applied like any other message, though it comes from this same installation.
+- `ItemWriter.open` throws an `ItemWriter.Refusal` when it can't write: `.notOnHub`, `.noKey` (no key for the list's current epoch yet), `.cannotWrite` (a reader, removed, or the `_meta` record without being the owner), `.changePending` (a key change in flight, or the owner must change the key after a revocation), `.closed` (deleted, dead or unknown list). The extension then saves to Liszto's own store and the app writes later.
+- The store is SQLite in WAL mode with a busy timeout, and each write reserves its clock value in a transaction, so the app and its extensions never clash or reuse a dot.
 
 ## Mail providers
 

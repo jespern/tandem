@@ -115,6 +115,13 @@ public final class Store: @unchecked Sendable {
 
     public func removeValue(_ name: String) throws { try run("DELETE FROM values_ WHERE name = ?", [.text(name)]) }
 
+    /// Changes when another connection, such as an app extension's, commits to this store; not for this one's own.
+    public func dataVersion() throws -> Int64 {
+        var v: Int64 = 0
+        try run("PRAGMA data_version", []) { v = sqlite3_column_int64($0, 0) }
+        return v
+    }
+
     /// Every named value whose name starts with `prefix`.
     public func values(prefix: String) throws -> [(name: String, value: Bytes)] {
         var out: [(String, Bytes)] = []

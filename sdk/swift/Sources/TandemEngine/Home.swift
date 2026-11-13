@@ -274,7 +274,9 @@ extension Device {
 
     /// The next dot of this installation's clock, persisted before the write can leave the device (§9.1).
     /// Reserved in one transaction, which also locks out an app extension sharing this store and installation.
-    func nextDot(_ me: Me) throws -> Dot {
+    func nextDot(_ me: Me) throws -> Dot { try Self.reserveDot(store: store, installation: me.installation) }
+
+    static func reserveDot(store: Store, installation: Bytes) throws -> Dot {
         let next = try store.transaction { () throws -> (millis: UInt64, counter: UInt16) in
             let held = try store.value("clock") ?? Bytes(repeating: 0, count: 10)
             let millis = held[0..<8].reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
@@ -287,11 +289,12 @@ extension Device {
             try store.setValue("clock", out)
             return next
         }
-        return Dot(device: me.installation, millis: next.millis, counter: next.counter)
+        return Dot(device: installation, millis: next.millis, counter: next.counter)
     }
 
     /// Sign one home write on `name` and publish it in the current home epoch.
     func writeHome(_ name: String, field: String, op: Op, value: Bytes = [], element: Bytes? = nil) async throws {
+        try takeExternalChanges()
         guard let me, let scope = homeScope, let epoch = currentHomeEpoch, let key = homeKeys[epoch]
         else { throw TandemError.invalid("device: no home to write to") }
         let record = Tandem.namedID(Bytes(name.utf8))

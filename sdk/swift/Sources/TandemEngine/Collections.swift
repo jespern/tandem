@@ -137,19 +137,22 @@ extension Device {
     }
 
     public func value(list cid: Bytes, record: Bytes, field: String) -> Bytes? {
+        try? takeExternalChanges()
         guard let r = collections[cid]?.records[record], !r.deleted else { return nil }
         return r.value(Bytes(field.utf8))
     }
 
     /// The list's records, without the named ones and without deleted ones.
     public func records(list cid: Bytes) -> [Bytes] {
-        (collections[cid]?.records ?? [:]).filter { $0.key != Self.meta && !$0.value.deleted }.map(\.key)
+        try? takeExternalChanges()
+        return (collections[cid]?.records ?? [:]).filter { $0.key != Self.meta && !$0.value.deleted }.map(\.key)
             .sorted { $0.lexicographicallyPrecedes($1) }
     }
 
     /// The lists this participant is a member of, with their names where known: those its home records (§6.2).
     public func lists() -> [(id: Bytes, name: String?)] {
-        collections.values.filter { following($0.id) }.map { c in
+        try? takeExternalChanges()
+        return collections.values.filter { following($0.id) }.map { c in
             (c.id, c.records[Self.meta]?.value(Bytes("name".utf8)).map { String(decoding: $0, as: UTF8.self) })
         }.sorted { $0.id.lexicographicallyPrecedes($1.id) }
     }
@@ -164,6 +167,7 @@ extension Device {
     public func isDead(list cid: Bytes) -> Bool { collections[cid]?.dead ?? false }
 
     func writeRecord(_ cid: Bytes, record: Bytes, field: Bytes, op: Op, value: Bytes = [], element: Bytes? = nil) async throws {
+        try takeExternalChanges()   // an extension may have written this record meanwhile
         guard let me, var c = collections[cid], !c.dead, let head = c.head, let epoch = c.epoch(of: head), c.keys[epoch] != nil,
               c.statements[head]?.statement.deleted == false
         else { throw TandemError.invalid("device: no such list, no key for its current epoch yet, or it can't sync or was deleted") }
@@ -225,7 +229,11 @@ extension Device {
     /// owner changes the key, nothing new goes out under the exposed one.
     func exposure(_ cid: Bytes) -> [ID] {
         guard let c = collections[cid], let head = c.head, let s = c.statements[head]?.statement else { return [] }
-        return s.members.filter { m in
+        return Self.exposure(of: s, registry: registry)
+    }
+
+    static func exposure(of s: Statement, registry: Registry) -> [ID] {
+        s.members.filter { m in
             guard let floor = registry.snapshots[m.floor] else { return false }
             return registry.revs.values.contains { r in
                 registry.certificate(r.target)?.participant == m.uid && registry.revocationValidity(r.id).isValid
@@ -266,26 +274,32 @@ extension Device {
         for (_, r) in home {
             guard let name = r.value(Bytes("_name".utf8)), name.starts(with: Bytes("membership:".utf8)),
                   let cid = B64u.decode(String(decoding: name.dropFirst(11), as: UTF8.self)), cid.count == 16 else { continue }
-            var c = CollectionState(id: cid)
-            for element in r.elements(Bytes("keys".utf8)) {
-                if let j = try? JSON.parse(element), let e = try? j.bytes("epoch", count: 32), let k = try? j.bytes("k", count: 32) { c.keys[e] = k }
-            }
-            if let note = r.value(Bytes("flight".utf8)).flatMap(FlightNote.parse) { c.keys[note.statement] = note.key }
-            for row in try store.writes(scope: cid, record: Roster.record) {
-                guard case let .record(state) = try Kind1.parse(row.payload, hub: hub, scope: cid), var w = state.writes.first,
-                      let st = try? Statement.parse(w.value) else { continue }
-                if w.ref == Bytes(repeating: 0, count: 32) { w.scope = Roster.zeroScope; c.genesis = try w.id() }
-                c.statements[try w.id()] = (w, st)
-            }
-            for (name, _) in try store.values(prefix: "ann." + cid.hex + ".") {
-                if let id = Bytes(hex: String(name.dropFirst(4 + 32 + 1))) { c.announced.insert(id) }
-            }
+            var c = try loadRoster(store: store, hub: hub, cid: cid, membership: r)
             for record in try store.records(scope: cid) where record != Roster.record {
                 c.records[record] = try loadData(store: store, hub: hub, c: c, record: record, inventories: inventories)
             }
             out[cid] = c
         }
         return out
+    }
+
+    /// A collection's keys (from its `membership:` record in home), roster and announcements, without its records.
+    static func loadRoster(store: Store, hub: Bytes, cid: Bytes, membership r: Record) throws -> CollectionState {
+        var c = CollectionState(id: cid)
+        for element in r.elements(Bytes("keys".utf8)) {
+            if let j = try? JSON.parse(element), let e = try? j.bytes("epoch", count: 32), let k = try? j.bytes("k", count: 32) { c.keys[e] = k }
+        }
+        if let note = r.value(Bytes("flight".utf8)).flatMap(FlightNote.parse) { c.keys[note.statement] = note.key }
+        for row in try store.writes(scope: cid, record: Roster.record) {
+            guard case let .record(state) = try Kind1.parse(row.payload, hub: hub, scope: cid), var w = state.writes.first,
+                  let st = try? Statement.parse(w.value) else { continue }
+            if w.ref == Bytes(repeating: 0, count: 32) { w.scope = Roster.zeroScope; c.genesis = try w.id() }
+            c.statements[try w.id()] = (w, st)
+        }
+        for (name, _) in try store.values(prefix: "ann." + cid.hex + ".") {
+            if let id = Bytes(hex: String(name.dropFirst(4 + 32 + 1))) { c.announced.insert(id) }
+        }
+        return c
     }
 
     /// A record of a collection rebuilt from the stored writes the current epoch keeps (§11.6, "Moving over"):
