@@ -214,16 +214,20 @@ extension Device {
     // MARK: Writing home records
 
     /// The next dot of this installation's clock, persisted before the write can leave the device (§9.1).
+    /// Reserved in one transaction, which also locks out an app extension sharing this store and installation.
     func nextDot(_ me: Me) throws -> Dot {
-        let held = try store.value("clock") ?? Bytes(repeating: 0, count: 10)
-        let millis = held[0..<8].reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
-        let counter = UInt16(held[8]) << 8 | UInt16(held[9])
-        let now = UInt64(Date().timeIntervalSince1970 * 1000)
-        let next = try nextClock(millis: millis, counter: counter, now: now)
-        var out = Bytes()
-        for s in stride(from: 56, through: 0, by: -8) { out.append(UInt8(next.millis >> UInt64(s) & 0xff)) }
-        out += [UInt8(next.counter >> 8), UInt8(next.counter & 0xff)]
-        try store.setValue("clock", out)
+        let next = try store.transaction { () throws -> (millis: UInt64, counter: UInt16) in
+            let held = try store.value("clock") ?? Bytes(repeating: 0, count: 10)
+            let millis = held[0..<8].reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
+            let counter = UInt16(held[8]) << 8 | UInt16(held[9])
+            let now = UInt64(Date().timeIntervalSince1970 * 1000)
+            let next = try nextClock(millis: millis, counter: counter, now: now)
+            var out = Bytes()
+            for s in stride(from: 56, through: 0, by: -8) { out.append(UInt8(next.millis >> UInt64(s) & 0xff)) }
+            out += [UInt8(next.counter >> 8), UInt8(next.counter & 0xff)]
+            try store.setValue("clock", out)
+            return next
+        }
         return Dot(device: me.installation, millis: next.millis, counter: next.counter)
     }
 

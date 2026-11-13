@@ -37,6 +37,8 @@ public final class Store: @unchecked Sendable {
     public init(path: String) throws {
         guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK
         else { throw Self.error(db, "open") }
+        // The app and its extensions may share one store (an App Group container): wait for the other's write lock.
+        sqlite3_busy_timeout(db, 5000)
         try exec(Self.schema)
     }
 

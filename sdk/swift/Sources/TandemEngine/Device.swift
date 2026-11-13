@@ -119,10 +119,19 @@ public actor Device {
                 guard held == pin.genesis else { throw TandemError.invalid("device: this store belongs to another hub") }
             } else {
                 try store.setValue("pin.genesis", pin.genesis)
+                try store.setValue("pin.hk", directoryKey)
                 try store.putObject(genesis)
             }
         }
         return try Device(pin: pin, directoryKey: directoryKey, keys: keys, store: store, hub: hub)
+    }
+
+    /// Open the hub a store already belongs to, after a restart or in an app extension: its pinned genesis and
+    /// directory key come from the store. Nil if the store is new.
+    public static func reopen(store: Store, keys: DeviceKeys?, hub: any PushStore) throws -> Device? {
+        guard let id = try store.value("pin.genesis"), let hk = try store.value("pin.hk"),
+              let genesis = try store.objects(kind: "genesis").first(where: { (try? $0.id()) == id }) else { return nil }
+        return try open(genesis: genesis, directoryKey: hk, keys: keys, store: store, hub: hub)
     }
 
     static func random(_ n: Int) -> Bytes { SymmetricKey(size: .init(bitCount: n * 8)).withUnsafeBytes { Bytes($0) } }
