@@ -563,6 +563,9 @@ func (d *Device) sync(ctx context.Context) (int, error) {
 			}
 		}
 	}
+	if err := d.repairClaim(ctx); err != nil {
+		return count, err
+	}
 	return count, d.followUp(ctx)
 }
 

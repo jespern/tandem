@@ -234,12 +234,15 @@ func Pair(ctx context.Context, link *PairingLink, keys *tandem.DeviceKeys, label
 	if err != nil {
 		return nil, err
 	}
-	end := d.begin()
-	defer end()
-	if _, err := d.sync(ctx); err != nil {
-		return nil, err
-	}
-	if err := d.claim(ctx, link, label); err != nil {
+	err = func() error {
+		defer d.begin()()
+		if _, err := d.sync(ctx); err != nil {
+			return err
+		}
+		return d.claim(ctx, link, label)
+	}()
+	if err != nil {
+		d.Close()
 		return nil, err
 	}
 	return d, nil
@@ -320,8 +323,26 @@ func (d *Device) claim(ctx context.Context, link *PairingLink, label string) err
 	}
 	pp := &pendingPairing{secret: link.Secret, token: link.Token, participant: link.Participant, request: oid(request),
 		delegation: oid(delegation), pkg: pkg}
+	// The exact claim envelopes are kept with the pending pairing: each sync while it waits sends
+	// any that the hub lacks (§12.2, "Pending pairing claims").
+	body, err := c.json()
+	if err != nil {
+		return err
+	}
+	inbox := tandem.InboxTag(d.pin.Creator, d.pin.Hub)
+	var envelopes []tagged
+	for _, admin := range admins {
+		env, err := tandem.SealInbox(d.pin.Hub, d.pin.Creator, admin.Agree, body)
+		if err != nil {
+			return err
+		}
+		envelopes = append(envelopes, tagged{inbox, env})
+	}
 	err = d.store.Transaction(func() error {
 		if _, err := d.store.PutObject(delegation); err != nil {
+			return err
+		}
+		if err := d.store.SetValue("pairing.claims", pack(envelopes)); err != nil {
 			return err
 		}
 		return d.store.SetValue("pairing.pending", pp.json())
@@ -330,17 +351,28 @@ func (d *Device) claim(ctx context.Context, link *PairingLink, label string) err
 		return err
 	}
 	d.pairing = pp
-	body, err := c.json()
+	return d.repairClaim(ctx)
+}
+
+// repairClaim sends whichever claim envelopes the hub lacks, while this device waits for the admin.
+func (d *Device) repairClaim(ctx context.Context) error {
+	packed, ok := d.store.Value("pairing.claims")
+	if d.pairing == nil || !ok {
+		return nil
+	}
+	envelopes, err := unpack(packed)
 	if err != nil {
 		return err
 	}
-	inbox := tandem.InboxTag(d.pin.Creator, d.pin.Hub)
-	for _, admin := range admins {
-		env, err := tandem.SealInbox(d.pin.Hub, d.pin.Creator, admin.Agree, body)
+	for _, e := range envelopes {
+		on, err := d.store.MessagesWithHash(tandem.H(e.body))
 		if err != nil {
 			return err
 		}
-		if _, err := d.appendNoted(ctx, inbox, env); err != nil {
+		if len(on) > 0 {
+			continue
+		}
+		if _, err := d.appendNoted(ctx, e.tag, e.body); err != nil {
 			return err
 		}
 	}
@@ -656,6 +688,9 @@ func (d *Device) receiveRelease(plaintext []byte, me *Me) (outcome, error) {
 	}
 	err = d.store.Transaction(func() error {
 		if err := d.store.RemoveValue("pairing.pending"); err != nil {
+			return err
+		}
+		if err := d.store.RemoveValue("pairing.claims"); err != nil {
 			return err
 		}
 		return d.store.SetValue("pairing.done."+hexs(p.token), me.Certificate)

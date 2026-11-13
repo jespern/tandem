@@ -241,3 +241,24 @@ func TestSecondReviewAnInterruptedJoinFinishes(t *testing.T) {
 		t.Fatal(v)
 	}
 }
+
+// 8. A pairing claim that didn't go out is sent again by the waiting device's next sync.
+func TestSecondReviewAPairingClaimThatDidntGoOutIsSentAgain(t *testing.T) {
+	w := newSecondWorld(t, false)
+	link := try(w.phone.StartPairing(bg, "Laptop", account, 0))
+	laptopStore, laptopKeys := MemoryStore(), newKeys(t)
+	if d, err := Pair(bg, link, laptopKeys, "Laptop", laptopStore, failingAppends{w.hub.Connect()}); err == nil {
+		d.Close()
+		t.Fatal("offline")
+	}
+	laptop := try(Reopen(laptopStore, laptopKeys, w.hub.Connect()))
+	if laptop == nil {
+		t.Fatal("nothing to reopen")
+	}
+	t.Cleanup(laptop.Close)
+	syncAll(t, laptop, w.bob)
+	claims := w.bob.PendingClaims()
+	if len(claims) != 1 || claims[0].Label() != "Laptop" {
+		t.Fatal(claims)
+	}
+}
