@@ -67,6 +67,15 @@ The integration tests start a disposable Stalwart in Docker (the image pinned in
 TANDEM_IMAP_STALWART=1 swift test --filter StalwartTests
 ```
 
+The engine runs live against a real provider in a folder `Tandem-test`, which the test
+empties before and after (use an app password; the timings go to stderr):
+
+```sh
+TANDEM_PROVIDER_HOST=imap.gmail.com TANDEM_PROVIDER_USER=alice@gmail.com \
+TANDEM_PROVIDER_PASSWORD="$(security find-generic-password -s tandem-probe -a alice@gmail.com -w)" \
+TANDEM_SKIP_ARGON2_GIB=1 swift test --filter EngineOverProviderTests
+```
+
 `TANDEM_IMAP_TRACE=1` prints the protocol lines, without login credentials. Leftover
 containers from a killed run carry the label `tandem-imap-test`.
 
