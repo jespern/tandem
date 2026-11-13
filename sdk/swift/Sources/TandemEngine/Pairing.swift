@@ -409,6 +409,7 @@ extension Device {
     /// After a sync: record finished pairings and hand this home's current keys to admitted keychains of this
     /// participant that no epoch was sealed to, such as a device paired after the package was staged (§6.3).
     func followUp() async throws {
+        if isRevoked, try store.value("revoked") == nil { try store.setValue("revoked", [1]); changed(.revoked) }
         guard self.me != nil, registry.activity(self.me!.certificate).isValid else { return }
         try await refreshAuth()
         if homeNeedsRotation(self.me!) { try await rotateHome() }

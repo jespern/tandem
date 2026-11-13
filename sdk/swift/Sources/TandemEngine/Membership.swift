@@ -123,6 +123,7 @@ extension Device {
         guard let cert = registry.certificate(signer), cert.participant == participant, l.verify("sig", publicKey: cert.sign)
         else { return .ignored }
         try store.setValue("left.\(cid.hex).\(participant.hex)", at)
+        changed(.members(list: cid))
         return .applied
     }
 

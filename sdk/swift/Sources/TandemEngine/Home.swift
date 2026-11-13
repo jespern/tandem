@@ -46,15 +46,26 @@ extension Device {
             homeKeys[epoch] = key
             try store.setValue("home.key." + epoch.hex, key)
             try moveHome()
+            changed(.home); changed(.lists)
             return .applied
         case "grant":
-            return try receiveGrant(plaintext, json, me: me)
+            let outcome = try receiveGrant(plaintext, json, me: me)
+            if outcome == .applied { changed(.offers); changed(.lists) }
+            return outcome
         case "answer":
-            return try receiveAnswer(json)
+            let outcome = try receiveAnswer(json)
+            if outcome == .applied, case let .id(cid)? = (try? ControlObject.parse(json, expect: "answer"))?.fields["collection"] {
+                changed(.members(list: cid))
+            }
+            return outcome
         case "pair-claim":
-            return try receiveClaim(plaintext, json)
+            let outcome = try receiveClaim(plaintext, json)
+            if outcome == .applied { changed(.claims) }
+            return outcome
         case "pair-release":
-            return try receiveRelease(plaintext, me: me)
+            let outcome = try receiveRelease(plaintext, me: me)
+            if outcome == .applied { changed(.approved); changed(.home); changed(.lists) }
+            return outcome
         default:
             return .ignored
         }
@@ -229,6 +240,9 @@ extension Device {
         writes.append(try sign(me: me, scope: scope, record: record, epoch: epoch, field: field, op: op, value: value,
                                element: element, after: writes))
         try merge(try writes.map { try Entry($0, epoch: epoch, epochNumber: epochNumber(epoch)) }, record: record, scope: scope)
+        changed(.home)
+        if name.hasPrefix("membership:") { changed(.lists) }
+        flushEvents()
         let tag = Tandem.homeTag(key: key, hub: pin.hub, uid: me.participant, epoch: epoch)
         let envelope = try Envelope.seal(key: key, hub: pin.hub, kind: 1, tag: tag,
                                          plaintext: try recordPayload(record: record, writes: writes))

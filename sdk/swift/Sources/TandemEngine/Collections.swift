@@ -171,6 +171,9 @@ extension Device {
                 try store.putWrite(id: try w.id(), scope: cid, record: record, epoch: epoch, payload: try recordPayload(record: record, writes: [w]))
             }
         }
+        changed(.items(list: cid, records: [record]))
+        if record == Self.meta { changed(.lists) }
+        flushEvents()
         try await publish(cid: cid, epoch: epoch, record: record, writes: writes)
     }
 
@@ -291,6 +294,7 @@ extension Device {
             moved.records[record] = try Self.loadData(store: store, hub: pin.hub, c: c, record: record, inventories: inventories)
         }
         collections[cid] = moved
+        changed(.items(list: cid, records: Array(moved.records.keys)))
     }
 
     // MARK: Collection channels
@@ -342,13 +346,14 @@ extension Device {
                     collections[cid] = c
                     applied.append(id)
                     any = true
+                    changed(.items(list: cid, records: [state.record]))
                 case .pending: return .waiting
                 case .invalid: continue
                 }
             }
         }
         try store.noteContents(message: m.id, record: state.record, writes: applied)
-        if moved { try moveCollection(cid) }
+        if moved { try moveCollection(cid); changed(.lists); changed(.members(list: cid)) }
         return any ? .applied : .ignored
     }
 

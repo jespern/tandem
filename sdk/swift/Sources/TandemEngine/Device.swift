@@ -1,4 +1,5 @@
 import CryptoKit
+import Foundation
 import Tandem
 
 /// Who this installation is on the hub: its keychain's keys and the IDs they were admitted under (§5.3).
@@ -40,6 +41,11 @@ public actor Device {
     var pairing: PendingPairing?
     /// Directory profiles, by record ID (§10.8).
     var profiles: [Bytes: Record] = [:]
+    /// Event subscribers and what changed since the last flush (`events()`).
+    var subscribers: [UUID: AsyncStream<DeviceEvent>.Continuation] = [:]
+    var pendingEvents: [DeviceEvent] = []
+    /// The sync in progress: syncs run one at a time.
+    var syncing: Task<Int, any Error>?
     /// Tests stop a key change here (§11.6's crash points).
     var crashPoint: String?
 
@@ -174,8 +180,21 @@ public actor Device {
 
     /// Read everything new on the hub and apply what this device can read, then retry what was held.
     /// Returns how many messages it applied.
+    /// One at a time: a push and an app's own call never interleave. Not called from within a sync.
     @discardableResult
     public func sync() async throws -> Int {
+        // Each sync runs after the one before it, chained, so no caller spins on a finished task.
+        let previous = syncing
+        let task = Task {
+            _ = try? await previous?.value
+            return try await self.syncOnce()
+        }
+        syncing = task
+        defer { if syncing == task { syncing = nil }; flushEvents() }
+        return try await task.value
+    }
+
+    func syncOnce() async throws -> Int {
         try await finishJournals()
         let cursor = try store.value("cursor").map { String(decoding: $0, as: UTF8.self) } ?? ""
         let batch = try await hub.changes(since: cursor)
@@ -222,14 +241,20 @@ public actor Device {
     func apply(_ m: Message) throws -> Outcome {
         if m.channel == directoryTag {
             if let (kind, plaintext) = try? Envelope.open(key: directoryChannelKey, hub: pin.hub, tag: m.channel, envelope: m.body),
-               kind == 1 { return try applyProfile(plaintext) }
-            return try applyDirectory(m) ? .applied : .ignored
+               kind == 1 {
+                let outcome = try applyProfile(plaintext)
+                if outcome == .applied { changed(.people) }
+                return outcome
+            }
+            guard try applyDirectory(m) else { return .ignored }
+            changed(.people); changed(.claims)
+            return .applied
         }
         guard let me else { return .waiting }
         if m.channel == Tandem.inboxTag(uid: me.participant, hub: pin.hub) { return try applyInbox(m, me) }
         for (epoch, key) in homeKeys where m.channel == Tandem.homeTag(key: key, hub: pin.hub, uid: me.participant, epoch: epoch) {
             let outcome = try applyHome(m, epoch: epoch, key: key, me: me)
-            if outcome == .applied { refreshMemberships() }
+            if outcome == .applied { refreshMemberships(); changed(.home); changed(.lists) }
             return outcome
         }
         if let (cid, epoch, key) = collectionChannel(m.channel) { return try applyCollection(m, cid: cid, epoch: epoch, key: key) }
