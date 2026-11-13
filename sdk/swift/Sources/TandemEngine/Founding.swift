@@ -84,7 +84,8 @@ public enum Founder {
         let sign = Bytes(keys.signing.publicKey.rawRepresentation), agree = Bytes(keys.agreement.publicKey.rawRepresentation)
         let participant = try Control.registrationID(hub: hub, sign: sign, agree: agree, enrollment: secrets.enrollment)
 
-        var genesis = ControlObject(kind: "genesis", fields: ["hub": .id(hub), "hubkey": .id(Tandem.commit(secrets.directoryKey)),
+        var genesis = ControlObject(kind: "genesis", fields: ["hub": .id(hub),
+            "agree": .id(Bytes(manager.agreement.publicKey.rawRepresentation)), "hubkey": .id(Tandem.commit(secrets.directoryKey)),
             "creator": .id(participant), "mailboxes": .mailboxes([account.mailbox])])
         try genesis.sign("sig", with: manager.signing)
         let pin = try HubPin(genesis: genesis)

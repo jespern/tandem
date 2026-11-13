@@ -73,7 +73,7 @@ final class RegistryTests: XCTestCase {
 
     func testAnotherHubsObjectsAreRefused() throws {
         let h = try hub()
-        var r = Registry(pin: HubPin(hub: h.pin.hub, genesis: Bytes(repeating: 9, count: 32), creator: h.pin.creator))
+        var r = Registry(pin: HubPin(hub: h.pin.hub, agree: h.pin.agree, genesis: Bytes(repeating: 9, count: 32), creator: h.pin.creator))
         XCTAssertThrowsError(try r.add(h.objects["creator certificate"]!))
     }
 

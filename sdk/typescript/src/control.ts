@@ -12,7 +12,7 @@ interface Kind {tag: string; fields: Layout; signatures: readonly string[]; extr
 const k = (tag: string, fields: Layout, signatures: string[], extras: Kind['extras'] = []): Kind => ({tag, fields, signatures, extras});
 // A signature name ending in "?" may be absent.
 const SCHEMA: Readonly<Record<string, Kind>> = {
-  'genesis': k('TANDEM-GENESIS-V2', [['hub', 'id'], ['hubkey', 'id'], ['creator', 'id'], ['mailboxes', 'mailboxes']], ['sig']),
+  'genesis': k('TANDEM-GENESIS-V2', [['hub', 'id'], ['agree', 'id'], ['hubkey', 'id'], ['creator', 'id'], ['mailboxes', 'mailboxes']], ['sig']),
   'capsule': k('TANDEM-CAPSULE-V2', [['hub', 'id'], ['genesis', 'id'], ['sealed', 'id'], ['supersedes', 'set']], ['sig'], [['capsule', 'bytes']]),
   'snapshot': k('tandem/v2/auth-snapshot', [['hub', 'id'], ['genesis', 'id'], ['participant', 'id'], ['certs', 'set'], ['revocations', 'set']], []),
   'registration': k('TANDEM-REGISTRATION-V2', [['hub', 'id'], ['sign', 'id'], ['agree', 'id'], ['enrollment', 'id16']], []),

@@ -519,7 +519,7 @@ A management compromise can admit lookalike new members, revoke people and deny 
 
 ### 6.9 Genesis, device registry and policy snapshots
 
-The hub's **genesis** binds `hubID` (that is, `pub(MKs)`), the permitted mailbox descriptors, the commitment of `HubK` and the immutable creator registration, signed with `MKs`. It is the only root a hub ever has. A device pins it at setup, invitation or pairing, and refuses anything that claims to succeed it; a second genesis is a different hub. There are no recovery generations.
+The hub's **genesis** binds `hubID` (that is, `pub(MKs)`), `pub(MKa)` (which a member's device seals a pairing gate box to, §6.3), the permitted mailbox descriptors, the commitment of `HubK` and the immutable creator registration, signed with `MKs`. It is the only root a hub ever has. A device pins it at setup, invitation or pairing, and refuses anything that claims to succeed it; a second genesis is a different hub. There are no recovery generations.
 
 The device registry is a set of immutable manager-authorized certificates and
 permanent manager-signed revocations. Existing-member pairing requires a direct
@@ -948,7 +948,7 @@ Everything that is not a record write is a **control object**: the hub's genesis
 
 | Type | Signed input, after the tag | Signed by | ID |
 |---|---|---|---|
-| `genesis`<br>`TANDEM-GENESIS-V2` | `hub` id (`pub(MKs)`), `hubkey` id (`commit(HubK)`, §5.7), `creator` id (the creator's participant ID), `mailboxes` u32 count then, sorted by their bytes, each `host` text (lowercase), `port` u16, `user` text | `MKs`, as `sig` | `genesisID` |
+| `genesis`<br>`TANDEM-GENESIS-V2` | `hub` id (`pub(MKs)`), `agree` id (`pub(MKa)`), `hubkey` id (`commit(HubK)`, §5.7), `creator` id (the creator's participant ID), `mailboxes` u32 count then, sorted by their bytes, each `host` text (lowercase), `port` u16, `user` text | `MKs`, as `sig` | `genesisID` |
 | `capsule`<br>`TANDEM-CAPSULE-V2` | `hub` id, `genesis` id, `sealed` id (`H(salt ‖ nonce ‖ ciphertext)`, §6.7), `supersedes` set (capsule IDs) | `MKs`, as `sig`; the JSON also carries `capsule`, the sealed bytes, in b64u | capsule ID |
 | `snapshot`<br>`tandem/v2/auth-snapshot` (hashed, not signed) | `hub` id, `genesis` id, `participant` id, `certs` set, `revocations` set | nobody | authorization snapshot ID (§6.9) |
 

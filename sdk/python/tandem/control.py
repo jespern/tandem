@@ -26,7 +26,8 @@ def _f(name, kind):
 
 # name: (tag, fields, signatures, extras). A signature name ending in "?" may be absent.
 SCHEMA = {
-    "genesis": ("TANDEM-GENESIS-V2", [_f("hub", "id"), _f("hubkey", "id"), _f("creator", "id"),
+    "genesis": ("TANDEM-GENESIS-V2", [_f("hub", "id"), _f("agree", "id"), _f("hubkey", "id"),
+                                      _f("creator", "id"),
                                       _f("mailboxes", "mailboxes")], ["sig"], []),
     "capsule": ("TANDEM-CAPSULE-V2", [_f("hub", "id"), _f("genesis", "id"), _f("sealed", "id"),
                                       _f("supersedes", "set")], ["sig"], [_f("capsule", "bytes")]),

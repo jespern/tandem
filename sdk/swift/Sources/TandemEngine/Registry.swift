@@ -30,17 +30,19 @@ public enum Validity: Equatable, Sendable {
     }
 }
 
-/// What a device pins for a hub: its manager key (`hubID`), its genesis and the creator it names.
+/// What a device pins for a hub: its manager keys (`hubID` and `pub(MKa)`), its genesis and the creator it names.
 public struct HubPin: Equatable, Sendable {
-    public let hub: Bytes, genesis: ID, creator: ID
-    public init(hub: Bytes, genesis: ID, creator: ID) { self.hub = hub; self.genesis = genesis; self.creator = creator }
+    public let hub: Bytes, agree: Bytes, genesis: ID, creator: ID
+    public init(hub: Bytes, agree: Bytes, genesis: ID, creator: ID) {
+        self.hub = hub; self.agree = agree; self.genesis = genesis; self.creator = creator
+    }
 
     /// Pin from a genesis object, after checking its signature.
     public init(genesis g: ControlObject) throws {
-        guard g.kind == "genesis", case let .id(hub)? = g.fields["hub"], case let .id(creator)? = g.fields["creator"],
-              g.verify("sig", publicKey: hub)
+        guard g.kind == "genesis", case let .id(hub)? = g.fields["hub"], case let .id(agree)? = g.fields["agree"],
+              case let .id(creator)? = g.fields["creator"], g.verify("sig", publicKey: hub)
         else { throw TandemError.invalid("registry: not a genesis signed by its own hub key") }
-        self.init(hub: hub, genesis: try g.id(), creator: creator)
+        self.init(hub: hub, agree: agree, genesis: try g.id(), creator: creator)
     }
 }
 

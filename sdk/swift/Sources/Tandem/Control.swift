@@ -63,7 +63,7 @@ public enum Control {
                                "answer"]
 
     public static let schema: [String: ControlSpec] = [
-        "genesis": ControlSpec(tag: "TANDEM-GENESIS-V2", fields: [("hub", .id), ("hubkey", .id), ("creator", .id),
+        "genesis": ControlSpec(tag: "TANDEM-GENESIS-V2", fields: [("hub", .id), ("agree", .id), ("hubkey", .id), ("creator", .id),
             ("mailboxes", .mailboxes)], signatures: ["sig"], extras: []),
         "capsule": ControlSpec(tag: "TANDEM-CAPSULE-V2", fields: [("hub", .id), ("genesis", .id), ("sealed", .id),
             ("supersedes", .set)], signatures: ["sig"], extras: [("capsule", .bytes)]),

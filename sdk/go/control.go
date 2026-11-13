@@ -42,7 +42,7 @@ type ControlType struct {
 func cf(name, typ string) ControlField { return ControlField{name, typ} }
 
 var controlSchema = map[string]ControlType{
-	"genesis": {"TANDEM-GENESIS-V2", []ControlField{cf("hub", "id"), cf("hubkey", "id"), cf("creator", "id"),
+	"genesis": {"TANDEM-GENESIS-V2", []ControlField{cf("hub", "id"), cf("agree", "id"), cf("hubkey", "id"), cf("creator", "id"),
 		cf("mailboxes", "mailboxes")}, []string{"sig"}, nil},
 	"capsule": {"TANDEM-CAPSULE-V2", []ControlField{cf("hub", "id"), cf("genesis", "id"), cf("sealed", "id"),
 		cf("supersedes", "set")}, []string{"sig"}, []ControlField{cf("capsule", "bytes")}},

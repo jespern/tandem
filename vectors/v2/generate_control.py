@@ -66,7 +66,7 @@ def generate():
     mailboxes = [dict(host="imap.example.org", port=993, user="hub@example.org"),
                  dict(host="imap.fastmail.com", port=993, user="hub@example.org")]
     mailboxes.sort(key=c._mailbox_bytes)
-    genesis, _ = emit("genesis", "genesis", dict(hub=hub, hubkey=t.commit(hubk), creator=creator, mailboxes=mailboxes),
+    genesis, _ = emit("genesis", "genesis", dict(hub=hub, agree=public(mka), hubkey=t.commit(hubk), creator=creator, mailboxes=mailboxes),
                       [("sig", mks)])
 
     sealed_capsule = material("capsule bytes (not a real capsule)", 76)
