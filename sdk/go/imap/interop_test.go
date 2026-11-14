@@ -43,7 +43,7 @@ func TestSwiftInterop(t *testing.T) {
 	bin := filepath.Join(strings.TrimSpace(string(swift(nil, append(build, "--show-bin-path")...))), "swiftinterop")
 
 	dateLine := regexp.MustCompile(`(?m)^Date: (.*)\r$`)
-	idLine := regexp.MustCompile(`(?m)^Message-ID: <([0-9a-f]+)@tandem\.invalid>\r$`)
+	idLine := regexp.MustCompile(`(?m)^Message-ID: <([0-9a-f]+)@tandem\.airforce>\r$`)
 	for _, size := range []int{0, 1, 2, 3, 56, 57, 58, 100, 1000, 65536} {
 		for _, channel := range []string{"abcdefgh", "Zq3-_x9Ab~!", strings.Repeat("c", 900)} {
 			name := fmt.Sprintf("%d bytes, channel of %d", size, len(channel))

@@ -205,7 +205,7 @@ final class MessageFormatTests: XCTestCase {
         let envelope = Bytes(0..<100)
         let raw = try MessageFormat.build(channel: "abcdefgh", envelope: envelope, date: Date(timeIntervalSince1970: 1794562200), id: "00ff")
         let b64 = Data(envelope).base64EncodedString()
-        let expected = "From: Tandem <tandem@invalid>\r\nDate: Fri, 13 Nov 2026 09:30:00 +0000\r\nMessage-ID: <00ff@tandem.invalid>\r\n"
+        let expected = "From: Tandem <tandem@tandem.airforce>\r\nDate: Fri, 13 Nov 2026 09:30:00 +0000\r\nMessage-ID: <00ff@tandem.airforce>\r\n"
             + "Subject: tandem\r\nMIME-Version: 1.0\r\nTandem-Version: 2\r\nTandem-Channel: abcdefgh\r\n"
             + "Content-Type: text/plain; charset=us-ascii\r\nContent-Transfer-Encoding: 7bit\r\n\r\n"
             + b64.prefix(76) + "\r\n" + b64.dropFirst(76) + "\r\n"

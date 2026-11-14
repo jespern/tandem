@@ -829,9 +829,9 @@ Required extensions: **UIDPLUS** (RFC 4315), **IDLE** (RFC 2177). Strongly recom
 A message is stored as:
 
 ```
-From: Tandem <tandem@invalid>
+From: Tandem <tandem@tandem.airforce>
 Date: <time of append, UTC>
-Message-ID: <random@tandem.invalid>
+Message-ID: <random@tandem.airforce>
 Subject: tandem
 MIME-Version: 1.0
 Tandem-Version: 2
@@ -850,7 +850,7 @@ Nothing else is in the clear. The hub already knows the append time.
 2. decode the resulting bytes to text with the `charset` of the `Content-Type` header. If the body was stored in a charset other than `us-ascii`, UTF-16 for instance, skipping this step yields garbage. Every reader supports at least `us-ascii`, `utf-8`, `utf-16` and `utf-32` (with or without a byte-order mark, and their `be`/`le` forms), `iso-8859-1` and `windows-1252`, compared without case; a body in a charset the reader doesn't know is ignored like any undecodable message;
 3. remove all whitespace, Unicode whitespace and U+FEFF included, and base64-decode what is left (standard alphabet, padding as written; the unused low bits of the last character are ignored, since they can't change the decoded bytes) to get the envelope.
 
-A writer produces exactly the form above: `Date` in RFC 5322 form in UTC, as `Fri, 13 Nov 2026 18:04:05 +0000` (the day without a leading zero), a `Message-ID` of 32 random lowercase hex digits at `tandem.invalid`, and the channel tag as it was derived (lowercase base32, §5.6), so every binding writes the same bytes for the same date and ID. The channel tag is the `Tandem-Channel` value, unfolded and trimmed. It is matched byte for byte against the tags a client derives; the same letters in another case are another tag. A message whose body doesn't decode to an envelope is ignored. A message's identity across devices is `H(envelope)`, not its IMAP UID.
+A writer produces exactly the form above: `Date` in RFC 5322 form in UTC, as `Fri, 13 Nov 2026 18:04:05 +0000` (the day without a leading zero), a `Message-ID` of 32 random lowercase hex digits at `tandem.airforce` (the project's domain; nothing is ever mailed from it, messages are only appended), and the channel tag as it was derived (lowercase base32, §5.6), so every binding writes the same bytes for the same date and ID. The channel tag is the `Tandem-Channel` value, unfolded and trimmed. It is matched byte for byte against the tags a client derives; the same letters in another case are another tag. A message whose body doesn't decode to an envelope is ignored. A message's identity across devices is `H(envelope)`, not its IMAP UID.
 
 ### 10.5 Plaintext payloads (inside the envelope)
 
