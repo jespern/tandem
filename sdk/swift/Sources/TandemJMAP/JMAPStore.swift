@@ -5,6 +5,7 @@ import TandemIMAP
 
 private let core = "urn:ietf:params:jmap:core", mail = "urn:ietf:params:jmap:mail"
 private typealias Object = [String: Any]
+func decodeJMAPObject(_ data: Data) throws -> [String: Any] { try object(JSONSerialization.jsonObject(with: data)) }
 private func object(_ value: Any?) throws -> Object { guard let result = value as? Object else { throw TandemError.invalid("JMAP: object required") }; return result }
 private func string(_ value: Any?) throws -> String { guard let result = value as? String, !result.isEmpty else { throw TandemError.invalid("JMAP: string required") }; return result }
 private func strings(_ value: Any?) throws -> [String] { guard let result = value as? [String], result.allSatisfy({ !$0.isEmpty }) else { throw TandemError.invalid("JMAP: IDs required") }; return result }
@@ -96,7 +97,7 @@ public actor JMAPStore: PushStore {
         defer { bytes.task.cancel() }; try check(response)
         var data = Data()
         for try await byte in bytes { guard data.count < config.maxResponseBytes else { throw TandemError.invalid("JMAP: response limit exceeded") }; data.append(byte) }
-        _ = try JSON.parse(Bytes(data)); return try object(JSONSerialization.jsonObject(with: data))
+        return try decodeJMAPObject(data)
     }
     private func call(_ method: String, _ arguments: Object) async throws -> Object {
         var args = arguments; args["accountId"] = account
@@ -177,8 +178,8 @@ public actor JMAPStore: PushStore {
             guard size <= config.maxEventBytes else { throw TandemError.invalid("JMAP: event limit exceeded") }
             if text.isEmpty {
                 if event == "state", !data.isEmpty {
-                    let raw = Data(data.joined(separator: "\n").utf8); _ = try JSON.parse(Bytes(raw))
-                    let value = try object(JSONSerialization.jsonObject(with: raw))
+                    let raw = Data(data.joined(separator: "\n").utf8)
+                    let value = try decodeJMAPObject(raw)
                     if try object(object(value["changed"] ?? Object())[account] ?? Object())["Email"] != nil { continuation.yield(()) }
                 }; event = ""; data = []; size = 0
             } else if text.hasPrefix("event:") { event = String(text.dropFirst(6)); if event.hasPrefix(" ") { event.removeFirst() } }

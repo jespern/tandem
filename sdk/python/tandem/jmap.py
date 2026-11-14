@@ -56,6 +56,37 @@ class JMAPConfig:
         return cls(FASTMAIL_SESSION, 'Bearer ' + token, fastmail=True, **options)
 
 
+def _api_json(data):
+    # JMAP extensions may contain fractional numbers. The signed Tandem payload
+    # inside bodyValues still goes through the protocol's stricter JSON reader.
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError('duplicate JMAP JSON name')
+            result[key] = value
+        return result
+    def constant(value):
+        raise ValueError('invalid JMAP number')
+    result = json.loads(data.decode('utf-8'), object_pairs_hook=pairs, parse_constant=constant)
+    def valid(value, depth=0):
+        if depth > 64:
+            raise ValueError('JMAP JSON nesting limit')
+        if isinstance(value, str):
+            value.encode('utf-8')
+        elif isinstance(value, float) and not math.isfinite(value):
+            raise ValueError('JMAP JSON number overflow')
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                key.encode('utf-8')
+                valid(item, depth + 1)
+        elif isinstance(value, list):
+            for item in value:
+                valid(item, depth + 1)
+    valid(result)
+    return result
+
+
 def _origin(value):
     url = urllib.parse.urlsplit(value)
     if url.scheme != 'https' or not url.hostname or url.username is not None or url.password is not None or url.fragment:
@@ -146,7 +177,7 @@ class JMAPStore:
                 body = response.read(self.config.max_response_bytes + 1)
                 if len(body) > self.config.max_response_bytes:
                     raise ValueError('JMAP response limit exceeded')
-                result = parse_json(body)
+                result = _api_json(body)
                 if not isinstance(result, dict):
                     raise ValueError('invalid JMAP response')
                 return result
@@ -224,7 +255,7 @@ class JMAPStore:
                 raise ValueError('JMAP event limit exceeded')
             if not text:
                 if event == 'state' and data:
-                    payload = parse_json('\n'.join(data).encode())
+                    payload = _api_json('\n'.join(data).encode())
                     if 'Email' in payload.get('changed', {}).get(self._account, {}):
                         loop.call_soon_threadsafe(self._wake)
                 event, data, size = '', [], 0

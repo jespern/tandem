@@ -209,8 +209,8 @@ func (s *Store) json(ctx context.Context, raw, method, typ string, data []byte, 
 	if len(body) > s.cfg.MaxResponseBytes {
 		return errors.New("jmap: response limit exceeded")
 	}
-	if _, e = tandem.ParseJSON(body); e != nil {
-		return e
+	if !utf8.Valid(body) {
+		return errors.New("jmap: invalid response UTF-8")
 	}
 	return json.Unmarshal(body, out)
 }
@@ -474,9 +474,6 @@ func (s *Store) readEvents(r *http.Response, wake func()) error {
 					Changed map[string]map[string]json.RawMessage `json:"changed"`
 				}
 				raw := []byte(strings.Join(data, "\n"))
-				if _, e := tandem.ParseJSON(raw); e != nil {
-					return &Error{"invalid push JSON"}
-				}
 				if e := json.Unmarshal(raw, &payload); e != nil {
 					return &Error{"invalid push payload"}
 				}

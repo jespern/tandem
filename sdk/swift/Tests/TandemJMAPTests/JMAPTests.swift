@@ -5,6 +5,10 @@ import TandemEngine
 import XCTest
 
 final class JMAPTests: XCTestCase {
+    func testJMAPExtensionsMayContainFractionalNumbers() throws {
+        let data = try JSONSerialization.data(withJSONObject: ["extension": 0.5])
+        XCTAssertEqual(try decodeJMAPObject(data)["extension"] as? Double, 0.5)
+    }
     func testFastmailConfiguration() async throws {
         let config = JMAPConfig.fastmail(token: "example")
         XCTAssertEqual(config.sessionURL, "https://api.fastmail.com/jmap/session")

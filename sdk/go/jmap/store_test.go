@@ -24,7 +24,7 @@ func TestSSEFramingAndLimits(t *testing.T) {
 		s := &Store{account: "account", cfg: Config{MaxEventBytes: 1024}}
 		count := 0
 		state := func(account, value string) string {
-			encoded, _ := json.Marshal(map[string]any{"changed": map[string]any{account: map[string]string{"Email": value}}})
+			encoded, _ := json.Marshal(map[string]any{"changed": map[string]any{account: map[string]string{"Email": value}}, "extension": 0.5})
 			return "data: " + string(encoded)
 		}
 		raw := strings.Join([]string{"\ufeff: heartbeat", "", "event: state", state("other", "a"), "", "event: state", state("account", "b"), "", ""}, sep)

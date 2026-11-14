@@ -29,7 +29,7 @@ class JMAPTests(unittest.IsolatedAsyncioTestCase):
             store = JMAPStore(JMAPConfig('https://mail.example.test/session', 'Bearer example'))
             store._account = 'account'
             def state(account, value):
-                return 'data: ' + json.dumps({'changed': {account: {'Email': value}}})
+                return 'data: ' + json.dumps({'changed': {account: {'Email': value}}, 'extension': 0.5})
             stream = separator.join(['\ufeff: heartbeat', '', 'event: state', state('other', 'a'), '', 'event: state', state('account', 'b'), '', '']).encode()
             with self.assertRaises(ConnectionError):
                 await asyncio.to_thread(store._read_events, io.BytesIO(stream), asyncio.get_running_loop())
