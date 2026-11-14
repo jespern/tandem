@@ -206,10 +206,10 @@ func (d *Device) healFragments(ctx context.Context, tag string, epoch, key []byt
 	if err != nil {
 		return err
 	}
-	present := map[string]bool{} // H(part bytes)
+	present := map[string]bool{} // epoch || part || parts || H(slice)
 	for _, m := range ms {
-		if v, ok := d.store.Value("fragmsg." + m); ok && len(v) == 64 && bytes.Equal(v[:32], epoch) {
-			present[string(v[32:])] = true
+		if v, ok := d.store.Value("fragmsg." + m); ok && len(v) == 72 && bytes.Equal(v[:32], epoch) {
+			present[string(v)] = true
 		}
 	}
 	parts, err := inventoryParts(inv)
@@ -221,8 +221,8 @@ func (d *Device) healFragments(ctx context.Context, tag string, epoch, key []byt
 		return err
 	}
 	for i, f := range frags {
-		h := tandem.H(parts[i])
-		if present[string(h)] {
+		receipt := fragmentReceipt(epoch, i, len(parts), parts[i])
+		if present[string(receipt)] {
 			continue
 		}
 		env, err := tandem.Seal(key, d.pin.Hub, tandem.KindRecord, tag, f)
@@ -233,7 +233,7 @@ func (d *Device) healFragments(ctx context.Context, tag string, epoch, key []byt
 		if err != nil {
 			return err
 		}
-		if err := d.store.SetValue("fragmsg."+id, append(bytes.Clone(epoch), h...)); err != nil {
+		if err := d.store.SetValue("fragmsg."+id, receipt); err != nil {
 			return err
 		}
 	}

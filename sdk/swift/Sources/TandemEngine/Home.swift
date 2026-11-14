@@ -108,7 +108,7 @@ extension Device {
             guard case let .record(state) = parsed else {
                 guard case let .inventory(f) = parsed else { return .ignored }
                 guard case let .id(commitment)? = homeEpochs[epoch]?.fields["snapshot"] else { return .waiting }
-                try store.setValue("fragmsg." + m.id, epoch + H(f.bytes))
+                try store.setValue("fragmsg." + m.id, Self.fragmentReceipt(epoch: epoch, part: f.part, parts: f.parts, slice: f.bytes))
                 guard try receiveFragment(f, epoch: epoch, commitment: commitment) else { return .ignored }
                 try moveHome()
                 return .applied

@@ -329,6 +329,32 @@ final class SecondReviewTests: XCTestCase {
         guard case .invalid = imported else { return XCTFail("inventory import bypassed the member's source floor") }
     }
 
+    func testInventoryHealingChecksFragmentIndex() async throws {
+        let (hub, f, _, _, bob, carol, _, list) = try await hubWithBobAndCarol()
+        try await bob.setField(list: list, record: bob.newRecordID(), field: "title", value: Bytes("Kept".utf8))
+        try await bob.rekey(list: list)
+        let c = await bob.collections[list]!
+        let epoch = c.epoch(of: c.head!)!, key = c.keys[epoch]!
+        let tag = Tandem.collectionTag(key: key, hub: f.pin.hub, epoch: epoch)
+        var fragments: [String] = []; var inventory: Bytes = []
+        for m in await hub.messages where m.channel == tag {
+            let (_, p) = try Envelope.open(key: key, hub: f.pin.hub, tag: tag, envelope: m.body)
+            if case .inventory(let fragment) = try Kind1.parse(p, hub: f.pin.hub, scope: list) { fragments.append(m.id); inventory = fragment.bytes }
+        }
+        await hub.drop(fragments)
+        let bogus = JSONWriter.object { w in
+            w.member("inventory", json: JSONWriter.object { x in
+                x.member("epoch", b64u: epoch); x.member("part", int: 1); x.member("parts", int: 2); x.member("bytes", b64u: inventory)
+            })
+        }
+        let raw = await hub.connect()
+        _ = try await raw.append(channel: tag, body: try Envelope.seal(key: key, hub: f.pin.hub, kind: 1, tag: tag, plaintext: bogus))
+        try await bob.sync()
+        try await carol.sync()
+        let titles = await carol.items(list: list).compactMap { $0.text("title") }
+        XCTAssertEqual(titles, ["Kept"], "Carol moves over through the restored inventory")
+    }
+
 }
 
 /// A connection whose appends land but whose answers are lost, once `lose` is set (§10.3, "Lost answers").
@@ -346,6 +372,7 @@ final class LostAnswers: PushStore, @unchecked Sendable {
     func fetch(ids: [String]) async throws -> [Message] { try await inner.fetch(ids: ids) }
     func destroy(ids: [String]) async throws { try await inner.destroy(ids: ids) }
     func close() async { await inner.close() }
+
 
 
 }

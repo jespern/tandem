@@ -742,7 +742,7 @@ func (d *Device) applyCollection(m tandem.Message, cid, epoch, key []byte) (outc
 			return waiting, nil
 		}
 		// Which part each message carries, for healing (§12.2).
-		if err := d.store.SetValue("fragmsg."+m.ID, append(bytes.Clone(epoch), tandem.H(frag.Bytes)...)); err != nil {
+		if err := d.store.SetValue("fragmsg."+m.ID, fragmentReceipt(epoch, frag.Part, frag.Parts, frag.Bytes)); err != nil {
 			return ignored, err
 		}
 		done, err := d.receiveFragment(frag, epoch, s.s.Snapshot)

@@ -202,7 +202,7 @@ func (d *Device) applyHome(m tandem.Message, epoch, key []byte, me *Me) (outcome
 			if start == nil {
 				return waiting, nil
 			}
-			if err := d.store.SetValue("fragmsg."+m.ID, append(bytes.Clone(epoch), tandem.H(frag.Bytes)...)); err != nil {
+			if err := d.store.SetValue("fragmsg."+m.ID, fragmentReceipt(epoch, frag.Part, frag.Parts, frag.Bytes)); err != nil {
 				return ignored, err
 			}
 			done, err := d.receiveFragment(frag, epoch, fid(start, "snapshot"))

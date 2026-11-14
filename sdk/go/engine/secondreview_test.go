@@ -466,3 +466,35 @@ func TestInventoryCannotBypassTheOriginalCollectionFloor(t *testing.T) {
 		t.Fatal("inventory import bypassed the member source floor", v)
 	}
 }
+
+// Correct slice bytes with the wrong index/count cannot satisfy inventory healing.
+func TestInventoryHealingChecksFragmentIndex(t *testing.T) {
+	w := newBobAndCarol(t)
+	must(t, w.bob.SetField(bg, w.list, NewRecordID(), "title", []byte("Kept")))
+	must(t, w.bob.Rekey(bg, w.list))
+	epoch, key := epochKey(w.bob, w.list)
+	tag := tandem.CollectionTag(key, w.f.Pin.Hub, epoch)
+	var fragments []string
+	var inventory []byte
+	for _, m := range w.hub.Messages() {
+		if m.Channel != tag {
+			continue
+		}
+		_, pt := try2(tandem.Open(key, w.f.Pin.Hub, tag, m.Body))
+		if _, frag, err := tandem.ParseKind1(pt, w.f.Pin.Hub, w.list); err == nil && frag != nil {
+			fragments = append(fragments, m.ID)
+			inventory = bytes.Clone(frag.Bytes)
+		}
+	}
+	if len(fragments) == 0 {
+		t.Fatal("no fragments")
+	}
+	w.hub.Drop(fragments)
+	bogus := tandem.NewJSONObject().Raw("inventory", tandem.NewJSONObject().B64u("epoch", epoch).Int("part", 1).Int("parts", 2).
+		B64u("bytes", inventory).Bytes()).Bytes()
+	rawAppend(t, w.hub, tag, try(tandem.Seal(key, w.f.Pin.Hub, tandem.KindRecord, tag, bogus)))
+	syncAll(t, w.bob, w.carol)
+	if got := titles(w.carol, w.list); !sameSet(got, set("Kept")) {
+		t.Fatal("Carol moves over through the restored inventory:", got)
+	}
+}

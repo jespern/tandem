@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"encoding/binary"
 	"strconv"
 	"strings"
 
@@ -13,6 +14,15 @@ import (
 
 // fragmentSize keeps fragments under the 64 KiB a message should keep to.
 const fragmentSize = 48 * 1024
+
+// Fragment receipts bind all assembly coordinates; legacy hash-only receipts are
+// deliberately not treated as proof of presence after an upgrade.
+func fragmentReceipt(epoch []byte, part, parts int, slice []byte) []byte {
+	out := bytes.Clone(epoch)
+	out = binary.BigEndian.AppendUint32(out, uint32(part))
+	out = binary.BigEndian.AppendUint32(out, uint32(parts))
+	return append(out, tandem.H(slice)...)
+}
 
 // inventoryParts is the inventory's bytes cut into fragment-sized parts.
 func inventoryParts(inv tandem.Inventory) ([][]byte, error) {
