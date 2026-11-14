@@ -16,6 +16,7 @@ export class HomePolicy {
   readonly #participant:Uint8Array;readonly #registry:Registry;readonly #limits:Required<HomeLimits>;
   readonly #starts=new Map<string,ControlObject[]>();readonly #keys=new Map<string,Uint8Array[]>();
   readonly #inventories=new Map<string,Map<string,Buffer[]>>();
+  readonly #anchors=new Set<string>();
   readonly #cache=new Map<string,Validity>();#registryRevision=-1;#revision=0;
   get revision():number{return this.#revision;}
   constructor(participant:Uint8Array,registry:Registry,limits:HomeLimits={}){
@@ -70,9 +71,16 @@ export class HomePolicy {
   historyHeads():Uint8Array[]{const accepted=[...this.#starts.keys()].filter(id=>this.validity(unb64u(id)).kind==='valid'),parents=new Set(accepted.flatMap(id=>(this.#object(unb64u(id))!.fields.parents as Uint8Array[]).map(b64u)));return accepted.filter(id=>!parents.has(id)).map(unb64u).sort(Buffer.compare);}
   #accepted():Set<string>{
     const accepted=new Set<string>(),take=(id:Uint8Array)=>{const key=b64u(id);if(accepted.has(key))return;accepted.add(key);for(const parent of this.#object(id)!.fields.parents as Uint8Array[])take(parent);};
+    for(const key of this.#anchors){const id=unb64u(key);if(this.#object(id)&&this.validity(id).kind==='valid'&&this.key(id))take(id);}
     for(const key of this.#starts.keys()){const id=unb64u(key),o=this.#object(id)!;if(this.validity(id).kind==='valid'&&this.#registry.activity(o.fields.signer as Uint8Array).kind==='valid')take(id);}
     return accepted;
   }
+  /** A gated enrollment package or persisted verified view may anchor its exact
+   * home epoch. An arbitrary inbox key never calls this; the signed start and
+   * key commitment still have to validate before the anchor counts. */
+  anchor(epoch:Uint8Array):boolean{const id=b64u(bytes(epoch,32));if(this.#anchors.has(id))return false;this.#anchors.add(id);this.#revision++;return true;}
+  acceptedObjects():ControlObject[]{return [...this.#accepted()].map(id=>this.object(unb64u(id))!).sort((a,b)=>(a.fields.n as number)-(b.fields.n as number)||Buffer.compare(objectID(a.kind,a.fields),objectID(b.kind,b.fields)));}
+  inventory(epoch:Uint8Array):Map<string,Buffer[]>|undefined{const inv=this.#inventories.get(b64u(epoch));return inv?new Map([...inv].map(([id,writes])=>[id,writes.map(value=>bytes(value))])):undefined;}
   heads():Uint8Array[]{
     const accepted=this.#accepted(),parents=new Set([...accepted].flatMap(id=>(this.#object(unb64u(id))!.fields.parents as Uint8Array[]).map(b64u)));
     return [...accepted].filter(id=>!parents.has(id)&&!!this.key(unb64u(id))).map(unb64u).sort(Buffer.compare);

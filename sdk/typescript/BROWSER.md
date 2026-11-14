@@ -3,8 +3,8 @@
 `@tandem/protocol/browser` runs without Node built-ins or a Tandem backend. It
 talks directly to a JMAP mail server. This is the primitive layer: Liszto's UI
 still needs to be built on it. The browser controller currently supports pairing,
-verified home/collection reads and durable field/set edits. Management workflows
-and full rotation parity remain acceptance gates.
+verified home/collection reads and durable field/set edits. Owner sharing and home-key rotation now use durable stages. Collection rotation,
+other management workflows and complete healing parity remain acceptance gates.
 
 ## Runtime and storage
 
@@ -12,7 +12,7 @@ The Node and browser builds share write/control encodings, strict JSON/base64url
 Ed25519 acceptance, inventories and record merging. Node keeps native crypto.
 The browser backend uses Noble hashes, curves and ciphers with Web Crypto's
 random source; `buffer` supplies the existing byte API. The SDK bundle costs
-about 62 KB gzip; the Argon2 worker loads separately.
+about 67 KB gzip; the Argon2 worker loads separately.
 
 Private keys now use an opaque SDK `PrivateKey` handle in both runtimes. Construct
 them with `privateKey(seed, algorithm)`; pass that handle to signing/agreement
@@ -115,6 +115,21 @@ Lists received as offers stay out of the workspace until accepted.
 `writeFields` and `writeHome` commit signed edits locally before
 export. Set adds/removes and record tombstones use the shared merge rules.
 
+`share` publishes and confirms the roster before delivering grants. `rotateHome`
+uploads ancestry, a fixed inventory and carried writes before announcing its start
+and delivering keys. A known device cutoff starts home rotation automatically.
+Native peers accept both flows; a revoked native phone cannot discover a private
+list created afterward. `operations` reports active stages and superseded actions.
+
+Journal schema 2 adds encrypted action plans and a durable deletion queue. The
+local action key lives in the separate keychain. Every stage is committed with
+its exact envelopes, then waits for actual mailbox confirmation before advancing.
+Reloads resume it. Same-epoch roster changes stay out of the local authority view
+until confirmed. Recipient delivery checks run again before export, and queued
+user data stays held when its key is exposed. Schema 1 upgrades retain deliveries;
+foreign databases are refused without modification. Replica/device runners can
+restart after cancellation. No timer advances a stage.
+
 The controller owns the journal's opaque per-hub action state. Device Web Locks
 serialize local actions across tabs. A write transaction also checks the last
 durable event sequence: if inbox/authority data arrived after replay, it retries
@@ -173,15 +188,15 @@ It explicitly enables browser CORS and publishes real loopback URLs, with no pro
 
 ## Remaining acceptance gates
 
-1. Finish owner sharing, management and journalled rotation/healing operations.
-   Pairing/release and bidirectional
-   field edits, list creation/acceptance and receiving native list rotations now
-   pass against Swift; full home/list rotation parity still needs
+1. Finish collection rotation, the remaining management operations and healing.
+   Pairing/release, bidirectional field edits, list creation/acceptance, browser
+   sharing, browser home rotation and receiving native list rotations pass against
+   Swift; full home/list rotation parity still needs
    the native crash/late-write scenarios. Reader and stale-epoch validation exist
    in the authority layer and must remain enforced by every new operation.
 2. Shared Liszto field-value vectors against its native adapter, then the browser
    store/operations layer and workspace with the same completion and keyboard rules.
-3. Validation on the selected real provider. Earlier Fastmail measurements found
+3. Fastmail is selected for real-provider validation; a JMAP API token is needed. Earlier Fastmail measurements found
    one SSE stream/token and delayed JMAP-to-IMAP notifications. Stalwart success
    does not establish mixed-transport latency on Fastmail; multi-tab ownership
    does not solve token limits across separate profiles.

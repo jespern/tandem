@@ -1,17 +1,18 @@
 import {Buffer} from 'buffer';
 import {type PrivateKey,bytes,b64u,unb64u,sha,publicKey,randomBytes,commit,sealInbox,openEnvelope,openInbox,seal,directoryTag,directoryKey,homeTag,homeScope,inboxTag,collectionTag,namedID} from './crypto.js';
-import {type ControlObject,controlFromJSON,controlToJSON,parseControl,objectID,signControl} from './control.js';
+import {type ControlObject,controlFromJSON,controlToJSON,parseControl,objectID,signControl,sealHomeRecovery} from './control.js';
 import {parseJSON,validUnicode} from './json.js';
-import {type Dot,type Write,type Op,Entry,RecordState,parseKind1,recordPayload,signWrite,writeID} from './core.js';
+import {type Dot,type Write,type Op,Entry,RecordState,parseKind1,recordPayload,signWrite,writeID,inventoryBytes} from './core.js';
 import {Registry,RegistryHoldingLimit,type Certificate} from './registry.js';
 import {HomePolicy,HomeHoldingLimit} from './home-policy.js';
 import {CollectionPolicy,CollectionHoldingLimit,ROSTER_RECORD,META_RECORD,statementJSON} from './roster.js';
-import {InventoryAssembler,InventoryHoldingLimit,type InventoryFragment} from './inventory-assembly.js';
+import {InventoryAssembler,InventoryHoldingLimit,inventoryPayloads,type InventoryFragment} from './inventory-assembly.js';
 import {adoptGrant,grantValidity} from './grant.js';
 import type {Message} from './session.js';
+import type {ExportGuard,OutgoingMessage,PreparedOperation} from './operation.js';
+export type {OutgoingMessage} from './operation.js';
 
 export interface DeviceStateOptions {maxMessages?:number;maxCachedBytes?:number;messageBytes?:number}
-export interface OutgoingMessage {channel:string;body:Uint8Array}
 export interface FieldEdit {field:string;op:Op;value?:Uint8Array;element?:Uint8Array}
 export interface DeviceOffer {collection:Uint8Array;admission:Uint8Array;owner:Uint8Array;name:string|undefined}
 interface Payload {epoch:Uint8Array;parsed:ReturnType<typeof parseKind1>;handled?:boolean}
@@ -47,7 +48,7 @@ export class DeviceState {
   get participant():Uint8Array{return bytes(this.#participant);}
   get certificate():Certificate|undefined{return this.#registry.allCertificates.filter(c=>eq(c.participant,this.#participant)&&eq(c.sign,publicKey(this.#keys.signing))&&eq(c.agree,publicKey(this.#keys.agreement))&&this.#registry.activity(c.id).kind==='valid').sort((a,b)=>Buffer.compare(a.id,b.id))[0];}
   get homeReady():boolean{return this.#home.inventoriesReady()&&this.#home.exposed().length===0;}
-  offerHomeKey(epoch:Uint8Array,key:Uint8Array):void{if(this.#offerHome(epoch,key)){this.#drain();this.#revision++;}}
+  offerHomeKey(epoch:Uint8Array,key:Uint8Array,anchor=false):void{const anchored=anchor&&this.#home.anchor(epoch),offered=this.#offerHome(epoch,key);if(anchored||offered){this.#drain();this.#revision++;}}
   #offerHome(epoch:Uint8Array,key:Uint8Array):boolean{const id=`home:${b64u(epoch)}:${b64u(sha(key))}`;if(this.#offered.has(id))return false;this.#home.offerKey(epoch,key);this.#offered.add(id);return true;}
   #collection(cid:Uint8Array):Collection{const id=b64u(cid);let c=this.#collections.get(id);if(!c){c={policy:new CollectionPolicy(cid,this.#registry),payloads:[],records:new Map()};this.#collections.set(id,c);}return c;}
   #offerCollection(cid:Uint8Array,epoch:Uint8Array,key:Uint8Array):boolean{const id=`collection:${b64u(cid)}:${b64u(epoch)}:${b64u(sha(key))}`;if(this.#offered.has(id))return false;this.#collection(cid).policy.offerKey(epoch,key);this.#offered.add(id);return true;}
@@ -163,7 +164,7 @@ export class DeviceState {
   #identity():Identity{
     const certificate=this.certificate;if(!certificate)throw new Error('this device is not currently admitted');
     const snapshot=this.#registry.currentSnapshot(this.#participant),auth=objectID(snapshot.kind,snapshot.fields),hub=this.#registry.pin.hub;
-    const messages=this.#registry.snapshot(auth)?[]:[{channel:directoryTag(this.#directory,hub),body:seal(directoryKey(this.#directory,hub),hub,directoryTag(this.#directory,hub),controlToJSON(snapshot.kind,snapshot.fields),3)}];
+    const messages=this.#registry.snapshot(auth)?[]:[{channel:directoryTag(this.#directory,hub),body:seal(directoryKey(this.#directory,hub),hub,directoryTag(this.#directory,hub),controlToJSON(snapshot.kind,snapshot.fields),3),guard:{type:'control' as const}}];
     return{certificate,auth,messages};
   }
   #sealRecord(scope:Uint8Array,record:Uint8Array,writes:readonly Write[],key:Uint8Array,tag:string):OutgoingMessage[]{
@@ -187,11 +188,93 @@ export class DeviceState {
     if(edits.some(e=>e.op===4||e.field==='_name'&&(e.op!==1||!e.value||!eq(e.value,Buffer.from(name)))))throw new Error('home records keep their name and cannot be deleted');
     const changes=[...(!previous?.value('_name')&&!edits.some(e=>e.field==='_name')?[{field:'_name',op:1 as const,value:Buffer.from(name)}]:[]),...edits];
     const writes=this.#edit(scope,record,epoch,epoch,BigInt(start.fields.n as number),previous,changes,reserve,identity);
-    return [...identity.messages,...this.#sealRecord(scope,record,writes,key,homeTag(key,this.#registry.pin.hub,this.#participant,epoch))];
+    return [...identity.messages,...this.#sealRecord(scope,record,writes,key,homeTag(key,this.#registry.pin.hub,this.#participant,epoch)).map(message=>({...message,guard:{type:'home' as const,epoch:b64u(epoch)}}))];
   }
   collectionStatus(cid:Uint8Array):{epoch:Uint8Array|undefined;ready:boolean;dead:boolean}{
     const c=this.#collections.get(b64u(cid)),head=c?.policy.head,epoch=head&&c?.policy.epoch(head),statement=head&&c?.policy.statement(head);
     return{epoch,dead:c?.policy.dead??false,ready:!!c&&!!epoch&&!!c.policy.key(epoch)&&!c.policy.dead&&!!statement&&!statement.deleted&&c.policy.inventoriesReady()&&c.policy.exposed().length===0};
+  }
+  exportable(message:OutgoingMessage):boolean{
+    let guard=message.guard;
+    if(!guard){
+      const hub=this.#registry.pin.hub;if(message.channel===directoryTag(this.#directory,hub))return true;
+      for(const {epoch,key}of this.#home.readableKeys())if(message.channel===homeTag(key,hub,this.#participant,epoch)){
+        try{const opened=openEnvelope(key,hub,message.channel,message.body);if(opened.kind===3)return true;guard={type:'home',epoch:b64u(epoch)};}catch{return false;}break;
+      }
+      if(!guard)for(const c of this.#collections.values())for(const {epoch,key}of c.policy.readableKeys())if(message.channel===collectionTag(key,hub,epoch)){
+        try{const opened=openEnvelope(key,hub,message.channel,message.body);if(opened.kind===3)return true;const parsed=parseKind1(opened.plaintext,hub,c.policy.id);if('writes'in parsed&&eq(parsed.record,ROSTER_RECORD))return true;guard={type:'collection',collection:b64u(c.policy.id),epoch:b64u(epoch)};}catch{return false;}break;
+      }
+      if(!guard)return true; // Legacy HPKE claim/answer envelopes; new sensitive deliveries name their exact recipient guard.
+    }
+    if(guard.type==='control')return true;
+    if(guard.type==='action')return true; // The controller also checks the durable operation's current guard.
+    if(guard.type==='recipient'){
+      const cert=this.#registry.certificate(unb64u(guard.certificate));if(!cert||this.#registry.activity(cert.id).kind!=='valid')return false;
+      if(!guard.collection)return true;const c=this.#collections.get(guard.collection)?.policy,head=c?.head,s=head&&c?.statement(head);
+      return !!s&&!s.deleted&&!c!.dead&&!!c!.owner&&eq(c!.owner!,this.#participant)&&s.members.some(member=>eq(member.uid,cert.participant))&&(!guard.epoch||b64u(c!.epoch(head!)!)===guard.epoch)&&c!.exposed().length===0;
+    }
+    if(!this.certificate)return false;
+    if(guard.type==='home')return this.homeReady&&this.#home.heads().some(epoch=>b64u(epoch)===guard.epoch);
+    const cid=unb64u(guard.collection),status=this.collectionStatus(cid);return status.ready&&!!status.epoch&&b64u(status.epoch)===guard.epoch&&this.role(cid)!==undefined;
+  }
+  deliveryRetired(message:OutgoingMessage):boolean{
+    const guard=message.guard;if(guard?.type!=='recipient')return false;const active=this.#registry.activity(unb64u(guard.certificate));
+    if(active.kind==='invalid'&&active.reason==='revoked')return true;
+    if(guard.collection){const c=this.#collections.get(guard.collection)?.policy,head=c?.head,s=head&&c?.statement(head),cert=this.#registry.certificate(unb64u(guard.certificate));
+      return !!s&&!!cert&&(s.deleted||!s.members.some(member=>eq(member.uid,cert.participant))||!!guard.epoch&&b64u(c!.epoch(head!)!)!==guard.epoch);
+    }return false;
+  }
+  members(cid:Uint8Array):import('./roster.js').RosterMember[]{const c=this.#collections.get(b64u(cid))?.policy,head=c?.head;return head?c!.statement(head)?.members??[]:[];}
+  operationValid(kind:string,details:Record<string,string>):boolean{
+    if(!this.certificate)return false;
+    if(kind==='home-rotation'){
+      const planned=this.#registry.snapshot(unb64u(details.auth!));if(!planned)return false;
+      return this.#registry.revocationIDs.every(id=>{const target=this.#registry.revocationTarget(id);return !target||!eq(target.participant,this.#participant)||this.#registry.revocationValidity(id).kind!=='valid'||planned.revocations.some(known=>eq(known,id));});
+    }
+    if(kind==='share'){
+      const c=this.#collections.get(details.collection!)?.policy,head=c?.head;
+      return !!c&&!!head&&!c.dead&&!!c.owner&&eq(c.owner,this.#participant)&&(b64u(head)===details.parent||c.chain(head).some(id=>b64u(id)===details.statement));
+    }
+    return true;
+  }
+  get canRotateHome():boolean{return !!this.certificate&&this.#home.inventoriesReady();}
+  get homeNeedsRotation():boolean{return this.#home.exposed().length>0;}
+  get homeEpochs():Uint8Array[]{return this.#home.heads();}
+  prepareHomeRotation():PreparedOperation{
+    const identity=this.#identity(),heads=this.#home.heads();if(!heads.length||!this.#home.inventoriesReady())throw new Error('home has missing heads, keys or inventory');
+    const hub=this.#registry.pin.hub,key=randomBytes(32),recipients=this.#registry.allCertificates.filter(cert=>eq(cert.participant,this.#participant)&&this.#registry.activity(cert.id).kind==='valid').sort((a,b)=>Buffer.compare(a.id,b.id));
+    const entries=new Map<string,Uint8Array[]>(),known=new Set<string>();
+    for(const payload of this.#homePayloads)if('writes'in payload.parsed)for(const w of payload.parsed.writes)if(this.#home.dataValidity(w,payload.epoch).kind==='valid')known.add(b64u(writeID(w)));
+    for(const record of this.#homeRecords.values())if(record.kept.length)entries.set(Buffer.from(record.kept[0]!.write.record).toString('hex'),record.kept.map(entry=>entry.id));
+    for(const head of heads)for(const [record,ids]of this.#home.inventory(head)??[])for(const id of ids)if(!known.has(b64u(id))){const list=entries.get(record)??[];if(!list.some(value=>eq(value,id)))list.push(id);entries.set(record,list);}
+    const inventory=inventoryBytes(entries),n=Math.max(...heads.map(id=>this.#home.object(id)!.fields.n as number))+1;
+    const fields={hub,genesis:this.#registry.pin.genesis,participant:this.#participant,n,parents:[...heads].sort(Buffer.compare),key:commit(key),recipients:recipients.map(cert=>cert.id),snapshot:sha(inventory),signer:identity.certificate.id,auth:identity.auth};
+    const start=controlToJSON('home-epoch',fields,{sig:signControl('home-epoch',fields,this.#keys.signing)}),epoch=objectID('home-epoch',fields),tag=homeTag(key,hub,this.#participant,epoch),scope=homeScope(hub,this.#participant);
+    const stage=(plain:Uint8Array,kind=1):OutgoingMessage=>({channel:tag,body:seal(key,hub,tag,plain,kind),guard:{type:'action',id:''},deferred:true});
+    const upload=[...identity.messages,...this.#home.acceptedObjects().map(o=>stage(controlToJSON(o.kind,o.fields,o.signatures,o.extras),3)),...inventoryPayloads(inventory,epoch).map(plain=>stage(plain))];
+    for(const record of this.#homeRecords.values())if(record.kept.length)for(const message of this.#sealRecord(scope,record.kept[0]!.write.record,record.kept.map(entry=>entry.write),key,tag))upload.push({...message,guard:{type:'action',id:''},deferred:true});
+    const announce:OutgoingMessage[]=[{channel:tag,body:seal(key,hub,tag,start,3),guard:{type:'control'},deferred:true}];
+    for(const parent of heads){const old=this.#home.key(parent)!;const oldTag=homeTag(old,hub,this.#participant,parent);announce.push({channel:oldTag,body:seal(old,hub,oldTag,start,3),guard:{type:'control'},deferred:true});}
+    const channel=inboxTag(this.#participant,hub),notice=Buffer.from(JSON.stringify({type:'home-key',epoch:b64u(epoch),k:b64u(key)}));
+    const deliver:OutgoingMessage[]=recipients.map(cert=>({channel,body:sealInbox(hub,this.#participant,cert.agree,notice),guard:{type:'recipient',certificate:b64u(cert.id)}}));
+    if(eq(this.#participant,this.#registry.pin.creator)){const recovery=sealHomeRecovery(this.#registry.pin.agree,hub,epoch,key);deliver.push({channel:directoryTag(this.#directory,hub),body:seal(directoryKey(this.#directory,hub),hub,directoryTag(this.#directory,hub),Buffer.from(JSON.stringify({type:'home-recovery',epoch:b64u(epoch),bytes:b64u(recovery)})),3),guard:{type:'control'}});}
+    return{kind:'home-rotation',details:{epoch:b64u(epoch),key:b64u(key),auth:b64u(identity.auth)},phases:[{name:'upload-home-inventory',messages:upload},{name:'announce-home',messages:announce},{name:'deliver-home-keys',messages:deliver}]};
+  }
+  prepareShare(cid:Uint8Array,participant:Uint8Array,role:'writer'|'reader',name:string,reserve:()=>Dot):PreparedOperation{
+    bytes(participant,32);validUnicode(name);if(role!=='writer'&&role!=='reader')throw new Error('share requires writer or reader role');
+    const identity=this.#identity(),c=this.#collections.get(b64u(cid))?.policy,head=c?.head,current=head&&c?.statement(head),epoch=head&&c?.epoch(head);
+    if(!c||!head||!current||!epoch||c.dead||current.deleted||!c.owner||!eq(c.owner,this.#participant)||c.exposed().length)throw new Error('only the current owner of a ready collection may share it');
+    if(current.members.some(member=>eq(member.uid,participant)))throw new Error('participant is already a member');
+    const key=c.key(epoch);if(!key)throw new Error('current collection key is missing');
+    const targets=this.#registry.allCertificates.filter(cert=>eq(cert.participant,participant)&&this.#registry.activity(cert.id).kind==='valid');if(!targets.length)throw new Error('recipient has no currently admitted devices');
+    const snapshot=this.#registry.currentSnapshot(participant),floor=objectID(snapshot.kind,snapshot.fields),hub=this.#registry.pin.hub,tag=collectionTag(key,hub,epoch);
+    const {nonce,...rest}=current,next={...rest,n:current.n+1,members:[...current.members,{uid:participant,role,name,floor}]};
+    const statement=signWrite({hub,scope:cid,record:ROSTER_RECORD,field:'s',op:1,author:this.#participant,certificate:identity.certificate.id,authorization:identity.auth,dot:reserve(),value:statementJSON(next),element:null,ref:head,context:[],base:[],signature:new Uint8Array(64)},this.#keys.signing);
+    const at=writeID(statement),fields={hub,collection:cid,recipient:participant,admission:at,at,epoch,key:commit(key),signer:identity.certificate.id,auth:identity.auth};
+    const grant=controlToJSON('grant',fields,{sig:signControl('grant',fields,this.#keys.signing)}),channel=inboxTag(participant,hub);
+    const grants=targets.map(target=>({channel,body:sealInbox(hub,participant,target.agree,Buffer.from(JSON.stringify({type:'grant',grant:parseJSON(grant),certificate:b64u(target.id),k:b64u(key)}))),guard:{type:'recipient' as const,certificate:b64u(target.id),collection:b64u(cid),epoch:b64u(epoch)}}));
+    const proofs=this.#registry.snapshot(floor)?[]:[{channel:directoryTag(this.#directory,hub),body:seal(directoryKey(this.#directory,hub),hub,directoryTag(this.#directory,hub),controlToJSON(snapshot.kind,snapshot.fields),3),guard:{type:'control' as const}}];
+    return{kind:'share',details:{collection:b64u(cid),parent:b64u(head),statement:b64u(at)},phases:[{name:'publish-roster',messages:[...identity.messages,...proofs,{channel:tag,body:seal(key,hub,tag,recordPayload(ROSTER_RECORD,[statement])),deferred:true,guard:{type:'control'}}]},{name:'deliver-grants',messages:grants}]};
   }
   prepareCreateList(name:string,reserve:()=>Dot):{collection:Uint8Array;messages:OutgoingMessage[]}{
     validUnicode(name);const identity=this.#identity();if(!this.#home.inventoriesReady())throw new Error('home is not ready to create a list');
@@ -227,6 +310,6 @@ export class DeviceState {
     if(c.policy.exposed().length)throw new Error('waiting for the owner to replace an exposed collection key');
     const previous=this.record(cid,record),changes=[...(eq(record,META_RECORD)&&!previous?.value('_name')?[{field:'_name',op:1 as const,value:Buffer.from('_meta')}]:[]),...edits];
     const writes=this.#edit(cid,record,head,epoch,BigInt(s.keyN),previous,changes,reserve,identity);
-    return [...identity.messages,...this.#sealRecord(cid,record,writes,key,collectionTag(key,this.#registry.pin.hub,epoch))];
+    return [...identity.messages,...this.#sealRecord(cid,record,writes,key,collectionTag(key,this.#registry.pin.hub,epoch)).map(message=>({...message,guard:{type:'collection' as const,collection:b64u(cid),epoch:b64u(epoch)}}))];
   }
 }

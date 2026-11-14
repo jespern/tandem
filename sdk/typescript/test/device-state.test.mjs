@@ -67,3 +67,14 @@ test('a cut to another device holds home writes even while this device is still 
   f.envelope(t.directoryKey(f.directory,f.pin.hub),t.directoryTag(f.directory,f.pin.hub),t.controlToJSON(o.kind,o.fields,o.signatures),3);f.state.ingest(f.messages);
   assert.ok(f.state.certificate);assert.equal(f.state.homeReady,false);assert.throws(()=>f.state.prepareHome('settings:liszto',[{field:'theme',op:1,value:Buffer.from('new')}],f.reserve),/home key must rotate/);
 });
+
+test('a home rotation carries fixed state, ancestry and inventory before announcing or delivering keys',()=>{
+  const f=fixture();f.apply(f.state.prepareHome('settings:liszto',[{field:'theme',op:1,value:Buffer.from('classic')}],f.reserve));
+  const operation=f.state.prepareHomeRotation(),epoch=t.unb64u(operation.details.epoch),key=t.unb64u(operation.details.key);
+  assert.equal(operation.kind,'home-rotation');assert.deepEqual(operation.phases.map(p=>p.name),['upload-home-inventory','announce-home','deliver-home-keys']);
+  assert.deepEqual(f.state.homeEpochs,[f.homeID]);
+  f.state.offerHomeKey(epoch,key);f.apply(operation.phases[0].messages);assert.deepEqual(f.state.homeEpochs,[f.homeID]);
+  f.apply(operation.phases[1].messages);assert.deepEqual(f.state.homeEpochs,[epoch]);assert.equal(f.state.homeRecord('settings:liszto').value('theme').toString(),'classic');
+  f.apply(operation.phases[2].messages);assert.equal(f.state.homeReady,true);
+  const restored=new t.DeviceState(new t.Registry(f.pin),f.directory,f.participant,f.keys);restored.offerHomeKey(f.homeID,f.homeKey,true);restored.ingest([...f.messages].reverse());assert.deepEqual(restored.homeEpochs,[epoch]);assert.equal(restored.homeRecord('settings:liszto').value('theme').toString(),'classic');
+});

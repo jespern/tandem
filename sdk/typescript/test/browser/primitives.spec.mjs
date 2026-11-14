@@ -149,6 +149,44 @@ test('a no-op journal transaction does not wake the device loop',async({page})=>
   })).toBe(false);
 });
 
+test('journal v1 upgrades without losing deliveries; deferred actions and deletions commit atomically',async({page})=>{
+  const result=await page.evaluate(async()=>{
+    const t=window.t,name='journal-upgrade',hub=new Uint8Array(32).fill(2),key=new Uint8Array(32).fill(1),tag=t.directoryTag(key,hub),body=t.seal(key,hub,tag,new Uint8Array([1]),3),id=t.b64u(t.sha(body));
+    await new Promise((resolve,reject)=>{const opening=indexedDB.open(name,1);opening.onupgradeneeded=()=>{
+      const db=opening.result;for(const name of ['meta','clocks','outbox','received','cursors','events']){const store=db.createObjectStore(name,name==='events'?{keyPath:'sequence',autoIncrement:true}:undefined);if(name==='events'||name==='outbox')store.createIndex('hub','hub');if(name==='events')store.createIndex('hubSequence',['hub','sequence']);}
+      opening.transaction.objectStore('meta').put('tandem-v2','application');opening.transaction.objectStore('received').put({hub:'hub',remoteId:'old',id,channel:tag,body,present:true},['hub','old']);
+    };opening.onsuccess=()=>{opening.result.close();resolve();};opening.onerror=()=>reject(opening.error);});
+    const journal=await t.BrowserJournal.open(name),installation=await journal.installation();
+    const migrated=(await journal.deliveries('hub')).length===1;
+    await journal.commit('hub',installation,12,tx=>{tx.nextDot();return{actions:[{id:'step',sealed:new Uint8Array([9])}],messages:[{channel:tag,body,deferred:true,guard:{type:'control'}}],destroy:['old']};});
+    let sawAction=false;await journal.commit('hub',installation,12,tx=>{sawAction=tx.actions.get('step')[0]===9;return{messages:[]};});
+    const queued=(await journal.readEvents('hub'))[0];
+    try{await journal.commit('hub',installation,12,()=>({actions:[{id:'bad',sealed:new Uint8Array([3])}],messages:[{channel:tag,body},{channel:t.collectionTag(key,hub,new Uint8Array(32)),body}]}));}catch{}
+    const atomic=(await journal.actions('hub')).length===1;
+    journal.close();const reopened=await t.BrowserJournal.open(name),kept=(await reopened.actions('hub'))[0].sealed[0]===9;
+    await reopened.apply('hub',{added:[],removed:['old'],cursor:'removed'});const deletes=(await reopened.pendingDeletes('hub')).length;reopened.close();
+    return{migrated,sawAction,atomic,kept,deferred:queued.deferred,deletes};
+  });expect(result).toEqual({migrated:true,sawAction:true,atomic:true,kept:true,deferred:true,deletes:0});
+});
+
+test('a journal upgrade refuses a foreign database without changing it',async({page})=>{
+  const result=await page.evaluate(async()=>{
+    await new Promise((resolve,reject)=>{const opening=indexedDB.open('foreign',1);opening.onupgradeneeded=()=>{opening.result.createObjectStore('meta').put('someone-else','application');};opening.onsuccess=()=>{opening.result.close();resolve();};opening.onerror=()=>reject(opening.error);});
+    let refused=false;try{const journal=await window.t.BrowserJournal.open('foreign');journal.close();}catch{refused=true;}
+    const version=await new Promise((resolve,reject)=>{const opening=indexedDB.open('foreign');opening.onsuccess=()=>{const db=opening.result,result={version:db.version,stores:[...db.objectStoreNames]};db.close();resolve(result);};opening.onerror=()=>reject(opening.error);});return{refused,...version};
+  });expect(result).toEqual({refused:true,version:1,stores:['meta']});
+});
+
+test('one replica instance can restart after cancellation',async({page})=>{
+  const result=await page.evaluate(async()=>{
+    const t=window.t,journal=await t.BrowserJournal.open('restart'),replica=new t.BrowserReplica(journal,'hub');let connections=0,closed=0;
+    for(let i=0;i<2;i++){const abort=new AbortController();let ready;const connected=new Promise(resolve=>{ready=resolve;});
+      const running=replica.run(async()=>{connections++;ready();return{watch:async()=>({async *[Symbol.asyncIterator](){await new Promise(()=>{});}}),changes:async()=>({added:[],removed:[],cursor:'stable'}),appendPrepared:async()=>'',close:async()=>{closed++;}};},abort.signal);void running.catch(()=>{});
+      await connected;abort.abort();await running.catch(()=>{});
+    }journal.close();return{connections,closed};
+  });expect(result).toEqual({connections:2,closed:2});
+});
+
 test('remembered browser keys survive reload without an extra password', async ({page}) => {
   const keys = () => page.evaluate(async () => { const keychain=await window.t.BrowserKeychain.open('remembered'), keys=await keychain.deviceKeys();
     const pub=window.t.b64u(window.t.publicKey(keys.signing)); keychain.close(); return pub; });
@@ -338,7 +376,7 @@ test('BrowserDevice pairs, restores offline edits, and refuses a revocation arri
       window.controllerDevice=resume?await t.BrowserDevice.resume(t.unb64u(hub),window.controllerJournal,window.controllerKeys):await t.BrowserDevice.pair(link,'Browser controller',window.controllerJournal,window.controllerKeys);
       window.controllerHub=hub;window.controllerAbort=new AbortController();window.controllerRun=window.controllerDevice.run(()=>t.JMAPStore.open(cfg),window.controllerAbort.signal);void window.controllerRun.catch(()=>{});
       window.controllerReady=(async()=>{for await(const update of window.controllerDevice.updates(window.controllerAbort.signal)){if(update.status==='ready')return true;}return false;})();void window.controllerReady.catch(()=>{});
-      window.waitControllerSends=async()=>{while(true){const changed=window.controllerJournal.eventsChanged();if(!(await window.controllerJournal.pending(hub)).length)return;await changed;}};
+      window.waitControllerSends=async()=>{for await(const _ of window.controllerDevice.updates(window.controllerAbort.signal)){if(!(await window.controllerJournal.pending(hub)).length&&!window.controllerDevice.operations.length)return;}};
     };
     await page.evaluate(install,{cfg,link,hub:node.b64u(hub),resume:false});
     await page.evaluate(async()=>{for await(const update of window.controllerDevice.updates(window.controllerAbort.signal)){if(update.status==='approval')break;}await window.waitControllerSends();});
@@ -385,9 +423,9 @@ test('BrowserDevice accepts native grants and enforces reader permissions',async
     const participant=(await phone.command('me')).participant,link=(await phone.command('startPairing',{label:'Alice browser'})).link,hub=node.b64u(node.parsePairingLink(link).hub);
     await page.evaluate(async({cfg,link,hub})=>{
       const t=window.t;window.sharingJournal=await t.BrowserJournal.open('sharing');window.sharingKeys=await t.BrowserKeychain.open('sharing-keys');window.sharingDevice=await t.BrowserDevice.pair(link,'Alice browser',window.sharingJournal,window.sharingKeys);
-      window.sharingAbort=new AbortController();window.sharingRun=window.sharingDevice.run(()=>t.JMAPStore.open(cfg),window.sharingAbort.signal);void window.sharingRun.catch(()=>{});
+      window.sharingHub=hub;window.sharingAbort=new AbortController();window.sharingRun=window.sharingDevice.run(()=>t.JMAPStore.open(cfg),window.sharingAbort.signal);void window.sharingRun.catch(()=>{});
       window.waitSharing=async predicate=>{for await(const _ of window.sharingDevice.updates(window.sharingAbort.signal)){if(predicate(window.sharingDevice.state))return;}};
-      window.waitSharingSends=async()=>{while(true){const changed=window.sharingJournal.eventsChanged();if(!(await window.sharingJournal.pending(hub)).length)return;await changed;}};
+      window.waitSharingSends=async()=>{for await(const _ of window.sharingDevice.updates(window.sharingAbort.signal)){if(!(await window.sharingJournal.pending(hub)).length&&!window.sharingDevice.operations.length)return;}};
       for await(const update of window.sharingDevice.updates(window.sharingAbort.signal)){if(update.status==='approval')break;}await window.waitSharingSends();
     },{cfg,link,hub});
     await owner.command('sync');const claims=(await owner.command('claims')).claims;expect(claims).toHaveLength(1);await owner.command('approve',{claim:claims[0].id});
@@ -413,5 +451,30 @@ test('BrowserDevice accepts native grants and enforces reader permissions',async
       }
 
     }
+    const recipient=(await owner.command('me')).participant;
+    const shared=await page.evaluate(async recipient=>{
+      const t=window.t,cid=await window.sharingDevice.createList('Browser-owned share'),record=t.randomBytes(16);
+      await window.sharingDevice.writeFields(cid,record,[{field:'title',op:1,value:new TextEncoder().encode('Browser shared this')}]);await window.waitSharingSends();
+      window.sharingAbort.abort();await window.sharingRun;
+      await window.sharingDevice.share(cid,t.unb64u(recipient),'writer','Owner');
+      const before=window.sharingDevice.state.members(cid).some(member=>t.b64u(member.uid)===recipient);return{cid:t.b64u(cid),record:t.b64u(record),before};
+    },recipient);expect(shared.before).toBe(false);
+    await page.reload();await page.evaluate(async()=>{window.t=await import('/sdk.js');});
+    await page.evaluate(async({cfg,hub})=>{
+      const t=window.t;window.sharingJournal=await t.BrowserJournal.open('sharing');window.sharingKeys=await t.BrowserKeychain.open('sharing-keys');window.sharingDevice=await t.BrowserDevice.resume(t.unb64u(hub),window.sharingJournal,window.sharingKeys);
+      window.sharingHub=hub;window.sharingAbort=new AbortController();window.sharingRun=window.sharingDevice.run(()=>t.JMAPStore.open(cfg),window.sharingAbort.signal);void window.sharingRun.catch(()=>{});
+      for await(const _ of window.sharingDevice.updates(window.sharingAbort.signal)){if(!(await window.sharingJournal.pending(hub)).length&&!window.sharingDevice.operations.length)break;}
+    },{cfg,hub});
+    await owner.command('sync');expect((await owner.command('offers')).offers.some(offer=>offer.list===shared.cid)).toBe(true);
+    await owner.command('accept',{list:shared.cid});expect((await owner.command('items',{list:shared.cid})).items.find(item=>item.record===shared.record).values.title).toBe(node.b64u(Buffer.from('Browser shared this')));
+    await page.evaluate(async()=>{await window.sharingDevice.rotateHome();for await(const _ of window.sharingDevice.updates(window.sharingAbort.signal)){if(window.sharingDevice.state.homeReady&&!window.sharingDevice.operations.some(op=>!op.failure)&&!(await window.sharingJournal.pending(window.sharingHub)).length)break;}});
+    await phone.command('sync');expect((await phone.command('lists')).lists.some(list=>list.id===shared.cid)).toBe(true);
+    const oldHome=await page.evaluate(()=>window.t.b64u(window.sharingDevice.state.homeEpochs[0]));
+    await owner.command('revoke',{certificate:(await phone.command('me')).certificate});
+    await page.evaluate(async oldHome=>{for await(const _ of window.sharingDevice.updates(window.sharingAbort.signal)){const state=window.sharingDevice.state;if(state.homeReady&&window.t.b64u(state.homeEpochs[0])!==oldHome&&!window.sharingDevice.operations.some(op=>!op.failure))return;}},oldHome);
+    const privateList=await page.evaluate(async()=>{const cid=await window.sharingDevice.createList('Private after cutoff');for await(const _ of window.sharingDevice.updates(window.sharingAbort.signal)){if(!(await window.sharingJournal.pending(window.sharingHub)).length&&!window.sharingDevice.operations.some(op=>!op.failure))return window.t.b64u(cid);}});
+    await phone.command('sync');expect((await phone.command('lists')).lists.some(list=>list.id===privateList)).toBe(false);
+    await owner.command('sync');expect((await owner.command('lists')).lists.some(list=>list.id===privateList)).toBe(false);
+
   }finally{await page.evaluate(async()=>{window.sharingAbort?.abort();await window.sharingDevice?.close();window.sharingJournal?.close();window.sharingKeys?.close();});await phone.close();await owner.close();}
 });

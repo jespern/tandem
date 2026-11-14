@@ -35,6 +35,16 @@ export class BrowserKeychain {
       await this.#put(`secret:${name}`, {iv, ciphertext});
     });
   }
+  /** A stable, independent local encryption key shared by tabs in this profile. */
+  async localSecret(name:string):Promise<Uint8Array>{
+    if(!name)throw new Error('local secret name required');const slot=`local:${name}`;
+    return navigator.locks.request(`tandem:keys:${this.#db.name}`,async()=>{
+      const saved=await this.get(slot);if(saved){if(saved.length!==32)throw new Error('invalid local secret');return saved;}
+      const value=Uint8Array.from(randomBytes(32)),key=await this.#wrap(),iv=Uint8Array.from(randomBytes(12));
+      const ciphertext=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:new TextEncoder().encode(slot)},key,value);
+      await this.#put(`secret:${slot}`,{iv,ciphertext});return value;
+    });
+  }
   async deviceKeys(): Promise<{signing: PrivateKey; agreement: PrivateKey}> {
     const seed = await navigator.locks.request(`tandem:keys:${this.#db.name}`, async () => {
       const saved = await this.get('device'); if (saved) { if (saved.length !== 64) throw new Error('invalid browser device keys'); return saved; }

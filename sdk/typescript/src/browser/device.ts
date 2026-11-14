@@ -6,7 +6,10 @@ import {DeviceState,DeviceHoldingLimit,type DeviceStateOptions,type FieldEdit} f
 import {type PairingLink,type PairingProposal,type PairingKeys,parsePairingLink,pairingLinkJSON,pairingRegistry,proposePairing,releasePairing,pendingPairingJSON,parsePendingPairing} from '../pairing.js';
 import type {Registry} from '../registry.js';
 import type {Message} from '../session.js';
-import {BrowserJournal} from './journal.js';
+import {BrowserJournal,type LocalPlan,type LocalTransaction} from './journal.js';
+import type {Dot} from '../core.js';
+import type {PreparedOperation} from '../operation.js';
+import {newAction,sealAction,openAction,messageID,type DeviceAction} from './actions.js';
 import {BrowserKeychain} from './keychain.js';
 import {BrowserReplica,type PreparedStore,untilAbort} from './replica.js';
 import {Invalidation} from './events.js';
@@ -35,10 +38,12 @@ function loadEnrollment(data:Uint8Array):Enrollment {
  * This class owns the journal's opaque per-hub action state. */
 export class BrowserDevice {
   readonly #journal:BrowserJournal;readonly #keychain:BrowserKeychain;readonly #keys:PairingKeys;readonly #options:DeviceStateOptions;
+  readonly #actionKey:Uint8Array;readonly #activeActions=new Map<string,DeviceAction>();readonly #present=new Map<string,Set<string>>();readonly #remote=new Map<string,string>();
   readonly #hub:string;readonly #slot:string;readonly #lock:string;readonly #replica:BrowserReplica;readonly #changes=new Invalidation();
   readonly #messages=new Map<string,Message>();#enrollment:Enrollment;#registry:Registry|undefined;#view:DeviceState|undefined;
   #sequence=0;#messageBytes=0;#closed=false;#running:Promise<void>|undefined;#abort:AbortController|undefined;#status:BrowserDeviceStatus='material';
-  private constructor(journal:BrowserJournal,keychain:BrowserKeychain,keys:PairingKeys,enrollment:Enrollment,options:DeviceStateOptions){
+  private constructor(journal:BrowserJournal,keychain:BrowserKeychain,keys:PairingKeys,enrollment:Enrollment,options:DeviceStateOptions,actionKey:Uint8Array){
+    this.#actionKey=bytes(actionKey,32);
     this.#journal=journal;this.#keychain=keychain;this.#keys=keys;this.#enrollment=enrollment;this.#options=options;this.#hub=b64u(enrollment.link.hub);this.#slot=`device:${this.#hub}`;
     this.#lock=`tandem:device:${JSON.stringify([journal.name,this.#hub])}`;this.#replica=new BrowserReplica(journal,this.#hub);
   }
@@ -47,11 +52,11 @@ export class BrowserDevice {
     const keys=await keychain.deviceKeys(),hub=b64u(link.hub),slot=`device:${hub}`,lock=`tandem:device:${JSON.stringify([journal.name,hub])}`;
     const enrollment=await navigator.locks.request(lock,async()=>{const saved=await keychain.get(slot);if(saved){const record=loadEnrollment(saved);if(b64u(record.link.participant)!==b64u(link.participant)||b64u(record.link.genesis)!==b64u(link.genesis))throw new Error('this browser already has another enrollment on this hub');return record;}
       const record={link,label};await keychain.save(slot,saveEnrollment(record));return record;});
-    const device=new BrowserDevice(journal,keychain,keys,enrollment,options);await device.#lockedRefresh();return device;
+    const device=new BrowserDevice(journal,keychain,keys,enrollment,options,await keychain.localSecret(`actions:${hub}`));await device.#lockedRefresh();return device;
   }
   static async resume(hub:Uint8Array,journal:BrowserJournal,keychain:BrowserKeychain,options:DeviceStateOptions={}):Promise<BrowserDevice>{
     const saved=await keychain.get(`device:${b64u(bytes(hub,32))}`);if(!saved)throw new Error('pair this browser first');
-    const device=new BrowserDevice(journal,keychain,await keychain.deviceKeys(),loadEnrollment(saved),options);await device.#lockedRefresh();return device;
+    const device=new BrowserDevice(journal,keychain,await keychain.deviceKeys(),loadEnrollment(saved),options,await keychain.localSecret(`actions:${b64u(hub)}`));await device.#lockedRefresh();return device;
   }
   get state():DeviceState|undefined{return this.#view;}
   get update():BrowserDeviceUpdate{return{status:this.#status,revision:this.#view?.revision??0};}
@@ -62,7 +67,11 @@ export class BrowserDevice {
   async #refresh():Promise<void>{
     if(this.#closed)throw new Error('browser device closed');
     const saved=await this.#keychain.get(this.#slot);if(saved)this.#enrollment=loadEnrollment(saved);
-    let rows;do{rows=await this.#journal.readEvents(this.#hub,this.#sequence);const messages=rows.filter(row=>row.kind!=='removed');
+    let rows;do{rows=await this.#journal.readEvents(this.#hub,this.#sequence);const messages=rows.filter(row=>row.kind!=='removed'&&!(row.kind==='queued'&&row.deferred));
+      for(const row of rows){if(!row.remoteId)continue;const key=JSON.stringify([row.channel,row.id]);
+        if(row.kind==='received'){const ids=this.#present.get(key)??new Set<string>();ids.add(row.remoteId);this.#present.set(key,ids);this.#remote.set(row.remoteId,key);}
+        if(row.kind==='removed'){const previous=this.#remote.get(row.remoteId);if(previous){const ids=this.#present.get(previous);ids?.delete(row.remoteId);if(!ids?.size)this.#present.delete(previous);this.#remote.delete(row.remoteId);}}
+      }
       if(this.#view)this.#view.ingest(messages);
       for(const message of messages)if(!this.#enrollment.complete||!this.#view){const id=JSON.stringify([message.channel,message.id]);if(this.#messages.has(id))continue;
         if(this.#messages.size>=(this.#options.maxMessages??100000)||this.#messageBytes+message.body.length>(this.#options.maxCachedBytes??64*1024*1024))throw new DeviceHoldingLimit('enrollment envelope holding limit exceeded');
@@ -77,15 +86,18 @@ export class BrowserDevice {
       if(proposal){record.proposal=proposal;await this.#keychain.save(this.#slot,saveEnrollment(record));}}
     if(record.proposal&&!record.complete){
       const request=b64u(objectID('request',record.proposal.pending.request.fields)),installation=await this.#journal.installation();
+      const queued=await this.#journal.queued(this.#hub,record.proposal.messages.map(messageID));
+      const missing=record.proposal.messages.filter(message=>!this.#present.has(JSON.stringify([message.channel,messageID(message)]))&&!queued.has(messageID(message)));
       try{await this.#journal.commit(this.#hub,installation,Date.now(),tx=>{
         if(tx.sequence!==this.#sequence)throw new StaleDeviceState();
-        if(tx.state&&Buffer.from(tx.state).toString()===request)return{messages:[]};
+        if(tx.state&&Buffer.from(tx.state).toString()===request)return{messages:missing};
         return{messages:record.proposal!.messages,state:Buffer.from(request)};
       });}catch(error){if(error instanceof StaleDeviceState)return this.#refresh();throw error;}
       const released=this.#registry&&releasePairing(record.proposal.pending,this.#registry,[...this.#messages.values()],this.#keys);
       if(released){record.complete={epoch:released.epoch,key:released.key,certificate:released.certificate.id};await this.#keychain.save(this.#slot,saveEnrollment(record));}
     }
-    if(record.complete&&this.#view){this.#view.offerHomeKey(record.complete.epoch,record.complete.key);this.#messages.clear();this.#messageBytes=0;}
+    if(record.complete&&this.#view){this.#view.offerHomeKey(record.complete.epoch,record.complete.key,true);this.#messages.clear();this.#messageBytes=0;}
+    if(this.#view&&await this.#progressActions())return this.#refresh();
     const activity=record.complete&&this.#registry?.activity(record.complete.certificate);
     this.#status=record.complete?(activity&&activity.kind==='invalid'&&activity.reason==='revoked'?'revoked':this.#view?.certificate?(this.#view.homeReady?'ready':'home'):'material'):record.proposal?'approval':'material';
     this.#changes.signal();
@@ -95,19 +107,64 @@ export class BrowserDevice {
   run(connect:()=>Promise<PreparedStore>,signal:AbortSignal):Promise<void>{
     if(this.#running||this.#closed)throw new Error('browser device already running or closed');
     const abort=new AbortController();this.#abort=abort;const merged=AbortSignal.any([signal,abort.signal]);
-    const transport=this.#replica.run(connect,merged);void transport.then(()=>{if(!merged.aborted)abort.abort(new Error('replica ended'));},error=>abort.abort(error));
+    const transport=this.#replica.run(connect,merged,{beforeExport:()=>this.#lockedRefresh(),allowExport:entry=>{if(entry.guard?.type==='action'){const action=this.#activeActions.get(entry.guard.id);return !!action&&!action.details.failure&&!!this.#view?.operationValid(action.kind,action.details);}return this.#view?.exportable(entry)??false;}});void transport.then(()=>{if(!merged.aborted)abort.abort(new Error('replica ended'));},error=>abort.abort(error));
     this.#running=(async()=>{try{while(!merged.aborted){const changed=this.#journal.eventsChanged();await this.#lockedRefresh();await untilAbort(changed,merged);}}
-      catch(error){if(!signal.aborted&&!this.#closed)throw error;}finally{abort.abort();await transport.catch(()=>{});}})();
+      catch(error){if(!signal.aborted&&!this.#closed)throw error;}finally{abort.abort();await transport.catch(()=>{});this.#running=undefined;this.#abort=undefined;}})();
     return this.#running;
   }
-  async #edit(prepare:(state:DeviceState,reserve:()=>import('../core.js').Dot)=>Message[]|import('../device-state.js').OutgoingMessage[]):Promise<void>{
+  async #commitPlan(prepare:(state:DeviceState,reserve:()=>Dot,tx:LocalTransaction)=>LocalPlan):Promise<void>{
     if(this.#closed)throw new Error('browser device closed');
     await navigator.locks.request(this.#lock,async()=>{while(true){await this.#refresh();const state=this.#view;if(!state)throw new Error('browser device has no verified state yet');
       const installation=await this.#journal.installation();
-      try{await this.#journal.commit(this.#hub,installation,Date.now(),tx=>{if(tx.sequence!==this.#sequence)throw new StaleDeviceState();return{messages:prepare(state,()=>tx.nextDot())};});break;}
+      try{await this.#journal.commit(this.#hub,installation,Date.now(),tx=>{if(tx.sequence!==this.#sequence)throw new StaleDeviceState();return prepare(state,()=>tx.nextDot(),tx);});break;}
       catch(error){if(!(error instanceof StaleDeviceState))throw error;}
     }await this.#refresh();});
   }
+  async #edit(prepare:(state:DeviceState,reserve:()=>Dot)=>import('../device-state.js').OutgoingMessage[]):Promise<void>{await this.#commitPlan((state,reserve)=>({messages:prepare(state,reserve)}));}
+  async #progressActions():Promise<boolean>{
+    const saved=await this.#journal.actions(this.#hub);this.#activeActions.clear();
+    for(const row of saved){const action=openAction(row.id,row.sealed,this.#actionKey,this.#enrollment.link.hub);this.#activeActions.set(row.id,action);
+      if(action.kind==='home-rotation')this.#view!.offerHomeKey(unb64u(action.details.epoch!),unb64u(action.details.key!));
+    }
+    for(const action of this.#activeActions.values()){
+      if(action.details.failure)continue;
+      const phase=action.phases[action.index]!;
+      let plan:LocalPlan|undefined;
+      if(!this.#view!.operationValid(action.kind,action.details)){
+        action.details.failure='This operation was superseded by a newer policy or roster.';
+        plan={messages:[],cancel:phase.messages.map(messageID),actions:[{id:action.id,sealed:sealAction(action,this.#actionKey,this.#enrollment.link.hub)}]};
+      }else{
+        const allowed=phase.messages.filter(message=>this.#view!.exportable(message));
+        // A recipient cut retires that exact delivery; other recipients continue.
+        const retired=phase.messages.filter(message=>this.#view!.deliveryRetired(message));
+        if(retired.length){phase.messages=phase.messages.filter(message=>!retired.includes(message));plan={messages:[],cancel:retired.map(messageID),actions:[{id:action.id,sealed:sealAction(action,this.#actionKey,this.#enrollment.link.hub)}]};}
+        else if(phase.messages.every(message=>this.#present.has(JSON.stringify([message.channel,messageID(message)])))&&!(await this.#journal.pendingDeletes(this.#hub)).some(row=>phase.destroy?.includes(row.id))){
+          if(action.index+1===action.phases.length)plan={messages:[],actions:[{id:action.id,sealed:null}]};
+          else{action.index++;const next=action.phases[action.index]!;plan={messages:next.messages,actions:[{id:action.id,sealed:sealAction(action,this.#actionKey,this.#enrollment.link.hub)}],...(next.cancel?{cancel:next.cancel}:{}),...(next.destroy?{destroy:next.destroy}:{})};}
+        }else{
+          const queued=await this.#journal.queued(this.#hub,allowed.map(messageID)),missing=allowed.filter(message=>!this.#present.has(JSON.stringify([message.channel,messageID(message)]))&&!queued.has(messageID(message)));
+          if(missing.length)plan={messages:missing};
+        }
+      }
+      if(plan){const installation=await this.#journal.installation();try{await this.#journal.commit(this.#hub,installation,Date.now(),tx=>{if(tx.sequence!==this.#sequence)throw new StaleDeviceState();return plan!;});}catch(error){if(error instanceof StaleDeviceState)return true;throw error;}return true;}
+    }
+    if(this.#view!.homeNeedsRotation&&this.#view!.canRotateHome&&![...this.#activeActions.values()].some(action=>action.kind==='home-rotation'&&!action.details.failure)){
+      const installation=await this.#journal.installation();try{await this.#journal.commit(this.#hub,installation,Date.now(),tx=>{if(tx.sequence!==this.#sequence)throw new StaleDeviceState();return this.#operationPlan(this.#view!.prepareHomeRotation(),tx);});}catch(error){if(error instanceof StaleDeviceState)return true;throw error;}return true;
+    }
+    return false;
+  }
+  get operations():readonly {id:string;kind:string;phase:string;collection?:string;failure?:string}[]{return [...this.#activeActions.values()].map(action=>({id:action.id,kind:action.kind,phase:action.phases[action.index]!.name,...(action.details.collection?{collection:action.details.collection}:{}),...(action.details.failure?{failure:action.details.failure}:{})}));}
+  #operationPlan(prepared:PreparedOperation,tx:LocalTransaction):LocalPlan{
+    for(const [existingID,sealed]of tx.actions){const existing=openAction(existingID,sealed,this.#actionKey,this.#enrollment.link.hub);if(!existing.details.failure&&(prepared.details.collection&&existing.details.collection===prepared.details.collection||prepared.kind==='home-rotation'&&existing.kind===prepared.kind))throw new Error('this scope already has a pending operation');}
+    const action=newAction(prepared.kind,prepared.phases,prepared.details);
+    for(const phase of action.phases)for(const message of phase.messages)if(message.guard?.type==='action'&&!message.guard.id)message.guard.id=action.id;
+    const first=action.phases[0]!;return{messages:first.messages,actions:[{id:action.id,sealed:sealAction(action,this.#actionKey,this.#enrollment.link.hub)}],...(first.cancel?{cancel:first.cancel}:{}),...(first.destroy?{destroy:first.destroy}:{})};
+  }
+  async #startOperation(prepare:(state:DeviceState,reserve:()=>Dot)=>PreparedOperation):Promise<string>{
+    let id='';await this.#commitPlan((state,reserve,tx)=>{const plan=this.#operationPlan(prepare(state,reserve),tx);id=plan.actions![0]!.id;return plan;});return id;
+  }
+  async rotateHome():Promise<string>{return this.#startOperation(state=>state.prepareHomeRotation());}
+  async share(collection:Uint8Array,participant:Uint8Array,role:'writer'|'reader',name=''):Promise<string>{const cid=bytes(collection,16),uid=bytes(participant,32);return this.#startOperation((state,reserve)=>state.prepareShare(cid,uid,role,name,reserve));}
   async writeHome(name:string,edits:readonly FieldEdit[]):Promise<void>{const captured=structuredClone(edits);await this.#edit((state,reserve)=>state.prepareHome(name,captured,reserve));}
   async writeFields(collection:Uint8Array,record:Uint8Array,edits:readonly FieldEdit[]):Promise<void>{const cid=bytes(collection,16),id=bytes(record,16),captured=structuredClone(edits);await this.#edit((state,reserve)=>state.prepareField(cid,id,captured,reserve));}
   async createList(name:string):Promise<Uint8Array>{let collection:Uint8Array|undefined;await this.#edit((state,reserve)=>{const prepared=state.prepareCreateList(name,reserve);collection=prepared.collection;return prepared.messages;});return collection!;}

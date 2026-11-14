@@ -237,11 +237,12 @@ export class JMAPStore implements PushStore {
     if (ids.length > this.#cfg.pageSize) throw new Error('fetch exceeds page limit');
     return (await this.#objects([...ids], signal)).rows.flatMap(row => { const m = this.#message(row); return m ? [m] : []; });
   }
+  get deleteBatchSize():number{return this.#cfg.pageSize;}
   async destroy(ids: readonly string[], signal: AbortSignal): Promise<void> {
     if (ids.length > this.#cfg.pageSize) throw new Error('destroy exceeds page limit'); if (!ids.length) return;
     const checked = await this.#objects([...ids], signal, false);
     if (checked.rows.some(row => !object(row.mailboxIds)[this.#folder])) throw new Error('refusing to destroy mail outside Tandem');
-    await this.#call('Email/set', {destroy: checked.rows.map(row => row.id)}, signal);
+    if(!checked.rows.length)return;const result=await this.#call('Email/set',{destroy:checked.rows.map(row=>row.id)},signal);if(result.notDestroyed&&Object.keys(object(result.notDestroyed)).length)throw new JMAPError('Email/set refused destruction');
   }
   async close(): Promise<void> { this.#abort.abort(); this.#wakes.end(); await this.#running?.catch(() => {}); }
 }

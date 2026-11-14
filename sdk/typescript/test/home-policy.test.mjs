@@ -47,3 +47,13 @@ test('a home ancestry budget holds the proof instead of invalidating it',()=>{
   const child=t.controlFromJSON(t.controlToJSON('home-epoch',fields,{sig:t.signControl('home-epoch',fields,f.signing)})),id=f.policy.accept(child);
   assert.throws(()=>f.policy.validity(id),t.HomeHoldingLimit);assert.equal(f.policy.validity(f.id).kind,'valid');
 });
+
+test('checking a revoked device branch does not adopt its parents or replace an accepted head',()=>{
+  const f=fixture(),tablet=objects.get('alice tablet certificate'),tabletID=t.objectID(tablet.kind,tablet.fields),oldSnapshot=t.controlFromJSON(t.controlToJSON('snapshot',{...objects.get('alice snapshot').fields,revocations:[]}));
+  const oldAuth=f.registry.add(oldSnapshot),oldFields={...f.start.fields,auth:oldAuth},old=t.controlFromJSON(t.controlToJSON('home-epoch',oldFields,{sig:t.signControl('home-epoch',oldFields,f.signing)})),root=f.policy.accept(old);
+  f.policy.offerKey(root,f.key);f.policy.anchor(root);
+  const tabletKey=t.privateKey(t.sha(Buffer.from('Tandem v2 public control vector: alice tablet signing')),'ed25519'),key=t.randomBytes(32),empty=t.inventoryBytes(new Map());
+  let parent=root;
+  for(let n=1;n<=2;n++){const fields={...oldFields,n,parents:[parent],key:t.commit(key),snapshot:t.sha(empty),signer:tabletID,recipients:[tabletID]},o=t.controlFromJSON(t.controlToJSON('home-epoch',fields,{sig:t.signControl('home-epoch',fields,tabletKey)}));parent=f.policy.accept(o);f.policy.offerKey(parent,key);assert.equal(f.policy.validity(parent).kind,'valid');}
+  assert.deepEqual(f.policy.heads(),[root]);assert.deepEqual(f.policy.acceptedObjects().map(o=>t.objectID(o.kind,o.fields)),[Buffer.from(root)]);
+});
