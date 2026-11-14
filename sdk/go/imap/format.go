@@ -46,7 +46,7 @@ func BuildMessage(channel string, envelope []byte, date time.Time, id string) ([
 		id = hex.EncodeToString(r[:])
 	}
 	var b bytes.Buffer
-	for _, line := range []string{"From: Tandem <tandem@invalid>", "Date: " + rfc5322(date), "Message-ID: <" + id + "@tandem.invalid>",
+	for _, line := range []string{"From: Tandem <tandem@tandem.airforce>", "Date: " + rfc5322(date), "Message-ID: <" + id + "@tandem.airforce>",
 		"Subject: tandem", "MIME-Version: 1.0", "Tandem-Version: 2", "Tandem-Channel: " + channel,
 		"Content-Type: text/plain; charset=us-ascii", "Content-Transfer-Encoding: 7bit", ""} {
 		b.WriteString(line)

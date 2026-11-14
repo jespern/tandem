@@ -151,7 +151,36 @@ def key_change(new, hub):
     check('Alice reads', titles(alice, lst), ['After', 'Before', 'Later'])
 
 
-SCENARIOS = [sharing, pairing, key_change]
+def copying(new, hub):
+    """The owner copies a list (the way out of a dead one, §11.8); the member is offered the copy and reads it."""
+    bob = new('a', 'Bob')
+    bob('found', label='Bob’s Mac')
+    alice = new('b', 'Alice')
+    alice('join', link=bob('invite', label='Alice')['link'], label='Alice’s phone')
+    alice_id = alice('me')['participant']
+    bob('sync')
+    lst = bob('createList', name='House')['list']
+    milk = b64u(os.urandom(16))
+    bob('set', list=lst, record=milk, field='title', value=b64u(b'Milk'))
+    bob('add', list=lst, record=milk, field='tags', element=b64u(b'dairy'))
+    bob('share', list=lst, participant=alice_id, role='writer')
+    alice('sync')
+    alice('accept', list=lst)
+    copy = bob('copy', list=lst)
+    check('shared again', copy['shared'], [alice_id])
+    check('undecided', copy['undecided'], [])
+    alice('sync')
+    check('offer', [o['list'] for o in alice('offers')['offers']], [copy['list']])
+    check('copy of', alice('copyOf', list=copy['list'])['from'], lst)
+    alice('accept', list=copy['list'])
+    check('Alice reads the copy', titles(alice, copy['list']), ['Milk'])
+    check('set field', [i['sets'].get('tags') for i in alice('items', list=copy['list'])['items']], [[b64u(b'dairy')]])
+    alice('set', list=copy['list'], record=milk, field='done', value=b64u(b'1'))
+    bob('sync')
+    check('Bob reads Alice', [i['values'].get('done') for i in bob('items', list=copy['list'])['items']], [b64u(b'1')])
+
+
+SCENARIOS = [sharing, pairing, key_change, copying]
 
 
 def run(server, first, second):

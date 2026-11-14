@@ -53,9 +53,9 @@ def message(run, n):
     """A message shaped like §10.4, with a random envelope-sized body."""
     body = os.urandom(300)
     m = EmailMessage(policy=policy.SMTP)
-    m['From'] = 'Tandem <tandem@invalid>'
+    m['From'] = 'Tandem <tandem@tandem.airforce>'
     m['Date'] = formatdate(usegmt=True)
-    m['Message-ID'] = f'<{n}.{run}@tandem.invalid>'
+    m['Message-ID'] = f'<{n}.{run}@tandem.airforce>'
     m['Subject'] = 'tandem'
     m['Tandem-Version'] = '2'
     m['Tandem-Channel'] = base64.b32encode(os.urandom(20)).decode().lower()
@@ -253,7 +253,7 @@ def probe(host, port, user, password, want_connections, samples=3, wait=120, com
         r['expunge_push'] = watcher.wait_for({'EXPUNGE', 'VANISHED'}, destroy)
         log('expunge:', r['expunge_push'])
         time.sleep(3)
-        lone = f'<0.{run}@tandem.invalid>'
+        lone = f'<0.{run}@tandem.airforce>'
         survivors = {}
         for use, name in special.items():
             if name and search(a, name, lone):

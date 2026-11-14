@@ -93,7 +93,10 @@ def main():
         check_lean(args.oracle.resolve())
     with tempfile.TemporaryDirectory(prefix="tandem-sdk-interop-") as directory:
         env = dict(os.environ, TANDEM_INTEROP_DIR=directory, PYTHONPATH=str(ROOT / "sdk/python"))
-        run(["go", "test", "-race", "-count=1", "./..."], ROOT / "sdk/go", env)
+        # The race detector multiplies memory; the fixed 1 GiB profile runs in
+        # the second pass without it. The concurrent session tests keep -race.
+        run(["go", "test", "-race", "-count=1", "./..."], ROOT / "sdk/go", dict(env, TANDEM_SKIP_ARGON2_GIB="1"))
+        run(["go", "test", "-count=1", "./..."], ROOT / "sdk/go", env)
         run([sys.executable, "-B", "-W", "error::ResourceWarning", "-m", "unittest", "discover", "-s", "sdk/python/tests", "-q"], env=env)
         run([node, "node_modules/typescript/bin/tsc"], ROOT / "sdk/typescript", env)
         run([node, "--test", "test/core.test.mjs", "test/control.test.mjs", "test/registry.test.mjs", "test/roster.test.mjs", "test/home-policy.test.mjs", "test/pairing.test.mjs", "test/inventory-assembly.test.mjs", "test/device-state.test.mjs", "test/grant.test.mjs", "test/actions.test.mjs", "test/jmap-config.test.mjs", "test/management.test.mjs"], ROOT / "sdk/typescript", env)

@@ -12,7 +12,7 @@ public enum MessageFormat {
         guard !channel.isEmpty, channel.utf8.allSatisfy({ $0 > 0x20 && $0 < 0x7f }), channel.utf8.count <= 900
         else { throw TandemError.invalid("channel tag must be printable ASCII") }
         let messageID = id ?? (0..<16).map { _ in UInt8.random(in: 0...255) }.hex
-        let head = ["From: Tandem <tandem@invalid>", "Date: \(rfc5322(date))", "Message-ID: <\(messageID)@tandem.invalid>",
+        let head = ["From: Tandem <tandem@tandem.airforce>", "Date: \(rfc5322(date))", "Message-ID: <\(messageID)@tandem.airforce>",
                     "Subject: tandem", "MIME-Version: 1.0", "Tandem-Version: 2", "Tandem-Channel: \(channel)",
                     "Content-Type: text/plain; charset=us-ascii", "Content-Transfer-Encoding: 7bit", ""]
         return Bytes(head.map { $0 + "\r\n" }.joined().utf8) + wrapped(envelope)

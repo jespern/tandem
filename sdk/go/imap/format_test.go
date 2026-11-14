@@ -41,7 +41,7 @@ func TestBuildIsExactlyTheFormatOfSection10_4(t *testing.T) {
 		t.Fatal(err)
 	}
 	b64 := base64.StdEncoding.EncodeToString(envelope)
-	expected := "From: Tandem <tandem@invalid>\r\nDate: Fri, 13 Nov 2026 09:30:00 +0000\r\nMessage-ID: <00ff@tandem.invalid>\r\n" +
+	expected := "From: Tandem <tandem@tandem.airforce>\r\nDate: Fri, 13 Nov 2026 09:30:00 +0000\r\nMessage-ID: <00ff@tandem.airforce>\r\n" +
 		"Subject: tandem\r\nMIME-Version: 1.0\r\nTandem-Version: 2\r\nTandem-Channel: abcdefgh\r\n" +
 		"Content-Type: text/plain; charset=us-ascii\r\nContent-Transfer-Encoding: 7bit\r\n\r\n" +
 		b64[:76] + "\r\n" + b64[76:] + "\r\n"

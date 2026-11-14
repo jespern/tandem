@@ -136,6 +136,11 @@ actor Driver {
         case "rekey":
             try await dev().rekey(list: try b("list"))
             return [:]
+        case "copy":
+            let copy = try await dev().copy(list: try b("list"))
+            return ["list": B64u.encode(copy.list), "shared": copy.shared.map(B64u.encode), "undecided": copy.undecided.map(B64u.encode)]
+        case "copyOf":
+            return ["from": try await dev().copyOf(list: try b("list")).map(B64u.encode) ?? NSNull()]
         default:
             throw Failure(message: "unknown op")
         }

@@ -22,9 +22,9 @@ def decode_text(text):
 
 def message(channel, envelope, transfer='7bit', charset='us-ascii'):
     m = EmailMessage(policy=policy.SMTP)
-    m['From'] = 'Tandem <tandem@invalid>'
+    m['From'] = 'Tandem <tandem@tandem.airforce>'
     m['Date'] = formatdate(usegmt=True)
-    m['Message-ID'] = make_msgid(domain='tandem.invalid')
+    m['Message-ID'] = make_msgid(domain='tandem.airforce')
     m['Subject'] = 'tandem'
     m['Tandem-Version'] = '1'
     m['Tandem-Channel'] = channel
@@ -97,7 +97,7 @@ class JMAP:
     def append(self, folder, channel, envelope):
         value = {'mailboxIds': {folder: True}, 'keywords': {'$seen': True},
                  'header:Tandem-Channel:asText': channel, 'header:Tandem-Version:asText': '1',
-                 'header:From:asText': 'Tandem <tandem@invalid>', 'header:Subject:asText': 'tandem',
+                 'header:From:asText': 'Tandem <tandem@tandem.airforce>', 'header:Subject:asText': 'tandem',
                  'textBody': [{'partId': 'body', 'type': 'text/plain'}],
                  'bodyValues': {'body': {'value': encoded_body(envelope)}}}
         return self.call('Email/set', create={'message': value})['created']['message']['id']

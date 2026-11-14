@@ -830,9 +830,9 @@ Required extensions: **UIDPLUS** (RFC 4315), **IDLE** (RFC 2177). Strongly recom
 A message is stored as:
 
 ```
-From: Tandem <tandem@invalid>
+From: Tandem <tandem@tandem.airforce>
 Date: <time of append, UTC>
-Message-ID: <random@tandem.invalid>
+Message-ID: <random@tandem.airforce>
 Subject: tandem
 MIME-Version: 1.0
 Tandem-Version: 2
@@ -851,7 +851,7 @@ Nothing else is in the clear. The hub already knows the append time.
 2. decode the resulting bytes to text with the `charset` of the `Content-Type` header. If the body was stored in a charset other than `us-ascii`, UTF-16 for instance, skipping this step yields garbage. Every reader supports at least `us-ascii`, `utf-8`, `utf-16` and `utf-32` (with or without a byte-order mark, and their `be`/`le` forms), `iso-8859-1` and `windows-1252`, compared without case; a body in a charset the reader doesn't know is ignored like any undecodable message;
 3. remove all whitespace, Unicode whitespace and U+FEFF included, and base64-decode what is left (standard alphabet, padding as written; the unused low bits of the last character are ignored, since they can't change the decoded bytes) to get the envelope.
 
-A writer produces exactly the form above: `Date` in RFC 5322 form in UTC, as `Fri, 13 Nov 2026 18:04:05 +0000` (the day without a leading zero), a `Message-ID` of 32 random lowercase hex digits at `tandem.invalid`, and the channel tag as it was derived (lowercase base32, §5.6), so every binding writes the same bytes for the same date and ID. The channel tag is the `Tandem-Channel` value, unfolded and trimmed. It is matched byte for byte against the tags a client derives; the same letters in another case are another tag. A message whose body doesn't decode to an envelope is ignored. A message's identity across devices is `H(envelope)`, not its IMAP UID.
+A writer produces exactly the form above: `Date` in RFC 5322 form in UTC, as `Fri, 13 Nov 2026 18:04:05 +0000` (the day without a leading zero), a `Message-ID` of 32 random lowercase hex digits at `tandem.airforce` (the project's domain; nothing is ever mailed from it, messages are only appended), and the channel tag as it was derived (lowercase base32, §5.6), so every binding writes the same bytes for the same date and ID. The channel tag is the `Tandem-Channel` value, unfolded and trimmed. It is matched byte for byte against the tags a client derives; the same letters in another case are another tag. A message whose body doesn't decode to an envelope is ignored. A message's identity across devices is `H(envelope)`, not its IMAP UID.
 
 ### 10.5 Plaintext payloads (inside the envelope)
 
@@ -1168,6 +1168,8 @@ A collection can't be administered any more in four cases:
 - **The owner published an invalid statement** (§9.4). The roster ends at the statement before it, and any other successor would kill the collection. Members can go on editing; its sharing can never change again.
 
 There is no recovery under the same collection ID. Anyone who can read it can preserve a local copy. Publishing a **new collection** requires a currently admitted device of its new owner: they create it on the same hub or on another one they are on, of which they are the owner, write the current state of the records into it as writes of their own, and share it again. Tombstones and the old writes' signatures are not carried over; a copied item is the copier's. Apps do not silently redirect an old membership to the copy.
+
+A copy keeps its records' IDs and the old `_meta` fields, and adds one: `copyof`, the 16-byte ID of the collection it was copied from. A member is offered the copy like any other collection (§11.2); a client shows the offer as the continuation of the old collection only if it knows a statement of that collection, signed by its owner, that lists the copy's owner, since anyone can write `copyof`. The copier shares the copy again with every participant that each end of the old roster lists with the same role, an old owner as a writer. Anyone the ends disagree on, listed in one and not another or with different roles, is left for the copier's user to decide. A device that finds a copy of the same collection already owned by its participant, through `copyof`, finishes that copy instead of starting another. Two devices of one owner copying in the same moment make two copies; nothing is lost, and the user deletes one.
 
 If no readable replica survives, the contents are lost.
 

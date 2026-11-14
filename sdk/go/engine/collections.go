@@ -357,6 +357,18 @@ func (d *Device) IsDead(list []byte) bool {
 }
 
 func (d *Device) writeRecord(ctx context.Context, cid, record []byte, field string, op tandem.Op, val, element []byte) error {
+	return d.writeChanges(ctx, cid, record, []change{{field, op, val, element}})
+}
+
+// change is one write to a field of a record.
+type change struct {
+	field        string
+	op           tandem.Op
+	val, element []byte
+}
+
+// writeChanges makes several changes to one record, sent as one message.
+func (d *Device) writeChanges(ctx context.Context, cid, record []byte, changes []change) error {
 	me, c := d.me, d.collections[string(cid)]
 	if me == nil || c == nil || c.dead() {
 		return fail("device: no such list, or it can't sync")
@@ -384,11 +396,13 @@ func (d *Device) writeRecord(ctx context.Context, cid, record []byte, field stri
 			writes = append(writes, w)
 		}
 	}
-	w, err := d.signRecord(c, me, record, field, op, val, element, head, epoch, writes)
-	if err != nil {
-		return err
+	for _, x := range changes {
+		w, err := d.signRecord(c, me, record, x.field, x.op, x.val, x.element, head, epoch, writes)
+		if err != nil {
+			return err
+		}
+		writes = append(writes, w)
 	}
-	writes = append(writes, w)
 	var entries []tandem.Entry
 	for _, w := range writes {
 		e, err := entryOf(w, epoch, cur.s.KeyN)
