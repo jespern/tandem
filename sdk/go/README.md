@@ -66,3 +66,9 @@ check builds the Swift `MessageFormat` and compares messages both ways:
 TANDEM_IMAP_STALWART=1 go test -race -run Stalwart ./imap
 TANDEM_IMAP_SWIFT=1 go test -run SwiftInterop ./imap
 ```
+
+## Optional JMAP
+
+`sdk/go/jmap` implements `tandem.PushStore` over HTTPS and persistent SSE.
+See [JMAP setup, limits and provider behavior](../JMAP.md). Native transport
+selection stays explicit; IMAP defaults are unchanged.

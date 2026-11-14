@@ -3,7 +3,7 @@
 Tandem v2 core for **Node.js 26+**, with a browser build for Liszto.
 See the [shared scope and real-time contract](../README.md).
 The [browser guide](BROWSER.md) covers JMAP, IndexedDB, browser keys, worker
-capsules and the remaining device-controller work.
+capsules and the durable device controller.
 
 ```sh
 cd sdk/typescript
@@ -35,7 +35,9 @@ try {
 Another task can `await session.submit(tag, persistedEnvelope, abortSignal)`.
 Abort signals cancel waiting; they cannot promise a command already sent was not
 received. Updates apply backpressure when the consumer is slow. Browser transport
-is available through JMAP; the TypeScript device controller remains to do.
+is available through JMAP. Node can also import `JMAPStore` and `fastmailConfig`
+from the main entry point; see [JMAP setup](../JMAP.md). The browser controller
+adds verified reads/edits, pairing, sharing, key rotation and healing.
 
 Node's native crypto supplies signing, hashing, X25519 and AEAD. Strict Ed25519
 verification uses a public-input equation check because the native verifier rejects

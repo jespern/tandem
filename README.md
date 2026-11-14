@@ -33,8 +33,10 @@ event-driven session API for push updates and submitting local changes, with
 bounded buffers and cancellation. They contain no polling loop.
 
 The four implementations share vectors and check every sender/receiver pairing.
-They are development SDKs: the complete device engine, durable storage, IMAP
-adapters and remaining control formats are still being built.
+Swift and Go include durable device engines and IMAP adapters. All four offer
+[optional JMAP push](sdk/JMAP.md), and the [browser controller](sdk/typescript/BROWSER.md)
+adds durable pairing, editing, sharing, key rotation and healing. These remain
+development SDKs; the browser’s remaining admin workflows and Liszto UI are open.
 
 ## Not `sorry`
 

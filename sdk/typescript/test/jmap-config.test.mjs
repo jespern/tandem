@@ -6,12 +6,12 @@ async function mocked(origin,config){
   const original=globalThis.fetch,calls=[];
   globalThis.fetch=async(url,init)=>{
     calls.push({url,authorization:init.headers.Authorization});
-    if(url===config.sessionUrl){const response=Response.json({capabilities:{[core]:{maxObjectsInGet:128},[mail]:{}},primaryAccounts:{[mail]:'account'},accounts:{account:{accountCapabilities:{[mail]:{}}}},apiUrl:origin+'/api',uploadUrl:origin+'/upload/{accountId}',eventSourceUrl:origin+'/events?types={types}&close={closeafter}&ping={ping}'});Object.defineProperty(response,'url',{value:url});return response;}
+    if(url===config.sessionUrl){const response=Response.json({capabilities:{[core]:{maxObjectsInGet:128,maxObjectsInSet:2},[mail]:{}},primaryAccounts:{[mail]:'account'},accounts:{account:{accountCapabilities:{[mail]:{}}}},apiUrl:origin+'/api',uploadUrl:origin+'/upload/{accountId}',eventSourceUrl:origin+'/events?types={types}&close={closeafter}&ping={ping}'});Object.defineProperty(response,'url',{value:url});return response;}
     const [method,args]=JSON.parse(init.body).methodCalls[0];
     const result=method==='Mailbox/query'?{ids:['folder']}:{list:[{id:'folder',name:config.folderName??'Tandem',parentId:null}]};
     return Response.json({methodResponses:[[method,result,'0']]});
   };
-  try{const store=await JMAPStore.open(config);await store.close();return calls;}
+  try{const store=await JMAPStore.open(config);assert.equal(store.deleteBatchSize,2);await store.close();return calls;}
   catch(error){error.calls=calls;throw error;}
   finally{globalThis.fetch=original;}
 }

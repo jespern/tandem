@@ -226,5 +226,4 @@ It explicitly enables browser CORS and publishes real loopback URLs, with no pro
    store/operations layer and workspace with the same completion and keyboard rules.
 3. Fastmail passes direct Chromium CORS/push/replay/deletion and byte-exact IMAP
    interchange. A live run measured 265 ms browser push, 587 ms IMAP→browser and
-   **60.6 s JMAP→IMAP IDLE**. Mixed-transport latency remains a release gate for
-   Liszto. A browser using JMAP does not make Fastmail’s IMAP push immediate.
+   **60.6 s JMAP→IMAP IDLE**. Jesper accepted this delay for mixed mode and kept native IMAP as the default. A browser using JMAP does not make Fastmail’s IMAP push immediate.

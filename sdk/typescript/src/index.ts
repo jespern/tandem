@@ -11,3 +11,6 @@ export * from './inventory-assembly.js';
 export * from './grant.js';
 export * from './device-state.js';
 export * from './operation.js';
+
+// HTTPS JMAP uses standard fetch and also runs directly in Node.
+export * from './browser/jmap.js';

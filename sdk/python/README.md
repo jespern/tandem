@@ -30,3 +30,9 @@ store. Queue capacity applies backpressure, not dropped messages.
 `cryptography` supplies secret-key operations. The strict Ed25519 public equation
 check is portable Python and trades verification speed for consistent acceptance
 across native libraries. The IMAP adapter and complete device engine remain to do.
+
+## Optional JMAP
+
+`JMAPStore` implements the async transport over HTTPS and persistent SSE.
+See [JMAP setup, limits and provider behavior](../JMAP.md). Native transport
+selection stays explicit; IMAP defaults are unchanged.

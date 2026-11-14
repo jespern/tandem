@@ -35,6 +35,7 @@ const state = (v: unknown): string => { if (typeof v !== 'string' || !v) throw n
 export class JMAPStore implements PushStore {
   readonly #cfg: Required<Pick<JMAPConfig, 'pageSize' | 'maxResponseBytes' | 'maxKnownMessages' | 'maxEventBytes' | 'commandTimeout' | 'retryMin' | 'retryMax'>> & JMAPConfig;
   readonly #origins: Set<string>; readonly #abort = new AbortController(); readonly #wakes = new Invalidation();
+  #deleteSize=128;
   #api = ''; #upload = ''; #events = ''; #account = ''; #folder = ''; #watching = false; #running: Promise<void> | undefined;
   #streamAbort: AbortController | undefined;
   private constructor(cfg: JMAPConfig) {
@@ -90,8 +91,10 @@ export class JMAPStore implements PushStore {
     this.#account = this.#cfg.accountId ?? state(object(session.primaryAccounts)[MAIL]);
     if (!object(object(session.accounts)[this.#account]).accountCapabilities?.[MAIL]) throw new JMAPError('account cannot store mail');
     this.#api = this.#url(state(session.apiUrl)); this.#upload = state(session.uploadUrl); this.#events = state(session.eventSourceUrl);
-    const maxGet = object(session.capabilities[CORE]).maxObjectsInGet;
+    const capability=object(session.capabilities[CORE]),maxGet=capability.maxObjectsInGet;
     if (typeof maxGet === 'number' && maxGet > 0) this.#cfg.pageSize = Math.min(this.#cfg.pageSize, maxGet);
+    this.#deleteSize=this.#cfg.pageSize;
+    if(Number.isSafeInteger(capability.maxObjectsInSet)&&capability.maxObjectsInSet>0)this.#deleteSize=Math.min(this.#deleteSize,capability.maxObjectsInSet);
     const folderName=this.#cfg.folderName??'Tandem';
     const queried = await this.#call('Mailbox/query', {filter: {name: folderName}}, signal);
     const boxes = strings(queried.ids).length ? (await this.#call('Mailbox/get', {ids: queried.ids}, signal)).list : [];
@@ -250,9 +253,9 @@ export class JMAPStore implements PushStore {
     if (ids.length > this.#cfg.pageSize) throw new Error('fetch exceeds page limit');
     return (await this.#objects([...ids], signal)).rows.flatMap(row => { const m = this.#message(row); return m ? [m] : []; });
   }
-  get deleteBatchSize():number{return this.#cfg.pageSize;}
+  get deleteBatchSize():number{return this.#deleteSize;}
   async destroy(ids: readonly string[], signal: AbortSignal): Promise<void> {
-    if (ids.length > this.#cfg.pageSize) throw new Error('destroy exceeds page limit'); if (!ids.length) return;
+    if (ids.length > this.#deleteSize) throw new Error('destroy exceeds page limit'); if (!ids.length) return;
     const checked = await this.#objects([...ids], signal, false);
     if (checked.rows.some(row => !object(row.mailboxIds)[this.#folder])) throw new Error('refusing to destroy mail outside Tandem');
     if(!checked.rows.length)return;const result=await this.#call('Email/set',{destroy:checked.rows.map(row=>row.id)},signal);if(result.notDestroyed&&Object.keys(object(result.notDestroyed)).length)throw new JMAPError('Email/set refused destruction');

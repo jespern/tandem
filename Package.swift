@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .library(name: "Tandem", targets: ["Tandem"]),
         .library(name: "TandemIMAP", targets: ["TandemIMAP"]),
+        .library(name: "TandemJMAP", targets: ["TandemJMAP"]),
         .library(name: "TandemEngine", targets: ["TandemEngine"]),
     ],
     targets: [
@@ -16,10 +17,12 @@ let package = Package(
         .target(name: "TandemArgon2", path: "sdk/swift/Sources/TandemArgon2", swiftSettings: [.unsafeFlags(["-O"])]),
         .target(name: "Tandem", dependencies: ["TandemArgon2"], path: "sdk/swift/Sources/Tandem"),
         .target(name: "TandemIMAP", dependencies: ["Tandem"], path: "sdk/swift/Sources/TandemIMAP"),
+        .target(name: "TandemJMAP", dependencies: ["Tandem", "TandemIMAP"], path: "sdk/swift/Sources/TandemJMAP"),
         .target(name: "TandemEngine", dependencies: ["Tandem"], path: "sdk/swift/Sources/TandemEngine"),
         .executableTarget(name: "tandem-device", dependencies: ["Tandem", "TandemEngine", "TandemIMAP"],
                           path: "sdk/swift/Sources/tandem-device"),
         .testTarget(name: "TandemTests", dependencies: ["Tandem", "TandemArgon2"], path: "sdk/swift/Tests/TandemTests"),
+        .testTarget(name: "TandemJMAPTests", dependencies: ["TandemJMAP", "TandemEngine"], path: "sdk/swift/Tests/TandemJMAPTests"),
         .testTarget(name: "TandemIMAPTests", dependencies: ["TandemIMAP", "TandemEngine"], path: "sdk/swift/Tests/TandemIMAPTests"),
         .testTarget(name: "TandemEngineTests", dependencies: ["Tandem", "TandemEngine"],
                     path: "sdk/swift/Tests/TandemEngineTests"),

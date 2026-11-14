@@ -6,3 +6,4 @@ from .crypto import (aad, b32, b64u, collection_tag, commit, directory_key, dire
                      open_envelope, open_hpke, open_inbox, public, seal, seal_hpke, seal_inbox, sha, unb32, unb64u)
 from .signature import verify_strict
 from .session import ChangeBatch, Message, PushStore, Session
+from .jmap import JMAPConfig, JMAPError, JMAPStore

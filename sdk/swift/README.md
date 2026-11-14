@@ -84,3 +84,9 @@ containers from a killed run carry the label `tandem-imap-test`.
 `TandemEngine` is the complete device: hubs, people, devices, lists, sharing, key
 changes, live sync and events, with the keychain integration. Start with
 [INTEGRATING.md](INTEGRATING.md); the engine's design and state are in [ENGINE.md](ENGINE.md).
+
+## Optional JMAP
+
+The `TandemJMAP` product implements `PushStore` over HTTPS and persistent SSE.
+See [JMAP setup, limits and provider behavior](../JMAP.md). Native transport
+selection stays explicit; IMAP defaults are unchanged.
