@@ -92,7 +92,10 @@ def main():
         check_lean(args.oracle.resolve())
     with tempfile.TemporaryDirectory(prefix="tandem-sdk-interop-") as directory:
         env = dict(os.environ, TANDEM_INTEROP_DIR=directory)
-        run(["go", "test", "-race", "-count=1", "./..."], ROOT / "sdk/go", env)
+        # The race detector multiplies memory; two packages stretching 1 GiB at once under it ran out the CI clock.
+        # It looks for data races, which hashing doesn't have: the 1 GiB tests run in the second pass, without it.
+        run(["go", "test", "-race", "-count=1", "./..."], ROOT / "sdk/go", dict(env, TANDEM_SKIP_ARGON2_GIB="1"))
+        run(["go", "test", "-count=1", "./..."], ROOT / "sdk/go", env)
         run([sys.executable, "-B", "-W", "error::ResourceWarning", "-m", "unittest", "discover", "-s", "sdk/python/tests", "-q"], env=env)
         run([node, "node_modules/typescript/bin/tsc"], ROOT / "sdk/typescript", env)
         run([node, "--test", "test/core.test.mjs", "test/control.test.mjs"], ROOT / "sdk/typescript", env)
