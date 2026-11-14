@@ -84,6 +84,8 @@ extension Device {
         let genesis = try await findGenesis(hub: link.hub, genesis: link.genesis, directoryKey: link.directoryKey, on: hub)
         let device = try Device.open(genesis: genesis, directoryKey: link.directoryKey, keys: keys, store: store, hub: hub)
         try await device.sync()
+        // Joined already with this store, perhaps half way: the sync above finished the journalled admission.
+        if await device.me != nil { return device }
         guard await !device.receipt(Control.inviteCancelled, about: try inv.id()) else {
             throw TandemError.invalid("invitation: the admin cancelled it")
         }
@@ -113,23 +115,24 @@ extension Device {
         let homeKey = Self.random(32)
         let epoch = try Founder.homeEpoch(pin: pin, participant: participant, n: 0, parents: [], homeKey: homeKey,
                                           recipients: [try certificate.id()], signer: try certificate.id(), auth: try snapshot.id(), keys: keys)
+        // Every envelope of the admission, journalled with this device's identity before any leaves (§6.1): a join that
+        // fails half way is finished by the next sync, or by joining again with the same store.
+        let homeTag = Tandem.homeTag(key: homeKey, hub: pin.hub, uid: participant, epoch: try epoch.id())
+        let inbox = Tandem.inboxTag(uid: participant, hub: pin.hub)
+        var out = try [certificate, snapshot].map {
+            (directoryTag, try Envelope.seal(key: directoryChannelKey, hub: pin.hub, kind: 3, tag: directoryTag, plaintext: try $0.json()))
+        }
+        out.append((homeTag, try Envelope.seal(key: homeKey, hub: pin.hub, kind: 3, tag: homeTag, plaintext: try epoch.json())))
+        out.append((inbox, try Envelope.sealInbox(hub: pin.hub, uid: participant, agreement: agree,
+                                                  plaintext: Founder.homeKeyNotice(epoch: try epoch.id(), key: homeKey).json())))
         try store.transaction {
+            try store.setJournal("admit", Self.pack(out))
             for o in [certificate, snapshot, epoch] { try store.putObject(o) }
             try store.setValue("home.key." + (try epoch.id()).hex, homeKey)
         }
         homeEpochs[try epoch.id()] = epoch
         homeKeys[try epoch.id()] = homeKey
         try adopt(participant: participant, certificate: try certificate.id(), auth: try snapshot.id())
-        try await publishDirectory([try certificate.json(), try snapshot.json()])
-        let homeTag = Tandem.homeTag(key: homeKey, hub: pin.hub, uid: participant, epoch: try epoch.id())
-        let start = try Envelope.seal(key: homeKey, hub: pin.hub, kind: 3, tag: homeTag, plaintext: try epoch.json())
-        let inbox = Tandem.inboxTag(uid: participant, hub: pin.hub)
-        let delivery = try Envelope.sealInbox(hub: pin.hub, uid: participant, agreement: agree,
-                                              plaintext: Founder.homeKeyNotice(epoch: try epoch.id(), key: homeKey).json())
-        for (tag, body) in [(homeTag, start), (inbox, delivery)] {
-            let id = try await hub.append(channel: tag, body: body)
-            try store.noteMessage(id: id, channel: tag, hash: H(body))
-            try store.markApplied(id)
-        }
+        try await export(out, step: "admit")
     }
 }

@@ -27,8 +27,12 @@ for batch := range session.Updates() {
 
 Submit concurrently with `session.Submit(ctx, channelTag, persistedEnvelope)`.
 Cancel the run context and wait for `Run` to return during shutdown. No SDK timer
-initiates a network request. The complete device engine is not part of this core
-milestone.
+initiates a network request.
+
+`OpenCapsule`/`SealCapsule` are the admin capsule of §6.7 (Argon2id at 1 GiB, NFC
+passwords), and `JSONObject` writes payload JSON as the other SDKs do.
+
+The device engine is the `engine` package: see [engine/README.md](engine/README.md).
 
 ## IMAP
 
@@ -49,7 +53,9 @@ as every IDLE; on Gmail (`X-GM-EXT-1`) IDLE restarts every 3 s and destroyed mes
 leave All Mail through Trash; a lost connection is retried with backoff and reported
 as one wake once IDLE runs again. IDs (`<uidvalidity>.<uid>`), cursors and the §10.4
 message are the same as Swift's. Its only timers are the IDLE refresh, Gmail's IDLE
-restart and reconnect backoff, marked `allowed-timer:`. `Config.Trace` receives the
+restart, reconnect backoff and a deadline on connecting and logging in
+(`Config.ConnectTimeout`, 30 s; running out counts as a lost connection), marked
+`allowed-timer:`. `Config.Trace` receives the
 protocol lines without login credentials.
 
 The integration tests start a disposable Stalwart in Docker (the image pinned in

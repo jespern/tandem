@@ -2,11 +2,13 @@ package imap
 
 import (
 	"bytes"
+	"io"
 	"net"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -18,6 +20,8 @@ type fakeServer struct {
 	ln       net.Listener
 	greeting string
 	respond  func(fakeCommand) []string
+	// silent accepts connections and never answers them: no greeting, nothing read is answered.
+	silent atomic.Bool
 
 	mu      sync.Mutex
 	clients []*fakeClient
@@ -50,8 +54,13 @@ func startFake(t *testing.T, greeting string, respond func(fakeCommand) []string
 			s.clients = append(s.clients, c)
 			s.mu.Unlock()
 			s.wg.Add(1)
+			silent := s.silent.Load()
 			go func() {
 				defer s.wg.Done()
+				if silent {
+					_, _ = io.Copy(io.Discard, nc)
+					return
+				}
 				c.send([]string{s.greeting})
 				c.read()
 			}()

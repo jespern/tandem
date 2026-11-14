@@ -479,6 +479,53 @@ func TestCancellingTheWatchEndsIdle(t *testing.T) {
 	}
 }
 
+// An app stops watching (engine.Device.Run returns) and starts again: the second Watch
+// works, a change after it arrives, and nothing is left running at Close.
+func TestWatchStartsAgainAfterItsContextEnds(t *testing.T) {
+	for _, separate := range []bool{false, true} {
+		t.Run(fmt.Sprintf("separate=%v", separate), func(t *testing.T) {
+			f := newGmailFixture(t)
+			ctx := testContext(t)
+			baseline := runtime.NumGoroutine()
+			cfg := f.config("pass word", IdleRestartNever)
+			cfg.SeparateWatchConnection = separate
+			store, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first, cancel := context.WithCancel(ctx)
+			if _, err := store.Watch(first); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Watch(ctx); err == nil {
+				t.Fatal("two watches at once")
+			}
+			cancel()
+			wakes, err := store.Watch(ctx)
+			if err != nil {
+				t.Fatal("watching again:", err)
+			}
+			time.Sleep(100 * time.Millisecond)
+			drain(wakes)
+			f.server.push("* 9 EXISTS")
+			if !wake(t, wakes, 2*time.Second) {
+				t.Fatal("no push after watching again")
+			}
+			store.Close()
+			for range wakes {
+			}
+			deadline := time.Now().Add(2 * time.Second)
+			for runtime.NumGoroutine() > baseline && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if n := runtime.NumGoroutine(); n > baseline {
+				buf := make([]byte, 1<<16)
+				t.Fatalf("%d goroutines, %d before:\n%s", n, baseline, buf[:runtime.Stack(buf, true)])
+			}
+		})
+	}
+}
+
 func TestReconnectsAfterTheServerHangsUp(t *testing.T) {
 	f := newGmailFixture(t)
 	store := f.store(t, "pass word", IdleRestartNever)
@@ -571,6 +618,44 @@ func idleSettles(t *testing.T, server *fakeServer) {
 		}
 	}
 	t.Fatal("IDLE did not settle")
+}
+
+// A server that accepts the connection and then never answers: connecting gives up at the
+// deadline as a lost connection, and watching retries with backoff until it answers again.
+func TestASilentServerTimesOutAndWatchingRetries(t *testing.T) {
+	f := newGmailFixture(t)
+	cfg := f.config("pass word", IdleRestartNever)
+	cfg.ConnectTimeout = 300 * time.Millisecond
+	store, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	f.server.silent.Store(true)
+	short, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var lost *ConnectionError
+	if err := store.EnsureFolder(short); !errors.As(err, &lost) {
+		t.Fatal("not a lost connection:", err)
+	}
+	f.server.silent.Store(false)
+	ctx := testContext(t)
+	wakes, err := store.Watch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	drain(wakes)
+	f.server.silent.Store(true)
+	f.server.disconnectAll()
+	time.Sleep(time.Second) // a few connects time out
+	f.server.silent.Store(false)
+	if !wake(t, wakes, 5*time.Second) {
+		t.Fatal("no invalidation once the server answers again")
+	}
+	if cmds := f.commands(); cmds[len(cmds)-1] != "IDLE" {
+		t.Fatal(cmds)
+	}
 }
 
 func TestReadsRetryOnceAfterTheServerHangsUp(t *testing.T) {

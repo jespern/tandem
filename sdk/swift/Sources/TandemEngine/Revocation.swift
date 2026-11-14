@@ -24,8 +24,17 @@ extension Device {
         try registry.add(revocation)
         let snapshot = try registry.currentSnapshot(of: t.participant)
         try registry.add(snapshot)
-        try store.transaction { for o in [revocation, snapshot] { try store.putObject(o) } }
-        try await publishDirectory([try revocation.json(), try snapshot.json()])
+        // Journalled with its exact bytes before it leaves: a revocation this device shows must reach the hub, so an
+        // interrupted one is sent by the next sync (§6.4 step 1, §6.9).
+        let out = try [revocation, snapshot].map {
+            (directoryTag, try Envelope.seal(key: directoryChannelKey, hub: pin.hub, kind: 3, tag: directoryTag, plaintext: try $0.json()))
+        }
+        let step = "revoke." + (try revocation.id()).hex
+        try store.transaction {
+            try store.setJournal(step, Self.pack(out))
+            for o in [revocation, snapshot] { try store.putObject(o) }
+        }
+        try await export(out, step: step)
         try await followUp()
     }
 
