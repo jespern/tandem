@@ -7,7 +7,16 @@ import {reconnectDelay} from './reconnect.js';
 const CORE = 'urn:ietf:params:jmap:core', MAIL = 'urn:ietf:params:jmap:mail';
 type ObjectValue = Record<string, any>;
 interface Cursor {v: 1; account: string; folder: string; state: string; known: string[]; pending?: string[]}
+export const FASTMAIL_SESSION='https://api.fastmail.com/jmap/session';
+export function fastmailConfig(token:string,options:Omit<JMAPConfig,'sessionUrl'|'authorization'|'provider'>={}):JMAPConfig{
+  if(!token||/\s/.test(token))throw new Error('a bare Fastmail JMAP API token is required');
+  return{...options,provider:'fastmail',sessionUrl:FASTMAIL_SESSION,authorization:`Bearer ${token}`};
+}
 export interface JMAPConfig {
+  /** Fastmail explicitly trusts HTTPS api.fastmail.com and its regional API subdomains. */
+  provider?:'fastmail';
+  /** A root mailbox dedicated to this replica; defaults to Tandem. */
+  folderName?:string;
   sessionUrl: string; authorization: string; accountId?: string;
   /** Additional provider origins explicitly trusted with this credential. */
   trustedOrigins?: readonly string[];
@@ -34,6 +43,8 @@ export class JMAPStore implements PushStore {
     this.#origins = new Set([new URL(cfg.sessionUrl).origin, ...(cfg.trustedOrigins ?? []).map(x => new URL(x).origin)]);
     for (const n of [this.#cfg.pageSize, this.#cfg.maxResponseBytes, this.#cfg.maxKnownMessages, this.#cfg.maxEventBytes, this.#cfg.commandTimeout, this.#cfg.retryMin, this.#cfg.retryMax]) if (!Number.isSafeInteger(n) || n < 1) throw new Error('invalid JMAP limit');
     if (this.#cfg.retryMax < this.#cfg.retryMin || !/^(?:Basic|Bearer) [^\r\n]+$/.test(cfg.authorization)) throw new Error('invalid JMAP configuration');
+    if(cfg.provider!==undefined&&(cfg.provider!=='fastmail'||cfg.sessionUrl!==FASTMAIL_SESSION||!cfg.authorization.startsWith('Bearer ')))throw new Error('invalid Fastmail configuration');
+    if(cfg.folderName!==undefined&&(!cfg.folderName||/[\r\n\0]/.test(cfg.folderName)))throw new Error('invalid JMAP mailbox name');
     this.#url(cfg.sessionUrl);
   }
   static async open(cfg: JMAPConfig, signal: AbortSignal = new AbortController().signal): Promise<JMAPStore> {
@@ -42,7 +53,8 @@ export class JMAPStore implements PushStore {
   }
   #url(value: string): string {
     const url = new URL(value);
-    if (url.protocol !== 'https:' || url.username || url.password || url.hash || !this.#origins.has(url.origin)) throw new Error('untrusted JMAP URL');
+    const fastmail=this.#cfg.provider==='fastmail'&&!url.port&&(url.hostname==='api.fastmail.com'||url.hostname.endsWith('.api.fastmail.com'));
+    if (url.protocol !== 'https:' || url.username || url.password || url.hash || !(this.#origins.has(url.origin)||fastmail)) throw new Error('untrusted JMAP URL');
     return url.href;
   }
   async #fetch(url: string, init: RequestInit, signal: AbortSignal, stream = false, discovery = false): Promise<Response> {
@@ -80,12 +92,13 @@ export class JMAPStore implements PushStore {
     this.#api = this.#url(state(session.apiUrl)); this.#upload = state(session.uploadUrl); this.#events = state(session.eventSourceUrl);
     const maxGet = object(session.capabilities[CORE]).maxObjectsInGet;
     if (typeof maxGet === 'number' && maxGet > 0) this.#cfg.pageSize = Math.min(this.#cfg.pageSize, maxGet);
-    const queried = await this.#call('Mailbox/query', {filter: {name: 'Tandem'}}, signal);
+    const folderName=this.#cfg.folderName??'Tandem';
+    const queried = await this.#call('Mailbox/query', {filter: {name: folderName}}, signal);
     const boxes = strings(queried.ids).length ? (await this.#call('Mailbox/get', {ids: queried.ids}, signal)).list : [];
-    const found = (boxes as ObjectValue[]).filter(x => x.name === 'Tandem' && x.parentId === null);
+    const found = (boxes as ObjectValue[]).filter(x => x.name === folderName && x.parentId === null);
     if (found.length > 1) throw new JMAPError('ambiguous Tandem folder');
     if (found.length) this.#folder = state(found[0]!.id);
-    else { const created = await this.#call('Mailbox/set', {create: {tandem: {name: 'Tandem', parentId: null}}}, signal); this.#folder = state(object(object(created.created).tandem).id); }
+    else { const created = await this.#call('Mailbox/set', {create: {tandem: {name: folderName, parentId: null}}}, signal); this.#folder = state(object(object(created.created).tandem).id); }
   }
   async #call(method: string, args: ObjectValue, signal: AbortSignal): Promise<ObjectValue> {
     const response = await this.#json(await this.#fetch(this.#api, {method: 'POST', headers: {'Content-Type': 'application/json'},

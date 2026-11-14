@@ -12,7 +12,7 @@ The Node and browser builds share write/control encodings, strict JSON/base64url
 Ed25519 acceptance, inventories and record merging. Node keeps native crypto.
 The browser backend uses Noble hashes, curves and ciphers with Web Crypto's
 random source; `buffer` supplies the existing byte API. The SDK bundle costs
-about 72 KB gzip; the Argon2 worker loads separately.
+about 74 KB gzip; the Argon2 worker loads separately.
 
 Private keys now use an opaque SDK `PrivateKey` handle in both runtimes. Construct
 them with `privateKey(seed, algorithm)`; pass that handle to signing/agreement
@@ -65,14 +65,21 @@ upload/import, paged changes and deletion. Subscription precedes initial sync.
 Full scans check queryState across pages, then replay Email/changes from a state
 taken before scanning. Account-wide discovery does not download unrelated bodies.
 Reconnection reconciles from the saved cursor. `more` explicitly continues a scan;
-SSE heartbeats trigger no queries. No polling fallback exists.
+SSE heartbeats trigger no queries. No polling fallback exists. Held outbox entries
+on an earlier page do not block later exportable entries.
 
 The provider must permit the app's origin through CORS. Supply an explicit HTTPS
 session URL and Basic/Bearer Authorization header; never put credentials in URLs.
 Additional advertised API/upload/push origins require `trustedOrigins`. Discovery
 redirects work, with the final origin checked. An IMAP password is never forwarded
 automatically to a discovered JMAP host. Native pairing links currently describe
-IMAP credentials: browser setup still needs a JMAP endpoint/credential mapping.
+IMAP credentials: use `fastmailConfig(apiToken)` for Fastmail, or supply an explicit JMAP config
+for another provider. `folderName` selects a dedicated root mailbox and defaults
+to `Tandem`. The Fastmail preset trusts HTTPS `api.fastmail.com` and regional
+subdomains below it; generic configurations retain exact-origin trust.
+Persist a serialized config through `BrowserKeychain.save` to remember the token
+under the same local wrapping protection as enrollment keys. The app must supply
+its own connection and settings UI. See [FASTMAIL.md](FASTMAIL.md).
 
 Defaults: 128 objects/page, 16 MiB response/message budget, 1,000,000 known IDs,
 128 KiB SSE event budget, 30s command deadline and failed-connection backoff from 1s to 30s. Constructor
@@ -202,7 +209,7 @@ home-key confirmation. It additionally verifies native/browser edits both ways,
 controller enrollment/reload, offline edit recovery and revocation between replay
 and commit. Native clients also read browser-created lists and acceptance answers;
 reader edits are refused, and browser writer edits survive native list rekeys.
-All 17 browser scenarios passed locally, including native collection rotation,
+All browser scenarios passed locally, including native collection rotation,
 member removal, home cutoff and a late edit across an interrupted rotation. Only that fixture accepts self-signed TLS;
 production SDK checks stay enabled.
 It explicitly enables browser CORS and publishes real loopback URLs, with no proxy.
@@ -217,7 +224,7 @@ It explicitly enables browser CORS and publishes real loopback URLs, with no pro
    in the authority layer and must remain enforced by every new operation.
 2. Shared Liszto field-value vectors against its native adapter, then the browser
    store/operations layer and workspace with the same completion and keyboard rules.
-3. Fastmail is selected for real-provider validation; a JMAP API token is needed. Earlier Fastmail measurements found
-   one SSE stream/token and delayed JMAP-to-IMAP notifications. Stalwart success
-   does not establish mixed-transport latency on Fastmail; multi-tab ownership
-   does not solve token limits across separate profiles.
+3. Fastmail passes direct Chromium CORS/push/replay/deletion and byte-exact IMAP
+   interchange. A live run measured 265 ms browser push, 587 ms IMAP→browser and
+   **60.6 s JMAP→IMAP IDLE**. Mixed-transport latency remains a release gate for
+   Liszto. A browser using JMAP does not make Fastmail’s IMAP push immediate.
