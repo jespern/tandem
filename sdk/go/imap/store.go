@@ -7,10 +7,10 @@
 // appends. Message IDs are "<uidvalidity>.<uid>"; the cursor is opaque. After a UIDVALIDITY
 // change, Changes reports every known ID as removed and the folder's messages as new.
 // Every IDLE is sent in the same write as a NOOP before it: Stalwart reports a change made
-// between the last command and IDLE only on the next command. On Gmail (X-GM-EXT-1) IDLE
-// restarts every 3 s and destroyed messages are moved from All Mail to Trash and expunged.
+// between the last command and IDLE only on the next command. On Gmail (X-GM-EXT-1),
+// destroyed messages are moved from All Mail to Trash and expunged.
 // A lost connection is retried with backoff and reported as one invalidation once IDLE
-// runs again. The only timers are the IDLE refresh, Gmail's IDLE restart, the reconnect
+// runs again. The only timers are protocol IDLE renewal, an explicitly configured restart, the reconnect
 // backoff and the connect deadline; nothing reconciles on a timer.
 package imap
 
@@ -39,8 +39,8 @@ const (
 type IdleRestart time.Duration
 
 const (
-	// IdleRestartAutomatic restarts every 3 s on Gmail (X-GM-EXT-1), which otherwise delays
-	// pushes by ~30 s; elsewhere only the 29-minute refresh of RFC 2177.
+	// IdleRestartAutomatic uses only the 29-minute protocol renewal of RFC 2177.
+	// It never enables a provider-specific short restart.
 	IdleRestartAutomatic IdleRestart = 0
 	// IdleRestartNever keeps only the 29-minute refresh.
 	IdleRestartNever IdleRestart = -1

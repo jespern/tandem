@@ -263,7 +263,7 @@ actor Link {
         return switch config.idleRestart {
         case .never: refresh
         case .every(let period): min(period, refresh)
-        case .automatic: caps.contains("X-GM-EXT-1") ? .seconds(3) : refresh
+        case .automatic: refresh
         }
     }
 

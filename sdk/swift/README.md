@@ -90,3 +90,8 @@ changes, live sync and events, with the keychain integration. Start with
 The `TandemJMAP` product implements `PushStore` over HTTPS and persistent SSE.
 See [JMAP setup, limits and provider behavior](../JMAP.md). Native transport
 selection stays explicit; IMAP defaults are unchanged.
+
+IDLE stays open by default on Gmail too; only the required 29-minute protocol
+renewal is automatic. The former three-second Gmail workaround is disabled to
+avoid timer-driven change discovery. Explicit restart configuration remains
+available, but applications using the no-polling default should leave it alone.

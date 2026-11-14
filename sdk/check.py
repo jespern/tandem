@@ -24,7 +24,7 @@ def run(command, cwd=ROOT, env=None):
 
 def check_event_sources():
     """No timers in SDK runtime code. A line marked "allowed-timer: <reason>" is exempt:
-    the IMAP adapter's IDLE refresh, Gmail's IDLE restart and reconnect backoff (§10.3)."""
+    protocol IDLE renewal, explicitly configured restarts, safety deadlines and failed-connection backoff."""
     forbidden = re.compile(r"\b(?:setInterval|setTimeout|NewTicker|NewTimer|sleep|usleep)\s*\(")
     sources = []
     for folder, pattern in (("sdk/go", "*.go"), ("sdk/python/tandem", "*.py"),

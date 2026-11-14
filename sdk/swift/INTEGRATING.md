@@ -196,7 +196,7 @@ let reached = try await writer.write(record: newID, [.set("title", title), .set(
 
 ## Mail providers
 
-Any IMAP server with IDLE works. Measured: Fastmail (Cyrus) about 0.5 s from one device's append to another's push; Stalwart milliseconds; Gmail about 30 s by itself, 9–12 s with the SDK's IDLE restart every 3 s (automatic on Gmail). Outlook.com doesn't allow the app passwords this needs. Use an app password, never the account password.
+Any IMAP server with IDLE works. Measured: Fastmail (Cyrus) about 0.5 s from one device's append to another's push; Stalwart milliseconds; Gmail about 30 s with its normal IDLE push (no automatic short restart). Outlook.com doesn't allow the app passwords this needs. Use an app password, never the account password.
 
 ## Running in the background
 

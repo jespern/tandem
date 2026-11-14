@@ -193,8 +193,8 @@ final class GmailTests: XCTestCase {
         XCTAssertEqual(left, [Message(id: "11.2", channel: "chan", body: [4])])
     }
 
-    func testGmailRestartsIdleEveryThreeSeconds() async throws {
-        let store = IMAPStore(config())
+    func testExplicitIdleRestartEveryThreeSeconds() async throws {
+        let store = IMAPStore(config(idleRestart: .every(.seconds(3))))
         let log = EventLog.follow(try await store.watch())
         let t0 = ContinuousClock.now
         server.push(["* 4 EXISTS"])
@@ -209,8 +209,8 @@ final class GmailTests: XCTestCase {
         XCTAssertTrue(ended)
     }
 
-    func testIdleRestartCanBeTurnedOff() async throws {
-        let store = IMAPStore(config(idleRestart: .never))
+    func testAutomaticKeepsIdleOpenOnGmail() async throws {
+        let store = IMAPStore(config(idleRestart: .automatic))
         let stream = try await store.watch()
         try await Task.sleep(for: .milliseconds(3500))
         XCTAssertEqual(server.log.filter { $0 == "DONE" }.count, 0)
