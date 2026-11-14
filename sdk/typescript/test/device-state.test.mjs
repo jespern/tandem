@@ -118,3 +118,28 @@ test('a forged claim about this installation’s future clock cannot suppress it
     else{assert.equal(settled.messages.length,0);assert.ok(settled.unshared.some(item=>item.write===t.b64u(original.id)));}
   }
 });
+
+const presence=messages=>messages.map((message,index)=>({id:`remote-${index}`,channel:message.channel,hash:t.b64u(t.sha(message.body))}));
+test('healing restores missing kept writes and does not republish an in-flight repair',()=>{
+  const f=fixture(),record=t.randomBytes(16),write=f.state.prepareField(f.cid,record,[{field:'title',op:1,value:Buffer.from('Keep me')}],f.reserve);f.apply(write);
+  const received=f.messages.filter(message=>!write.some(w=>t.b64u(t.sha(w.body))===message.id)),repair=f.state.prepareHygiene(presence(received),new Set());
+  const data=repair.messages.filter(m=>m.channel===f.tag);assert.equal(data.length,1);assert.deepEqual(repair.destroy,[]);f.apply(repair.messages);
+  assert.equal(f.state.prepareHygiene(presence(received),new Set(repair.messages.map(m=>t.b64u(t.sha(m.body))))).messages.length,0);
+  assert.equal(f.state.prepareHygiene(presence([...received,...repair.messages]),new Set()).messages.length,0);
+});
+test('healing deletes superseded physical packets only after a replacement is present',()=>{
+  const f=fixture(),record=t.randomBytes(16),first=f.state.prepareField(f.cid,record,[{field:'title',op:1,value:Buffer.from('Old')}],f.reserve);f.apply(first);
+  const second=f.state.prepareField(f.cid,record,[{field:'title',op:1,value:Buffer.from('New')}],f.reserve);f.apply(second);
+  const oldHash=t.b64u(t.sha(first[0].body)),newHash=t.b64u(t.sha(second[0].body)),rows=presence(f.messages),old=rows.find(row=>row.hash===oldHash);
+  const all=f.state.prepareHygiene(rows,new Set());assert.ok(all.destroy.includes(old.id));assert.equal(all.messages.length,0);
+  const missing=f.state.prepareHygiene(rows.filter(row=>row.hash!==newHash),new Set([newHash]));assert.equal(missing.destroy.includes(old.id),false);assert.equal(missing.messages.length,0);
+});
+test('inventory healing requires the correct part index and count as well as slice bytes',()=>{
+  const f=fixture(),rotation=f.state.prepareCollectionRotation(f.cid,f.reserve);f.apply(rotation.phases[0].messages);f.apply(rotation.phases[1].messages);f.apply(rotation.phases[2].messages);
+  const epoch=t.unb64u(rotation.details.epoch),key=t.unb64u(rotation.details.key),tag=t.collectionTag(key,f.pin.hub,epoch);
+  let fragment;const received=f.messages.filter(message=>{if(message.channel!==tag)return true;const opened=t.openEnvelope(key,f.pin.hub,tag,message.body);if(opened.kind!==1)return true;const p=t.parseKind1(opened.plaintext,f.pin.hub,f.cid);if('writes'in p)return true;fragment=p;return false;});
+  assert.ok(fragment);assert.equal(fragment.parts,1);
+  const malformed=f.envelope(key,tag,Buffer.from(JSON.stringify({inventory:{epoch:t.b64u(epoch),part:1,parts:2,bytes:t.b64u(fragment.bytes)}})));f.state.ingest([malformed]);received.push(malformed);
+  const repair=f.state.prepareHygiene(presence(received),new Set()),fragments=repair.messages.filter(message=>message.channel===tag).map(message=>t.parseKind1(t.openEnvelope(key,f.pin.hub,tag,message.body).plaintext,f.pin.hub,f.cid)).filter(p=>!('writes'in p));
+  assert.equal(fragments.length,1);assert.equal(fragments[0].part,0);assert.equal(fragments[0].parts,1);assert.deepEqual(fragments[0].bytes,fragment.bytes);
+});

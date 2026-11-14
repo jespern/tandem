@@ -144,6 +144,7 @@ export class BrowserJournal {
     if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('invalid pending page limit');
     return await request(this.#db.transaction('outbox').objectStore('outbox').index('hub').getAll(hub, limit)) as OutboxEntry[];
   }
+  async pendingIDs(hub:string):Promise<Set<string>>{const keys=await request(this.#db.transaction('outbox').objectStore('outbox').index('hub').getAllKeys(hub));return new Set(keys.map(key=>(key as IDBValidKey[])[1] as string));}
   async queued(hub:string,ids:readonly string[]):Promise<Set<string>>{
     const store=this.#db.transaction('outbox').objectStore('outbox');
     const keys=await Promise.all(ids.map(id=>request(store.getKey([hub,id]))));return new Set(ids.filter((_,index)=>keys[index]!==undefined));
@@ -182,6 +183,7 @@ export class BrowserJournal {
   async actions(hub:string):Promise<JournalAction[]>{return await request(this.#db.transaction('actions').objectStore('actions').index('hub').getAll(hub)) as JournalAction[];}
   async deliveries(hub:string):Promise<Delivery[]>{return await request(this.#db.transaction('received').objectStore('received').index('hub').getAll(hub)) as Delivery[];}
   async pendingDeletes(hub:string,limit=128):Promise<PendingDelete[]>{return await request(this.#db.transaction('deletions').objectStore('deletions').index('hub').getAll(hub,limit)) as PendingDelete[];}
+  async pendingDeleteIDs(hub:string):Promise<Set<string>>{const keys=await request(this.#db.transaction('deletions').objectStore('deletions').index('hub').getAllKeys(hub));return new Set(keys.map(key=>(key as IDBValidKey[])[1] as string));}
   async confirmAbsent(hub:string,ids:readonly string[]):Promise<void>{
     const tx=this.#db.transaction(['received','deletions'],'readwrite',{durability:'strict'}),done=finished(tx);let changed=false;
     for(const id of ids){const delivery=await request(tx.objectStore('received').get([hub,id])) as Delivery|undefined;if(!delivery?.present){tx.objectStore('deletions').delete([hub,id]);changed=true;}}

@@ -4,7 +4,7 @@
 talks directly to a JMAP mail server. This is the primitive layer: Liszto's UI
 still needs to be built on it. The browser controller currently supports pairing,
 verified home/collection reads and durable field/set edits. Owner sharing and home/collection key rotation now use durable stages. Other
-management workflows and complete healing parity remain acceptance gates.
+management workflows and delivery-envelope healing remain acceptance gates.
 
 ## Runtime and storage
 
@@ -141,6 +141,14 @@ writes. Implausible claims about its future clock cannot suppress a late edit;
 plausibly superseded edits that may have been left behind are exposed through
 `unshared` for app recovery. Local bookkeeping and re-signed bytes commit together.
 A reload immediately before announcement preserves an edit made in that gap.
+
+Current-channel hygiene restores missing kept records, roster ancestry, home starts
+and inventory fragments from verified cached data. Fragment presence binds the
+part index/count and slice hash. Queued repairs suppress duplicate publication;
+only a confirmed physical replacement permits deletion of dominated data. Held
+writes, metadata and equal-byte duplicate envelopes are retained. Concurrent home
+heads keep their own writes/inventory; healing does not copy sibling-head edits
+back and forth. This pass runs on durable events and local commits, without a timer.
 
 The controller owns the journal's opaque per-hub action state. Device Web Locks
 serialize local actions across tabs. A write transaction also checks the last

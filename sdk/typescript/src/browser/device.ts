@@ -48,7 +48,7 @@ export class BrowserDevice {
   readonly #actionKey:Uint8Array;readonly #activeActions=new Map<string,DeviceAction>();readonly #present=new Map<string,Set<string>>();readonly #remote=new Map<string,string>();
   readonly #hub:string;readonly #slot:string;readonly #lock:string;readonly #replica:BrowserReplica;readonly #changes=new Invalidation();
   readonly #messages=new Map<string,Message>();#local:DeviceLocalState={v:2,processed:[],unshared:{}};#enrollment:Enrollment;#registry:Registry|undefined;#view:DeviceState|undefined;
-  #sequence=0;#messageBytes=0;#lastLate='';#closed=false;#running:Promise<void>|undefined;#abort:AbortController|undefined;#status:BrowserDeviceStatus='material';
+  #sequence=0;#messageBytes=0;#lastLate='';#lastHygiene='';#closed=false;#running:Promise<void>|undefined;#abort:AbortController|undefined;#status:BrowserDeviceStatus='material';
   private constructor(journal:BrowserJournal,keychain:BrowserKeychain,keys:PairingKeys,enrollment:Enrollment,options:DeviceStateOptions,actionKey:Uint8Array){
     this.#actionKey=bytes(actionKey,32);
     this.#journal=journal;this.#keychain=keychain;this.#keys=keys;this.#enrollment=enrollment;this.#options=options;this.#hub=b64u(enrollment.link.hub);this.#slot=`device:${this.#hub}`;
@@ -106,6 +106,7 @@ export class BrowserDevice {
     if(record.complete&&this.#view){this.#view.offerHomeKey(record.complete.epoch,record.complete.key,true);this.#messages.clear();this.#messageBytes=0;}
     if(this.#view&&await this.#progressActions())return this.#refresh();
     if(this.#view&&await this.#settleLateWrites())return this.#refresh();
+    if(this.#view&&await this.#hygiene())return this.#refresh();
     this.#local=localState(await this.#journal.state(this.#hub));
     const activity=record.complete&&this.#registry?.activity(record.complete.certificate);
     this.#status=record.complete?(activity&&activity.kind==='invalid'&&activity.reason==='revoked'?'revoked':this.#view?.certificate?(this.#view.homeReady?'ready':'home'):'material'):record.proposal?'approval':'material';
@@ -138,6 +139,19 @@ export class BrowserDevice {
       for(const id of prepared.processed)done.add(id);local.processed=[...done];for(const held of prepared.unshared)local.unshared[`${held.scope}:${held.write}`]=held.record;
       changed=true;return{messages:prepared.messages,cancel:prepared.cancel,state:encode(local)};
     });}catch(error){if(error instanceof StaleDeviceState)return true;throw error;}this.#lastLate=stamp;return changed;
+  }
+  async #hygiene():Promise<boolean>{
+    const stamp=`${this.#sequence}:${this.#view!.revision}`;if(stamp===this.#lastHygiene)return false;
+    const presence=[...this.#remote].map(([id,key])=>{const [channel,hash]=JSON.parse(key) as [string,string];return{id,channel,hash};});
+    const plan=this.#view!.prepareHygiene(presence,await this.#journal.pendingIDs(this.#hub));
+    const deleting=await this.#journal.pendingDeleteIDs(this.#hub);plan.destroy=plan.destroy.filter(id=>!deleting.has(id));
+    if(plan.messages.length||plan.destroy.length){const installation=await this.#journal.installation();try{
+      await this.#journal.commit(this.#hub,installation,Date.now(),tx=>{if(tx.sequence!==this.#sequence)throw new StaleDeviceState();return plan;});
+    }catch(error){if(error instanceof StaleDeviceState)return true;throw error;}
+      // Queued packets enter the view on replay; their hashes then suppress another repair.
+      if(plan.messages.length)return true;
+    }
+    this.#lastHygiene=stamp;return false;
   }
   get unshared():readonly {scope:string;record:string;write:string}[]{return Object.entries(this.#local.unshared).map(([id,record])=>{const [scope,write]=id.split(':');return{scope:scope!,write:write!,record};});}
   async dismissUnshared(scope:Uint8Array,write:Uint8Array):Promise<void>{const key=`${b64u(scope)}:${b64u(write)}`;await this.#commitPlan((_state,_reserve,tx)=>{const local=localState(tx.state);delete local.unshared[key];return{messages:[],state:encode(local)};});}

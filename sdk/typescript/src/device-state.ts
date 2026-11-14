@@ -1,15 +1,15 @@
 import {Buffer} from 'buffer';
 import {type PrivateKey,bytes,b64u,unb64u,sha,publicKey,randomBytes,commit,sealInbox,openEnvelope,openInbox,seal,directoryTag,directoryKey,homeTag,homeScope,inboxTag,collectionTag,namedID} from './crypto.js';
-import {type ControlObject,controlFromJSON,controlToJSON,parseControl,objectID,signControl,sealHomeRecovery} from './control.js';
+import {type ControlObject,controlFromJSON,controlToJSON,parseControl,objectID,signControl,sealHomeRecovery,verifyControl} from './control.js';
 import {parseJSON,validUnicode} from './json.js';
-import {type Dot,type Write,type Op,Entry,RecordState,parseKind1,recordPayload,signWrite,writeID,inventoryBytes,supersedes,join,MAX_VECTOR} from './core.js';
-import {Registry,RegistryHoldingLimit,type Certificate} from './registry.js';
+import {type Dot,type Write,type Op,Entry,RecordState,parseKind1,recordPayload,signWrite,writeID,inventoryBytes,supersedes,join,MAX_VECTOR,verifyWrite} from './core.js';
+import {Registry,RegistryHoldingLimit,type Certificate,type Validity} from './registry.js';
 import {HomePolicy,HomeHoldingLimit} from './home-policy.js';
 import {CollectionPolicy,CollectionHoldingLimit,ROSTER_RECORD,META_RECORD,statementJSON} from './roster.js';
 import {InventoryAssembler,InventoryHoldingLimit,inventoryPayloads,type InventoryFragment} from './inventory-assembly.js';
 import {adoptGrant,grantValidity} from './grant.js';
 import type {Message} from './session.js';
-import type {ExportGuard,OutgoingMessage,PreparedOperation,OperationIntent} from './operation.js';
+import type {ExportGuard,OutgoingMessage,PreparedOperation,OperationIntent,MailboxPresence} from './operation.js';
 export type {OutgoingMessage} from './operation.js';
 
 export interface DeviceStateOptions {maxMessages?:number;maxCachedBytes?:number;messageBytes?:number}
@@ -35,8 +35,9 @@ export class DeviceState {
   readonly #keys:{signing:PrivateKey;agreement:PrivateKey};readonly #home:HomePolicy;readonly #limits:Required<DeviceStateOptions>;
   readonly #messages=new Map<string,Map<string,Message>>();readonly #decoded=new Set<string>();readonly #offered=new Set<string>();
   readonly #homePayloads:Payload[]=[];readonly #collections=new Map<string,Collection>();readonly #offers=new Map<string,Offer>();
+  readonly #packets=new Map<string,Payload>();readonly #homeStarts=new Map<string,ControlObject>();readonly #rosterVerified=new WeakSet<Write>();
   readonly #sourceVerified=new WeakSet<Write>();
-  readonly #writeValidity=new WeakMap<Write,{generation:string;valid:boolean}>();
+  readonly #writeValidity=new WeakMap<Write,{generation:string;valid:boolean;pending:boolean}>();
   readonly #assemblers=new Map<string,InventoryAssembler>();readonly #complete=new Set<string>();readonly #controls=new Set<string>();
   #homeRecords=new Map<string,RecordState>();#count=0;#cachedBytes=0;#revision=0;
   constructor(registry:Registry,directory:Uint8Array,participant:Uint8Array,keys:{signing:PrivateKey;agreement:PrivateKey},options:DeviceStateOptions={}){
@@ -90,19 +91,19 @@ export class DeviceState {
       for(const {epoch,key}of this.#home.readableKeys()){
         const tag=homeTag(key,hub,this.#participant,epoch),route=`home:${b64u(epoch)}:${b64u(sha(key))}`;
         changed=this.#read(tag,route,message=>{const opened=openEnvelope(key,hub,tag,message.body);
-          if(opened.kind===3){const o=controlFromJSON(opened.plaintext,'home-epoch');const witness=b64u(sha(controlToJSON(o.kind,o.fields,o.signatures,o.extras)));if(!this.#controls.has(witness)){this.#home.accept(o);this.#controls.add(witness);}}
-          else if(opened.kind===1)this.#homePayloads.push({epoch,parsed:parseKind1(opened.plaintext,hub,homeScope(hub,this.#participant))});
+          if(opened.kind===3){const o=controlFromJSON(opened.plaintext,'home-epoch');const witness=b64u(sha(controlToJSON(o.kind,o.fields,o.signatures,o.extras)));if(!this.#controls.has(witness)){this.#home.accept(o);this.#controls.add(witness);}this.#homeStarts.set(JSON.stringify([tag,message.id]),o);}
+          else if(opened.kind===1){const payload={epoch,parsed:parseKind1(opened.plaintext,hub,homeScope(hub,this.#participant))};this.#homePayloads.push(payload);this.#packets.set(JSON.stringify([tag,message.id]),payload);}
         })||changed;
       }
       for(const payload of this.#homePayloads){if('writes'in payload.parsed)continue;const start=this.#home.object(payload.epoch);
         if(start&&this.#home.validity(payload.epoch).kind==='valid')changed=this.#assemble('home',payload,start.fields.snapshot as Uint8Array,data=>this.#home.addInventory(payload.epoch,data))||changed;
       }
-      if(this.#home.inventoriesReady())this.#homeRecords=this.#records(this.#homePayloads,homeScope(hub,this.#participant),w=>this.#home.eligible(w),(w,e)=>this.#home.dataValidity(w,e).kind==='valid',w=>this.#home.entry(w),`home:${this.#registry.revision}:${this.#home.revision}`);
+      if(this.#home.inventoriesReady())this.#homeRecords=this.#records(this.#homePayloads,homeScope(hub,this.#participant),w=>this.#home.eligible(w),(w,e)=>this.#home.dataValidity(w,e),w=>this.#home.entry(w),`home:${this.#registry.revision}:${this.#home.revision}`);
       changed=this.#memberships()||changed;
       for(const c of this.#collections.values()){
         for(const {epoch,key}of c.policy.readableKeys()){
           const tag=collectionTag(key,hub,epoch),route=`collection:${b64u(c.policy.id)}:${b64u(epoch)}:${b64u(sha(key))}`;
-          changed=this.#read(tag,route,message=>{const opened=openEnvelope(key,hub,tag,message.body);if(opened.kind===1)c.payloads.push({epoch,parsed:parseKind1(opened.plaintext,hub,c.policy.id)});})||changed;
+          changed=this.#read(tag,route,message=>{const opened=openEnvelope(key,hub,tag,message.body);if(opened.kind===1){const payload={epoch,parsed:parseKind1(opened.plaintext,hub,c.policy.id)};c.payloads.push(payload);this.#packets.set(JSON.stringify([tag,message.id]),payload);}})||changed;
         }
         for(const payload of c.payloads){if(!('writes'in payload.parsed)||!eq(payload.parsed.record,ROSTER_RECORD)||payload.handled)continue;
           const before=c.policy.revision;let pending=false;for(const w of payload.parsed.writes){if(c.policy.accept(w,payload.epoch).kind==='pending')pending=true;}
@@ -119,7 +120,7 @@ export class DeviceState {
         }
       }
     }
-    for(const c of this.#collections.values())if(c.policy.inventoriesReady())c.records=this.#records(c.payloads,c.policy.id,w=>c.policy.eligible(w),(w,e)=>c.policy.dataValidity(w,e).kind==='valid',w=>c.policy.entry(w),`${b64u(c.policy.id)}:${this.#registry.revision}:${c.policy.revision}`);
+    for(const c of this.#collections.values())if(c.policy.inventoriesReady())c.records=this.#records(c.payloads,c.policy.id,w=>c.policy.eligible(w),(w,e)=>c.policy.dataValidity(w,e),w=>c.policy.entry(w),`${b64u(c.policy.id)}:${this.#registry.revision}:${c.policy.revision}`);
   }
   #assemble(scope:string,payload:Payload,commitment:Uint8Array,accept:(data:Uint8Array)=>void):boolean{
     if(payload.handled||'writes'in payload.parsed)return false;const key=JSON.stringify([scope,b64u(payload.epoch)]);
@@ -129,9 +130,9 @@ export class DeviceState {
     let data:Uint8Array|undefined;try{data=assembler.add(payload.parsed as InventoryFragment);}catch(error){if(holding(error))throw error;payload.handled=true;return false;}
     payload.handled=true;if(data){accept(data);this.#complete.add(key);this.#assemblers.delete(key);return true;}return false;
   }
-  #records(payloads:readonly Payload[],scope:Uint8Array,eligible:(w:Write)=>boolean,valid:(w:Write,epoch:Uint8Array)=>boolean,entry:(w:Write)=>Entry,generation:string):Map<string,RecordState>{
+  #records(payloads:readonly Payload[],scope:Uint8Array,eligible:(w:Write)=>boolean,valid:(w:Write,epoch:Uint8Array)=>Validity,entry:(w:Write)=>Entry,generation:string):Map<string,RecordState>{
     const records=new Map<string,RecordState>();for(const payload of payloads){if(!('writes'in payload.parsed))continue;
-      for(const w of payload.parsed.writes){if(!eligible(w))continue;let checked=this.#writeValidity.get(w);if(checked?.generation!==generation){checked={generation,valid:valid(w,payload.epoch)};this.#writeValidity.set(w,checked);}if(!checked.valid)continue;this.#sourceVerified.add(w);const id=b64u(w.record),r=records.get(id)??new RecordState(this.#registry.pin.hub,scope,w.record);r.merge(entry(w));records.set(id,r);}
+      for(const w of payload.parsed.writes){if(!eligible(w))continue;let checked=this.#writeValidity.get(w);if(checked?.generation!==generation){const result=valid(w,payload.epoch);checked={generation,valid:result.kind==='valid',pending:result.kind==='pending'};this.#writeValidity.set(w,checked);}if(!checked.valid)continue;this.#sourceVerified.add(w);const id=b64u(w.record),r=records.get(id)??new RecordState(this.#registry.pin.hub,scope,w.record);r.merge(entry(w));records.set(id,r);}
     }return records;
   }
   #memberships():boolean{
@@ -269,6 +270,55 @@ export class DeviceState {
     const deliver:OutgoingMessage[]=recipients.map(cert=>({channel,body:sealInbox(hub,this.#participant,cert.agree,notice),guard:{type:'recipient',certificate:b64u(cert.id)}}));
     if(eq(this.#participant,this.#registry.pin.creator)){const recovery=sealHomeRecovery(this.#registry.pin.agree,hub,epoch,key);deliver.push({channel:directoryTag(this.#directory,hub),body:seal(directoryKey(this.#directory,hub),hub,directoryTag(this.#directory,hub),Buffer.from(JSON.stringify({type:'home-recovery',epoch:b64u(epoch),bytes:b64u(recovery)})),3),guard:{type:'control'}});}
     return{kind:'home-rotation',details:{epoch:b64u(epoch),key:b64u(key),auth:b64u(identity.auth)},phases:[{name:'upload-home-inventory',messages:upload},{name:'announce-home',messages:announce},{name:'deliver-home-keys',messages:deliver}]};
+  }
+  prepareHygiene(presence:readonly MailboxPresence[],pending:ReadonlySet<string>):{messages:OutgoingMessage[];destroy:string[]}{
+    const messages:OutgoingMessage[]=[],destroy:string[]=[];if(!this.certificate)return{messages,destroy};
+    type Route={tag:string;key:Uint8Array;epoch:Uint8Array;scope:Uint8Array;records:Map<string,RecordState>;generation:string;valid:(w:Write)=>Validity;entry:(w:Write)=>Entry;belongs:(entry:Entry)=>boolean;guard:ExportGuard;roster?:Write[];starts?:ControlObject[];inventory?:Map<string,Buffer[]>};
+    const hub=this.#registry.pin.hub,routes:Route[]=[];
+    for(const row of this.lists()){
+      const c=this.#collections.get(b64u(row.id))!,head=c.policy.head,epoch=head&&c.policy.epoch(head);if(!head||!epoch||c.policy.dead||!c.policy.inventoriesReady()||c.policy.exposed().length)continue;const key=c.policy.key(epoch);if(!key)continue;
+      routes.push({tag:collectionTag(key,hub,epoch),key,epoch,scope:c.policy.id,records:c.records,generation:`${b64u(c.policy.id)}:${this.#registry.revision}:${c.policy.revision}`,valid:w=>c.policy.dataValidity(w,epoch),entry:w=>c.policy.entry(w),belongs:()=>true,guard:{type:'collection',collection:b64u(c.policy.id),epoch:b64u(epoch)},roster:c.policy.writes(head),...(c.policy.inventory(epoch)?{inventory:c.policy.inventory(epoch)!}:{})});
+    }
+    if(this.homeReady)for(const epoch of this.#home.heads()){
+      const key=this.#home.key(epoch)!;routes.push({tag:homeTag(key,hub,this.#participant,epoch),key,epoch,scope:homeScope(hub,this.#participant),records:this.#homeRecords,generation:`home:${this.#registry.revision}:${this.#home.revision}`,valid:w=>this.#home.dataValidity(w,epoch),entry:w=>this.#home.entry(w),belongs:e=>eq(e.write.ref,epoch)||this.#home.listed(epoch,e.write),guard:{type:'home',epoch:b64u(epoch)},starts:this.#home.pathObjects(epoch),...(this.#home.inventory(epoch)?{inventory:this.#home.inventory(epoch)!}:{})});
+    }
+    for(const route of routes){
+      type Row={id:string;hash:string;writes:Map<string,Entry>;held:boolean;pending:boolean};
+      const records=new Map<string,Row[]>(),roster=new Set<string>(),starts=new Set<string>(),fragments=new Set<string>();
+      const add=(hash:string,id:string,isPending:boolean)=>{
+        const cacheKey=JSON.stringify([route.tag,hash]),packet=this.#packets.get(cacheKey),start=this.#homeStarts.get(cacheKey);
+        if(start){const expected=route.starts?.find(o=>eq(objectID(o.kind,o.fields),objectID(start.kind,start.fields))),cert=this.#registry.certificate(start.fields.signer as Uint8Array);if(expected&&cert&&start.signatures.sig&&verifyControl(start.kind,start.fields,cert.sign,start.signatures.sig))starts.add(b64u(objectID(start.kind,start.fields)));return;}
+        if(!packet)return;const p=packet.parsed;
+        if(!('writes'in p)){if(eq(p.epoch,route.epoch))fragments.add(JSON.stringify([p.part,p.parts,b64u(sha(p.bytes))]));return;}
+        if(eq(p.record,ROSTER_RECORD)){
+          for(const raw of p.writes){const w=raw.ref.every(b=>b===0)?{...raw,scope:new Uint8Array(16)}:raw,expected=route.roster?.find(candidate=>eq(writeID(candidate),writeID(w)));if(!expected)continue;
+            if(!this.#rosterVerified.has(raw)){const cert=this.#registry.certificate(w.certificate);if(!cert||!eq(cert.participant,w.author)||this.#registry.authorizes(w.authorization,w.certificate).kind!=='valid'||!verifyWrite(w,cert.sign))continue;this.#rosterVerified.add(raw);}roster.add(b64u(writeID(w)));
+          }return;
+        }
+        const entries=new Map<string,Entry>();let held=false;
+        for(const w of p.writes){let checked=this.#writeValidity.get(w);if(checked?.generation!==route.generation){const result=route.valid(w);checked={generation:route.generation,valid:result.kind==='valid',pending:result.kind==='pending'};this.#writeValidity.set(w,checked);}if(checked.pending)held=true;if(checked.valid)entries.set(b64u(writeID(w)),route.entry(w));}
+        if(!entries.size&&!held)return;const record=b64u(p.record),rows=records.get(record)??[];rows.push({id,hash,writes:entries,held,pending:isPending});records.set(record,rows);
+      };
+      for(const row of presence)if(row.channel===route.tag)add(row.hash,row.id,false);
+      for(const hash of pending)if(this.#messages.get(route.tag)?.has(hash))add(hash,hash,true);
+      if(route.roster&&route.roster.some(w=>!roster.has(b64u(writeID(w)))))messages.push(...this.#sealRecord(route.scope,ROSTER_RECORD,route.roster,route.key,route.tag).map(message=>({...message,guard:{type:'control' as const}})));
+      for(const start of route.starts??[])if(!starts.has(b64u(objectID(start.kind,start.fields))))messages.push({channel:route.tag,body:seal(route.key,hub,route.tag,controlToJSON(start.kind,start.fields,start.signatures),3),guard:route.guard});
+      if(route.inventory){const payloads=inventoryPayloads(inventoryBytes(route.inventory),route.epoch);for(const plain of payloads){const p=parseKind1(plain,hub,route.scope);if('writes'in p)throw new Error('inventory payload became a record');if(!fragments.has(JSON.stringify([p.part,p.parts,b64u(sha(p.bytes))])))messages.push({channel:route.tag,body:seal(route.key,hub,route.tag,plain),guard:route.guard});}}
+      const dominates=(a:ReadonlyMap<string,Entry>,b:ReadonlyMap<string,Entry>)=>[...b].every(([id,x])=>a.has(id)||[...a.values()].some(w=>supersedes(w,x)));
+      for(const [record,state]of route.records){const kept=new Map(state.kept.filter(route.belongs).map(entry=>[b64u(entry.id),entry]));if(!kept.size)continue;
+        const rows=records.get(record)??[],physical=rows.filter(row=>!row.pending&&!row.held),queued=rows.filter(row=>row.pending&&!row.held),gone=new Set<string>();
+        for(const m of physical)for(const n of physical){if(m.id===n.id||gone.has(n.id)||!dominates(n.writes,m.writes))continue;const mutual=dominates(m.writes,n.writes);if(mutual&&Buffer.compare(unb64u(n.hash),unb64u(m.hash))>=0)continue;gone.add(m.id);break;}
+        destroy.push(...gone);
+        const left=physical.filter(row=>!gone.has(row.id)),coverage=new Map(left.flatMap(row=>[...row.writes])),all=new Map([...coverage,...queued.flatMap(row=>[...row.writes])]);
+        const complete=dominates(coverage,kept),single=left.some(row=>dominates(row.writes,kept)),inFlight=dominates(all,kept)&&queued.length>0;
+        const writes=[...kept.values()].map(entry=>entry.write),fits=recordPayload(unb64u(record),writes).length+54<=this.#limits.messageBytes;
+        if(!inFlight&&(!complete||fits&&!single&&left.length>1)){
+          const selected=complete?writes:[...kept.values()].filter(entry=>!dominates(all,new Map([[b64u(entry.id),entry]]))).map(entry=>entry.write);
+          messages.push(...this.#sealRecord(route.scope,unb64u(record),selected,route.key,route.tag).map(message=>({...message,guard:route.guard})));
+        }
+      }
+    }
+    return{messages,destroy:[...new Set(destroy)]};
   }
   prepareLateWrites(installation:Uint8Array,clock:{millis:number;counter:number}|undefined,done:ReadonlySet<string>,outbox:readonly Message[]=[]):{messages:OutgoingMessage[];processed:string[];unshared:{scope:string;record:string;write:string}[];cancel:string[]}{
     bytes(installation,8);const messages:OutgoingMessage[]=[],processed:string[]=[],unshared:{scope:string;record:string;write:string}[]=[],cancel:string[]=[];

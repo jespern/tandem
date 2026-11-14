@@ -80,6 +80,7 @@ export class HomePolicy {
    * key commitment still have to validate before the anchor counts. */
   anchor(epoch:Uint8Array):boolean{const id=b64u(bytes(epoch,32));if(this.#anchors.has(id))return false;this.#anchors.add(id);this.#revision++;return true;}
   acceptedObjects():ControlObject[]{return [...this.#accepted()].map(id=>this.object(unb64u(id))!).sort((a,b)=>(a.fields.n as number)-(b.fields.n as number)||Buffer.compare(objectID(a.kind,a.fields),objectID(b.kind,b.fields)));}
+  pathObjects(epoch:Uint8Array):ControlObject[]{const seen=new Set<string>(),take=(id:Uint8Array)=>{const key=b64u(id);if(seen.has(key))return;const o=this.#object(id);if(!o)return;seen.add(key);for(const parent of o.fields.parents as Uint8Array[])take(parent);};take(epoch);return this.acceptedObjects().filter(o=>seen.has(b64u(objectID(o.kind,o.fields))));}
   inventory(epoch:Uint8Array):Map<string,Buffer[]>|undefined{const inv=this.#inventories.get(b64u(epoch));return inv?new Map([...inv].map(([id,writes])=>[id,writes.map(value=>bytes(value))])):undefined;}
   heads():Uint8Array[]{
     const accepted=this.#accepted(),parents=new Set([...accepted].flatMap(id=>(this.#object(unb64u(id))!.fields.parents as Uint8Array[]).map(b64u)));

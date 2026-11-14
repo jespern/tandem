@@ -387,6 +387,23 @@ test('BrowserDevice pairs, restores offline edits, and refuses a revocation arri
     const created=await page.evaluate(async()=>{const id=await window.controllerDevice.createList('Browser made');await window.waitControllerSends();return window.t.b64u(id);});await command('sync');
     expect((await command('lists')).lists.find(list=>list.id===created).name).toBe('Browser made');
 
+    // Destroy a confirmed packet, then wait for the push-driven repair; a second
+    // connection must see the replacement, not merely the controller's cache.
+    const healed=await page.evaluate(async({cfg,cid})=>{
+      const t=window.t,hub=window.controllerHub,journal=window.controllerJournal,device=window.controllerDevice;
+      const before=await journal.readEvents(hub,0,100000),sequence=before.at(-1)?.sequence??0,record=t.randomBytes(16);
+      await device.writeFields(t.unb64u(cid),record,[{field:'title',op:1,value:new TextEncoder().encode('Restore after deletion')}]);await window.waitControllerSends();
+      const queued=(await journal.readEvents(hub,sequence,100000)).find(row=>row.kind==='queued'),deliveries=(await journal.deliveries(hub)).filter(row=>row.present&&row.id===queued.id);
+      const store=await t.JMAPStore.open(cfg);
+      try{await store.destroy(deliveries.map(row=>row.remoteId),window.controllerAbort.signal);
+        for await(const _ of device.updates(window.controllerAbort.signal)){
+          const rows=await journal.readEvents(hub,sequence,100000),oldGone=!(await journal.deliveries(hub)).some(row=>row.present&&row.id===queued.id);
+          const replacement=rows.find(row=>row.kind==='received'&&row.channel===queued.channel&&row.id!==queued.id);
+          if(oldGone&&replacement){const physical=await store.fetch([replacement.remoteId],window.controllerAbort.signal);if(physical.length)return true;}
+        }return false;
+      }finally{await store.close();}
+    },{cfg,cid:created});expect(healed).toBe(true);
+
     const offline=await page.evaluate(async({cid,record})=>{
       const t=window.t;window.controllerAbort.abort();await window.controllerRun;
       await window.controllerDevice.writeFields(t.unb64u(cid),t.unb64u(record),[{field:'title',op:1,value:new TextEncoder().encode('Saved offline')}]);
