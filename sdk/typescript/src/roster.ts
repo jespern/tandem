@@ -111,8 +111,20 @@ export class CollectionPolicy {
   }
   announce(id:Uint8Array):void{const row=this.#rows.get(b64u(id));if(row){if(!this.#announced.has(b64u(id)))this.#revision++;this.#announced.add(b64u(id));if(this.#starts(row)&&b64u(id)!==this.#genesis)this.#decision(row.write.ref,id);}}
   addInventory(epoch:Uint8Array,data:Uint8Array):void{const row=this.#rows.get(b64u(epoch));if(!row?.statement.snapshot||!eq(sha(data),row.statement.snapshot))throw new Error('inventory does not match the signed commitment');this.#inventories.set(b64u(epoch),parseInventory(data));this.#revision++;}
+  inventory(epoch:Uint8Array):Map<string,Buffer[]>|undefined{const inv=this.#inventories.get(b64u(epoch));return inv?new Map([...inv].map(([record,writes])=>[record,writes.map(value=>bytes(value))])):undefined;}
+  writes(at:Uint8Array):Write[]{return this.chain(at).map(id=>{const w=this.#rows.get(b64u(id))!.write,parsed=parseKind1(recordPayload(w.record,[w]),w.hub,w.scope);if(!('writes'in parsed))throw new Error('roster is not a write');return parsed.writes[0]!;});}
+  isAnnounced(epoch:Uint8Array):boolean{return !!this.genesis&&(eq(epoch,this.genesis)||this.#announced.has(b64u(epoch)));}
   listed(epoch:Uint8Array,w:Write):boolean{return this.#inventories.get(b64u(epoch))?.get(Buffer.from(w.record).toString('hex'))?.some(id=>eq(id,writeID(w)))??false;}
   #precedes(ancestor:Uint8Array,descendant:Uint8Array):boolean{let row=this.#rows.get(b64u(descendant));const seen=new Set<string>();while(row){if(eq(row.write.ref,ancestor))return true;const key=b64u(row.id);if(seen.has(key))break;seen.add(key);row=this.#rows.get(b64u(row.write.ref));}return false;}
+  sourceValidity(w:Write):Validity{
+    const row=this.#rows.get(b64u(w.ref));if(!row)return hold(w.ref);const source=this.epoch(row.id);
+    if(!source||!eq(w.hub,this.#registry.pin.hub)||!eq(w.scope,this.#id)||eq(w.record,ROSTER_RECORD))return bad('wrong source hub, scope or record');
+    if(!this.#counts(row)||!this.#counts(this.#rows.get(b64u(source))!))return hold(source);
+    const member=row.statement.members.find(m=>eq(m.uid,w.author));if(!member||member.role==='reader'||eq(w.record,META_RECORD)&&member.role!=='owner')return bad('not a writer at the source');
+    if(w.op===4&&eq(w.record,META_RECORD))return bad('named records cannot be deleted');
+    const auth=all([this.#registry.authorizes(w.authorization,w.certificate),this.#registry.extendsFloor(w.authorization,member.floor)]);if(auth.kind!=='valid')return auth;
+    const cert=this.#registry.certificate(w.certificate);return cert&&eq(cert.participant,w.author)&&verifyWrite(w,cert.sign)?valid:bad('bad source signature');
+  }
   dataValidity(w:Write,channel:Uint8Array):Validity{
     if(eq(w.record,ROSTER_RECORD))return bad('roster is not an ordinary data record');
     if(this.dead)return bad('collection has conflicting owner decisions');const row=this.#rows.get(b64u(w.ref));if(!row)return hold(w.ref);

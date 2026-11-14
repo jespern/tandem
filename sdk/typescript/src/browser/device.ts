@@ -9,7 +9,7 @@ import type {Message} from '../session.js';
 import {BrowserJournal,type LocalPlan,type LocalTransaction} from './journal.js';
 import type {Dot} from '../core.js';
 import type {PreparedOperation} from '../operation.js';
-import {newAction,sealAction,openAction,messageID,type DeviceAction} from './actions.js';
+import {newAction,sealAction,openAction,messageID,type DeviceAction,type ActionPhase} from './actions.js';
 import {BrowserKeychain} from './keychain.js';
 import {BrowserReplica,type PreparedStore,untilAbort} from './replica.js';
 import {Invalidation} from './events.js';
@@ -33,6 +33,13 @@ function loadEnrollment(data:Uint8Array):Enrollment {
   if(j.complete)record.complete={epoch:raw(j.complete.epoch,32),key:raw(j.complete.key,32),certificate:raw(j.complete.certificate,32)};
   return record;
 }
+interface DeviceLocalState {v:2;pairingRequest?:string;processed:string[];unshared:Record<string,string>}
+function localState(data:Uint8Array|undefined):DeviceLocalState{
+  if(!data)return{v:2,processed:[],unshared:{}};
+  const text=Buffer.from(data).toString();if(!text.startsWith('{'))return{v:2,pairingRequest:text,processed:[],unshared:{}};
+  const j=parseJSON(data) as Record<string,any>;if(j.v!==2||!Array.isArray(j.processed)||j.processed.some((id:unknown)=>typeof id!=='string')||!j.unshared||typeof j.unshared!=='object'||Object.values(j.unshared).some(value=>typeof value!=='string'))throw new Error('invalid device local state');
+  return{v:2,...(typeof j.pairingRequest==='string'?{pairingRequest:j.pairingRequest}:{}),processed:j.processed,unshared:{...j.unshared}};
+}
 /** Browser device operations over the durable push pump. Enrollment secrets are
  * wrapped in the separate keychain; exact claims and edits commit before export.
  * This class owns the journal's opaque per-hub action state. */
@@ -40,8 +47,8 @@ export class BrowserDevice {
   readonly #journal:BrowserJournal;readonly #keychain:BrowserKeychain;readonly #keys:PairingKeys;readonly #options:DeviceStateOptions;
   readonly #actionKey:Uint8Array;readonly #activeActions=new Map<string,DeviceAction>();readonly #present=new Map<string,Set<string>>();readonly #remote=new Map<string,string>();
   readonly #hub:string;readonly #slot:string;readonly #lock:string;readonly #replica:BrowserReplica;readonly #changes=new Invalidation();
-  readonly #messages=new Map<string,Message>();#enrollment:Enrollment;#registry:Registry|undefined;#view:DeviceState|undefined;
-  #sequence=0;#messageBytes=0;#closed=false;#running:Promise<void>|undefined;#abort:AbortController|undefined;#status:BrowserDeviceStatus='material';
+  readonly #messages=new Map<string,Message>();#local:DeviceLocalState={v:2,processed:[],unshared:{}};#enrollment:Enrollment;#registry:Registry|undefined;#view:DeviceState|undefined;
+  #sequence=0;#messageBytes=0;#lastLate='';#closed=false;#running:Promise<void>|undefined;#abort:AbortController|undefined;#status:BrowserDeviceStatus='material';
   private constructor(journal:BrowserJournal,keychain:BrowserKeychain,keys:PairingKeys,enrollment:Enrollment,options:DeviceStateOptions,actionKey:Uint8Array){
     this.#actionKey=bytes(actionKey,32);
     this.#journal=journal;this.#keychain=keychain;this.#keys=keys;this.#enrollment=enrollment;this.#options=options;this.#hub=b64u(enrollment.link.hub);this.#slot=`device:${this.#hub}`;
@@ -90,14 +97,16 @@ export class BrowserDevice {
       const missing=record.proposal.messages.filter(message=>!this.#present.has(JSON.stringify([message.channel,messageID(message)]))&&!queued.has(messageID(message)));
       try{await this.#journal.commit(this.#hub,installation,Date.now(),tx=>{
         if(tx.sequence!==this.#sequence)throw new StaleDeviceState();
-        if(tx.state&&Buffer.from(tx.state).toString()===request)return{messages:missing};
-        return{messages:record.proposal!.messages,state:Buffer.from(request)};
+        const local=localState(tx.state);if(local.pairingRequest===request)return{messages:missing};local.pairingRequest=request;
+        return{messages:record.proposal!.messages,state:encode(local)};
       });}catch(error){if(error instanceof StaleDeviceState)return this.#refresh();throw error;}
       const released=this.#registry&&releasePairing(record.proposal.pending,this.#registry,[...this.#messages.values()],this.#keys);
       if(released){record.complete={epoch:released.epoch,key:released.key,certificate:released.certificate.id};await this.#keychain.save(this.#slot,saveEnrollment(record));}
     }
     if(record.complete&&this.#view){this.#view.offerHomeKey(record.complete.epoch,record.complete.key,true);this.#messages.clear();this.#messageBytes=0;}
     if(this.#view&&await this.#progressActions())return this.#refresh();
+    if(this.#view&&await this.#settleLateWrites())return this.#refresh();
+    this.#local=localState(await this.#journal.state(this.#hub));
     const activity=record.complete&&this.#registry?.activity(record.complete.certificate);
     this.#status=record.complete?(activity&&activity.kind==='invalid'&&activity.reason==='revoked'?'revoked':this.#view?.certificate?(this.#view.homeReady?'ready':'home'):'material'):record.proposal?'approval':'material';
     this.#changes.signal();
@@ -121,6 +130,28 @@ export class BrowserDevice {
     }await this.#refresh();});
   }
   async #edit(prepare:(state:DeviceState,reserve:()=>Dot)=>import('../device-state.js').OutgoingMessage[]):Promise<void>{await this.#commitPlan((state,reserve)=>({messages:prepare(state,reserve)}));}
+  async #settleLateWrites():Promise<boolean>{
+    if(!this.#view?.certificate)return false;const installation=await this.#journal.installation(),stamp=`${b64u(installation)}:${this.#view.revision}`;if(stamp===this.#lastLate)return false;const pending=await this.#journal.pending(this.#hub);let changed=false;
+    try{await this.#journal.commit(this.#hub,installation,Date.now(),tx=>{
+      if(tx.sequence!==this.#sequence)throw new StaleDeviceState();const local=localState(tx.state),done=new Set(local.processed),prepared=this.#view!.prepareLateWrites(installation,tx.clock,done,pending);
+      if(!prepared.messages.length&&!prepared.processed.length&&!prepared.cancel.length)return{messages:[]};
+      for(const id of prepared.processed)done.add(id);local.processed=[...done];for(const held of prepared.unshared)local.unshared[`${held.scope}:${held.write}`]=held.record;
+      changed=true;return{messages:prepared.messages,cancel:prepared.cancel,state:encode(local)};
+    });}catch(error){if(error instanceof StaleDeviceState)return true;throw error;}this.#lastLate=stamp;return changed;
+  }
+  get unshared():readonly {scope:string;record:string;write:string}[]{return Object.entries(this.#local.unshared).map(([id,record])=>{const [scope,write]=id.split(':');return{scope:scope!,write:write!,record};});}
+  async dismissUnshared(scope:Uint8Array,write:Uint8Array):Promise<void>{const key=`${b64u(scope)}:${b64u(write)}`;await this.#commitPlan((_state,_reserve,tx)=>{const local=localState(tx.state);delete local.unshared[key];return{messages:[],state:encode(local)};});}
+  async #phasePlan(action:DeviceAction,phase:ActionPhase):Promise<(tx:LocalTransaction)=>LocalPlan>{
+    const context=phase.intent?.type==='collection-cleanup'?{
+      deliveries:(await this.#journal.deliveries(this.#hub)).filter(row=>row.present).map(row=>({id:row.remoteId,channel:row.channel,body:row.body})),
+      outbox:await this.#journal.pending(this.#hub)
+    }:{};
+    return tx=>{
+      if(phase.intent){const prepared=this.#view!.prepareIntent(phase.intent,()=>tx.nextDot(),context);phase.messages=prepared.messages;if(prepared.destroy)phase.destroy=prepared.destroy;if(prepared.cancel)phase.cancel=prepared.cancel;delete phase.intent;}
+      const immediate=!!phase.destroy?.length&&!phase.messages.length;if(immediate)phase.destroyQueued=true;
+      return{messages:phase.messages,actions:[{id:action.id,sealed:sealAction(action,this.#actionKey,this.#enrollment.link.hub)}],...(phase.cancel?{cancel:phase.cancel}:{}),...(immediate?{destroy:phase.destroy!}:{})};
+    };
+  }
   async #progressActions():Promise<boolean>{
     const saved=await this.#journal.actions(this.#hub);this.#activeActions.clear();
     for(const row of saved){const action=openAction(row.id,row.sealed,this.#actionKey,this.#enrollment.link.hub);this.#activeActions.set(row.id,action);
@@ -128,25 +159,34 @@ export class BrowserDevice {
     }
     for(const action of this.#activeActions.values()){
       if(action.details.failure)continue;
-      const phase=action.phases[action.index]!;
-      let plan:LocalPlan|undefined;
+      const phase=action.phases[action.index]!;let build:((tx:LocalTransaction)=>LocalPlan)|undefined;
       if(!this.#view!.operationValid(action.kind,action.details)){
         action.details.failure='This operation was superseded by a newer policy or roster.';
-        plan={messages:[],cancel:phase.messages.map(messageID),actions:[{id:action.id,sealed:sealAction(action,this.#actionKey,this.#enrollment.link.hub)}]};
+        build=()=>({messages:[],cancel:phase.messages.map(messageID),actions:[{id:action.id,sealed:sealAction(action,this.#actionKey,this.#enrollment.link.hub)}]});
       }else{
-        const allowed=phase.messages.filter(message=>this.#view!.exportable(message));
-        // A recipient cut retires that exact delivery; other recipients continue.
-        const retired=phase.messages.filter(message=>this.#view!.deliveryRetired(message));
-        if(retired.length){phase.messages=phase.messages.filter(message=>!retired.includes(message));plan={messages:[],cancel:retired.map(messageID),actions:[{id:action.id,sealed:sealAction(action,this.#actionKey,this.#enrollment.link.hub)}]};}
-        else if(phase.messages.every(message=>this.#present.has(JSON.stringify([message.channel,messageID(message)])))&&!(await this.#journal.pendingDeletes(this.#hub)).some(row=>phase.destroy?.includes(row.id))){
-          if(action.index+1===action.phases.length)plan={messages:[],actions:[{id:action.id,sealed:null}]};
-          else{action.index++;const next=action.phases[action.index]!;plan={messages:next.messages,actions:[{id:action.id,sealed:sealAction(action,this.#actionKey,this.#enrollment.link.hub)}],...(next.cancel?{cancel:next.cancel}:{}),...(next.destroy?{destroy:next.destroy}:{})};}
+        const replaced=action.kind==='collection-rotation'&&action.index>=3&&b64u(this.#view!.collectionStatus(unb64u(action.details.collection!)).epoch??new Uint8Array())!==action.details.epoch;
+        const required=replaced?[]:(phase.requires??[]).flatMap(index=>action.phases[index]!.messages);
+        const absent=required.filter(message=>!this.#present.has(JSON.stringify([message.channel,messageID(message)])));
+        if(absent.length){
+          const queued=await this.#journal.queued(this.#hub,absent.map(messageID));
+          const missing=absent.filter(message=>!queued.has(messageID(message))),currentQueued=await this.#journal.queued(this.#hub,phase.messages.map(messageID));
+          if(missing.length||currentQueued.size)build=()=>({messages:missing,cancel:[...currentQueued]});
         }else{
-          const queued=await this.#journal.queued(this.#hub,allowed.map(messageID)),missing=allowed.filter(message=>!this.#present.has(JSON.stringify([message.channel,messageID(message)]))&&!queued.has(messageID(message)));
-          if(missing.length)plan={messages:missing};
+          const retired=phase.messages.filter(message=>this.#view!.deliveryRetired(message));
+          if(retired.length){phase.messages=phase.messages.filter(message=>!retired.includes(message));build=()=>({messages:[],cancel:retired.map(messageID),actions:[{id:action.id,sealed:sealAction(action,this.#actionKey,this.#enrollment.link.hub)}]});}
+          else if(phase.messages.every(message=>this.#present.has(JSON.stringify([message.channel,messageID(message)])))){
+            if(phase.destroy?.length&&!phase.destroyQueued){phase.destroyQueued=true;build=()=>({messages:[],destroy:phase.destroy!,actions:[{id:action.id,sealed:sealAction(action,this.#actionKey,this.#enrollment.link.hub)}]});}
+            else if(!(await this.#journal.pendingDeletes(this.#hub)).some(row=>phase.destroy?.includes(row.id))){
+              if(action.index+1===action.phases.length)build=()=>({messages:[],actions:[{id:action.id,sealed:null}]});
+              else{const next=action.phases[action.index+1]!;if(!next.intent||this.#view!.intentReady(next.intent)){action.index++;build=await this.#phasePlan(action,next);}}
+            }
+          }else{
+            const allowed=phase.messages.filter(message=>this.#view!.exportable(message)),queued=await this.#journal.queued(this.#hub,allowed.map(messageID));
+            const missing=allowed.filter(message=>!this.#present.has(JSON.stringify([message.channel,messageID(message)]))&&!queued.has(messageID(message)));if(missing.length)build=()=>({messages:missing});
+          }
         }
       }
-      if(plan){const installation=await this.#journal.installation();try{await this.#journal.commit(this.#hub,installation,Date.now(),tx=>{if(tx.sequence!==this.#sequence)throw new StaleDeviceState();return plan!;});}catch(error){if(error instanceof StaleDeviceState)return true;throw error;}return true;}
+      if(build){const installation=await this.#journal.installation();try{await this.#journal.commit(this.#hub,installation,Date.now(),tx=>{if(tx.sequence!==this.#sequence)throw new StaleDeviceState();return build!(tx);});}catch(error){if(error instanceof StaleDeviceState)return true;throw error;}return true;}
     }
     if(this.#view!.homeNeedsRotation&&this.#view!.canRotateHome&&![...this.#activeActions.values()].some(action=>action.kind==='home-rotation'&&!action.details.failure)){
       const installation=await this.#journal.installation();try{await this.#journal.commit(this.#hub,installation,Date.now(),tx=>{if(tx.sequence!==this.#sequence)throw new StaleDeviceState();return this.#operationPlan(this.#view!.prepareHomeRotation(),tx);});}catch(error){if(error instanceof StaleDeviceState)return true;throw error;}return true;
@@ -164,6 +204,10 @@ export class BrowserDevice {
     let id='';await this.#commitPlan((state,reserve,tx)=>{const plan=this.#operationPlan(prepare(state,reserve),tx);id=plan.actions![0]!.id;return plan;});return id;
   }
   async rotateHome():Promise<string>{return this.#startOperation(state=>state.prepareHomeRotation());}
+  async rekey(collection:Uint8Array):Promise<string>{const cid=bytes(collection,16);return this.#startOperation((state,reserve)=>state.prepareCollectionRotation(cid,reserve));}
+  async removeMember(collection:Uint8Array,participant:Uint8Array):Promise<string>{const cid=bytes(collection,16),uid=bytes(participant,32);return this.#startOperation((state,reserve)=>state.prepareCollectionRotation(cid,reserve,{remove:uid}));}
+  async setRole(collection:Uint8Array,participant:Uint8Array,role:'writer'|'reader'):Promise<string>{const cid=bytes(collection,16),uid=bytes(participant,32);return this.#startOperation((state,reserve)=>state.prepareSetRole(cid,uid,role,reserve));}
+  async deleteList(collection:Uint8Array):Promise<string>{const cid=bytes(collection,16);return this.#startOperation((state,reserve)=>state.prepareDeleteList(cid,reserve));}
   async share(collection:Uint8Array,participant:Uint8Array,role:'writer'|'reader',name=''):Promise<string>{const cid=bytes(collection,16),uid=bytes(participant,32);return this.#startOperation((state,reserve)=>state.prepareShare(cid,uid,role,name,reserve));}
   async writeHome(name:string,edits:readonly FieldEdit[]):Promise<void>{const captured=structuredClone(edits);await this.#edit((state,reserve)=>state.prepareHome(name,captured,reserve));}
   async writeFields(collection:Uint8Array,record:Uint8Array,edits:readonly FieldEdit[]):Promise<void>{const cid=bytes(collection,16),id=bytes(record,16),captured=structuredClone(edits);await this.#edit((state,reserve)=>state.prepareField(cid,id,captured,reserve));}

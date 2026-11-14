@@ -16,6 +16,7 @@ export interface LocalTransaction {
   readonly state: Uint8Array | undefined;
   /** Last durable envelope event in this hub, read under the write lock. */
   readonly sequence: number;
+  readonly clock: {millis:number;counter:number}|undefined;
   readonly actions: ReadonlyMap<string, Uint8Array>;
   nextDot(): Dot;
 }
@@ -106,7 +107,7 @@ export class BrowserJournal {
       const actions = new Map(savedActions.map(action => [action.id, Uint8Array.from(action.sealed)]));
       let reserved = false, preparing = true;
       const plan = (() => {
-        try { return prepare({sequence, actions, state: state === undefined ? undefined : Uint8Array.from(state), nextDot: () => {
+        try { return prepare({sequence, clock:clock?{...clock}:undefined, actions, state: state === undefined ? undefined : Uint8Array.from(state), nextDot: () => {
           if (!preparing) throw new Error('clock reservation outside preparation');
           clock = clock ? nextClock(clock.millis, clock.counter, now) : {millis: now, counter: 0}; reserved = true;
           return {...clock, device: Uint8Array.from(localID)};

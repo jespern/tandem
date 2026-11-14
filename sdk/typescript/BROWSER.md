@@ -3,8 +3,8 @@
 `@tandem/protocol/browser` runs without Node built-ins or a Tandem backend. It
 talks directly to a JMAP mail server. This is the primitive layer: Liszto's UI
 still needs to be built on it. The browser controller currently supports pairing,
-verified home/collection reads and durable field/set edits. Owner sharing and home-key rotation now use durable stages. Collection rotation,
-other management workflows and complete healing parity remain acceptance gates.
+verified home/collection reads and durable field/set edits. Owner sharing and home/collection key rotation now use durable stages. Other
+management workflows and complete healing parity remain acceptance gates.
 
 ## Runtime and storage
 
@@ -12,7 +12,7 @@ The Node and browser builds share write/control encodings, strict JSON/base64url
 Ed25519 acceptance, inventories and record merging. Node keeps native crypto.
 The browser backend uses Noble hashes, curves and ciphers with Web Crypto's
 random source; `buffer` supplies the existing byte API. The SDK bundle costs
-about 67 KB gzip; the Argon2 worker loads separately.
+about 72 KB gzip; the Argon2 worker loads separately.
 
 Private keys now use an opaque SDK `PrivateKey` handle in both runtimes. Construct
 them with `privateKey(seed, algorithm)`; pass that handle to signing/agreement
@@ -118,7 +118,12 @@ export. Set adds/removes and record tombstones use the shared merge rules.
 `share` publishes and confirms the roster before delivering grants. `rotateHome`
 uploads ancestry, a fixed inventory and carried writes before announcing its start
 and delivering keys. A known device cutoff starts home rotation automatically.
-Native peers accept both flows; a revoked native phone cannot discover a private
+`rekey`, `removeMember` and role reductions use a six-stage collection rotation:
+private change note, complete upload, old-channel announcement, current-home
+settlement, recipient grants and confirmed cleanup. Role upgrades and collection
+deletion use confirmed same-epoch roster changes. Future home updates/grants are
+signed when their stage runs, then journalled atomically before export.
+Native peers accept these flows; a revoked native phone cannot discover a private
 list created afterward. `operations` reports active stages and superseded actions.
 
 Journal schema 2 adds encrypted action plans and a durable deletion queue. The
@@ -129,6 +134,13 @@ until confirmed. Recipient delivery checks run again before export, and queued
 user data stays held when its key is exposed. Schema 1 upgrades retain deliveries;
 foreign databases are refused without modification. Replica/device runners can
 restart after cancellation. No timer advances a stage.
+
+The controller re-signs its own installation’s late writes into a later epoch,
+retaining their original dot and causal base. It never re-signs another device’s
+writes. Implausible claims about its future clock cannot suppress a late edit;
+plausibly superseded edits that may have been left behind are exposed through
+`unshared` for app recovery. Local bookkeeping and re-signed bytes commit together.
+A reload immediately before announcement preserves an edit made in that gap.
 
 The controller owns the journal's opaque per-hub action state. Device Web Locks
 serialize local actions across tabs. A write transaction also checks the last
@@ -182,15 +194,16 @@ home-key confirmation. It additionally verifies native/browser edits both ways,
 controller enrollment/reload, offline edit recovery and revocation between replay
 and commit. Native clients also read browser-created lists and acceptance answers;
 reader edits are refused, and browser writer edits survive native list rekeys.
-All 14 scenarios passed locally. Only that fixture accepts self-signed TLS;
+All 17 browser scenarios passed locally, including native collection rotation,
+member removal, home cutoff and a late edit across an interrupted rotation. Only that fixture accepts self-signed TLS;
 production SDK checks stay enabled.
 It explicitly enables browser CORS and publishes real loopback URLs, with no proxy.
 
 ## Remaining acceptance gates
 
-1. Finish collection rotation, the remaining management operations and healing.
+1. Finish the remaining management operations and healing.
    Pairing/release, bidirectional field edits, list creation/acceptance, browser
-   sharing, browser home rotation and receiving native list rotations pass against
+   sharing, home/list rotation, member removal and late-edit restart pass against
    Swift; full home/list rotation parity still needs
    the native crash/late-write scenarios. Reader and stale-epoch validation exist
    in the authority layer and must remain enforced by every new operation.

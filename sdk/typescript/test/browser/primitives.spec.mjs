@@ -475,6 +475,31 @@ test('BrowserDevice accepts native grants and enforces reader permissions',async
     const privateList=await page.evaluate(async()=>{const cid=await window.sharingDevice.createList('Private after cutoff');for await(const _ of window.sharingDevice.updates(window.sharingAbort.signal)){if(!(await window.sharingJournal.pending(window.sharingHub)).length&&!window.sharingDevice.operations.some(op=>!op.failure))return window.t.b64u(cid);}});
     await phone.command('sync');expect((await phone.command('lists')).lists.some(list=>list.id===privateList)).toBe(false);
     await owner.command('sync');expect((await owner.command('lists')).lists.some(list=>list.id===privateList)).toBe(false);
+    const rotated=await page.evaluate(async cid=>{await window.sharingDevice.rekey(window.t.unb64u(cid));for await(const _ of window.sharingDevice.updates(window.sharingAbort.signal)){if(!window.sharingDevice.operations.some(op=>!op.failure)&&!(await window.sharingJournal.pending(window.sharingHub)).length)return window.t.b64u(window.sharingDevice.state.collectionStatus(window.t.unb64u(cid)).epoch);}},shared.cid);
+    expect(rotated).toBeTruthy();await owner.command('sync');expect((await owner.command('items',{list:shared.cid})).items.find(item=>item.record===shared.record).values.title).toBe(node.b64u(Buffer.from('Browser shared this')));
+    await owner.command('set',{list:shared.cid,record:shared.record,field:'title',value:node.b64u(Buffer.from('Native after browser rotation'))});
+    await page.evaluate(async({cid,record})=>{for await(const _ of window.sharingDevice.updates(window.sharingAbort.signal)){const value=window.sharingDevice.state.record(window.t.unb64u(cid),window.t.unb64u(record))?.value('title');if(value&&new TextDecoder().decode(value)==='Native after browser rotation')return;}},shared);
+    await page.evaluate(async({cid,recipient})=>{await window.sharingDevice.removeMember(window.t.unb64u(cid),window.t.unb64u(recipient));for await(const _ of window.sharingDevice.updates(window.sharingAbort.signal)){if(!window.sharingDevice.operations.some(op=>!op.failure)&&!(await window.sharingJournal.pending(window.sharingHub)).length)return;}},{cid:shared.cid,recipient});
+    await owner.command('sync');expect((await owner.command('role',{list:shared.cid})).role).toBeNull();
+    const late=await page.evaluate(async({cfg,cid})=>{
+      const t=window.t;window.sharingAbort.abort();await window.sharingRun;window.sharingAbort=new AbortController();
+      let stopped,paused=false;const pause=new Promise(resolve=>{stopped=resolve;});
+      window.sharingRun=window.sharingDevice.run(async()=>{const store=await t.JMAPStore.open(cfg);return{
+        watch:signal=>store.watch(signal),changes:(cursor,signal)=>store.changes(cursor,signal),close:()=>store.close(),deleteBatchSize:store.deleteBatchSize,destroy:(ids,signal)=>store.destroy(ids,signal),append:()=>{throw new Error('prepared bytes required');},
+        appendPrepared:(wire,signal)=>{if(!paused&&window.sharingDevice.operations.some(op=>op.collection===cid&&op.phase==='announce-collection')){paused=true;stopped();window.sharingAbort.abort();signal.throwIfAborted();}return store.appendPrepared(wire,signal);}
+      };},window.sharingAbort.signal);void window.sharingRun.catch(()=>{});
+      await window.sharingDevice.rekey(t.unb64u(cid));await pause;await window.sharingRun;
+      const record=t.randomBytes(16);await window.sharingDevice.writeFields(t.unb64u(cid),record,[{field:'title',op:1,value:new TextEncoder().encode('Saved during rotation')}]);
+      return{cid,record:t.b64u(record)};
+    },{cfg,cid:privateList});
+    await page.reload();await page.evaluate(async()=>{window.t=await import('/sdk.js');});
+    const lateValue=await page.evaluate(async({cfg,hub,cid,record})=>{
+      const t=window.t;window.sharingJournal=await t.BrowserJournal.open('sharing');window.sharingKeys=await t.BrowserKeychain.open('sharing-keys');window.sharingDevice=await t.BrowserDevice.resume(t.unb64u(hub),window.sharingJournal,window.sharingKeys);window.sharingHub=hub;
+      window.sharingAbort=new AbortController();window.sharingRun=window.sharingDevice.run(()=>t.JMAPStore.open(cfg),window.sharingAbort.signal);void window.sharingRun.catch(()=>{});
+      for await(const _ of window.sharingDevice.updates(window.sharingAbort.signal)){if(!window.sharingDevice.operations.some(op=>!op.failure)&&!(await window.sharingJournal.pending(hub)).length){const value=window.sharingDevice.state.record(t.unb64u(cid),t.unb64u(record))?.value('title');return value?new TextDecoder().decode(value):undefined;}}
+    },{cfg,hub,...late});expect(lateValue).toBe('Saved during rotation');
+
+
 
   }finally{await page.evaluate(async()=>{window.sharingAbort?.abort();await window.sharingDevice?.close();window.sharingJournal?.close();window.sharingKeys?.close();});await phone.close();await owner.close();}
 });

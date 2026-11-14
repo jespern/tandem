@@ -88,6 +88,12 @@ export class HomePolicy {
   addInventory(epoch:Uint8Array,data:Uint8Array):void{const start=this.#object(epoch);if(!start||this.validity(epoch).kind!=='valid'||!eq(sha(data),start.fields.snapshot as Uint8Array))throw new Error('home inventory does not match a valid signed start');this.#inventories.set(b64u(epoch),parseInventory(data));this.#revision++;}
   listed(epoch:Uint8Array,w:Write):boolean{return this.#inventories.get(b64u(epoch))?.get(Buffer.from(w.record).toString('hex'))?.some(id=>eq(id,writeID(w)))??false;}
   #ancestor(source:Uint8Array,descendant:Uint8Array,seen=new Set<string>()):boolean{if(seen.has(b64u(descendant)))return false;seen.add(b64u(descendant));const start=this.#object(descendant);return !!start&&(start.fields.parents as Uint8Array[]).some(parent=>eq(parent,source)||this.#ancestor(source,parent,seen));}
+  sourceValidity(w:Write):Validity{
+    if(!eq(w.hub,this.#registry.pin.hub)||!eq(w.author,this.#participant)||!eq(w.scope,homeScope(this.#registry.pin.hub,this.#participant))||w.op===4)return bad('not a home source write');
+    const start=this.#object(w.ref);if(!start)return hold(w.ref);const historical=this.validity(w.ref);if(historical.kind!=='valid')return historical;
+    const auth=all([this.#registry.authorizes(w.authorization,w.certificate),this.#registry.extendsFloor(w.authorization,start.fields.auth as Uint8Array)]);if(auth.kind!=='valid')return auth;
+    const cert=this.#registry.certificate(w.certificate);return cert&&eq(cert.participant,this.#participant)&&verifyWrite(w,cert.sign)?valid:bad('bad home source signature');
+  }
   dataValidity(w:Write,channel:Uint8Array):Validity{
     if(!eq(w.hub,this.#registry.pin.hub)||!eq(w.author,this.#participant)||!eq(w.scope,homeScope(this.#registry.pin.hub,this.#participant)))return bad('not this participant home');
     if(w.op===4)return bad('home named records cannot be deleted');

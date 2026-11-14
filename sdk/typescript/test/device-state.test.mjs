@@ -78,3 +78,43 @@ test('a home rotation carries fixed state, ancestry and inventory before announc
   f.apply(operation.phases[2].messages);assert.equal(f.state.homeReady,true);
   const restored=new t.DeviceState(new t.Registry(f.pin),f.directory,f.participant,f.keys);restored.offerHomeKey(f.homeID,f.homeKey,true);restored.ingest([...f.messages].reverse());assert.deepEqual(restored.homeEpochs,[epoch]);assert.equal(restored.homeRecord('settings:liszto').value('theme').toString(),'classic');
 });
+
+test('collection rotation stages its note and complete snapshot before activating the epoch',()=>{
+  const f=fixture(),record=t.randomBytes(16);f.apply(f.state.prepareField(f.cid,record,[{field:'title',op:1,value:Buffer.from('Carried')}],f.reserve));
+  const op=f.state.prepareCollectionRotation(f.cid,f.reserve),epoch=t.unb64u(op.details.epoch);assert.equal(op.kind,'collection-rotation');
+  f.apply(op.phases[0].messages);assert.equal(f.state.collectionStatus(f.cid).epoch.toString('hex'),f.epoch.toString('hex'));
+  f.apply(op.phases[1].messages);assert.equal(f.state.collectionStatus(f.cid).epoch.toString('hex'),f.epoch.toString('hex'));
+  f.apply(op.phases[2].messages);assert.equal(f.state.collectionStatus(f.cid).epoch.toString('hex'),epoch.toString('hex'));assert.equal(f.state.record(f.cid,record).value('title').toString(),'Carried');
+  for(const phase of op.phases.slice(3)){if(phase.intent){const prepared=f.state.prepareIntent(phase.intent,f.reserve,{deliveries:f.messages});phase.messages=prepared.messages;}f.apply(phase.messages);}
+  assert.equal(f.state.homeRecord('membership:'+t.b64u(f.cid)).value('flight').toString(),'null');
+  assert.equal(f.state.collectionStatus(f.cid).ready,true);
+});
+
+test('this installation re-signs its own late edit with its original dot and causal base',()=>{
+  const f=fixture(),record=t.randomBytes(16);f.apply(f.state.prepareField(f.cid,record,[{field:'title',op:1,value:Buffer.from('Before')}],f.reserve));
+  const rotation=f.state.prepareCollectionRotation(f.cid,f.reserve);f.apply(rotation.phases[0].messages);f.apply(rotation.phases[1].messages);
+  const late=f.state.prepareField(f.cid,record,[{field:'title',op:1,value:Buffer.from('Late')}],f.reserve);f.apply(late);const original=f.state.record(f.cid,record).siblings('title')[0].write;
+  f.apply(rotation.phases[2].messages);assert.equal(f.state.record(f.cid,record).value('title').toString(),'Before');
+  const settled=f.state.prepareLateWrites(new Uint8Array(8),{millis:12,counter:65535},new Set(),late.map(message=>({...message,id:t.b64u(t.sha(message.body))})));
+  assert.ok(settled.messages.length);f.apply(settled.messages);const current=f.state.record(f.cid,record).siblings('title')[0].write;
+  assert.equal(current.value.toString(),'Late');assert.deepEqual(current.dot,original.dot);assert.notDeepEqual(current.ref,original.ref);assert.ok(current.base.some(dot=>t.b64u(dot.device)===t.b64u(original.dot.device)&&dot.counter>=original.dot.counter));
+  const again=f.state.prepareLateWrites(new Uint8Array(8),{millis:12,counter:65535},new Set(settled.processed));assert.equal(again.messages.length,0);assert.equal(again.unshared.length,0);
+  const other=f.state.prepareLateWrites(new Uint8Array(8).fill(9),{millis:12,counter:65535},new Set());assert.equal(other.messages.length,0);
+});
+
+test('a forged claim about this installation’s future clock cannot suppress its late edit',()=>{
+  for(const forged of [true,false]){
+    const f=fixture(),creator=f.registry.certificate(t.objectID('certificate',objects.get('creator certificate').fields));
+    f.apply(f.state.prepareShare(f.cid,creator.participant,'writer','Bob',f.reserve).phases[0].messages);
+    const record=t.randomBytes(16);f.apply(f.state.prepareField(f.cid,record,[{field:'title',op:1,value:Buffer.from('Before')}],f.reserve));
+    const rotation=f.state.prepareCollectionRotation(f.cid,f.reserve);f.apply(rotation.phases[0].messages);f.apply(rotation.phases[1].messages);
+    f.apply(f.state.prepareField(f.cid,record,[{field:'title',op:1,value:Buffer.from('Late own value')}],f.reserve));const original=f.state.record(f.cid,record).siblings('title')[0];
+    f.apply(rotation.phases[2].messages);
+    const epoch=t.unb64u(rotation.details.epoch),key=t.unb64u(rotation.details.key),auth=f.registry.add(f.registry.currentSnapshot(creator.participant));
+    const write=t.signWrite({hub:f.pin.hub,scope:f.cid,record,field:'title',op:1,author:creator.participant,certificate:creator.id,authorization:auth,dot:{device:new Uint8Array(8).fill(7),millis:50,counter:0},value:Buffer.from('Other value'),element:null,ref:epoch,context:[],base:[{...original.write.dot,millis:forged?999:original.write.dot.millis}],signature:new Uint8Array(64)},t.privateKey(seed('creator signing'),'ed25519'));
+    f.envelope(key,t.collectionTag(key,f.pin.hub,epoch),t.recordPayload(record,[write]));f.state.ingest(f.messages);
+    const settled=f.state.prepareLateWrites(new Uint8Array(8),{millis:12,counter:65535},new Set());
+    if(forged){f.apply(settled.messages);assert.ok(f.state.record(f.cid,record).siblings('title').some(entry=>entry.write.value.toString()==='Late own value'));assert.equal(settled.unshared.some(item=>item.write===t.b64u(original.id)),false);}
+    else{assert.equal(settled.messages.length,0);assert.ok(settled.unshared.some(item=>item.write===t.b64u(original.id)));}
+  }
+});
