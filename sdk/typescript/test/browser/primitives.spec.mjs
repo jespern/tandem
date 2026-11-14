@@ -372,16 +372,30 @@ test('BrowserDevice pairs, restores offline edits, and refuses a revocation arri
     const cid=(await command('createList',{name:'Controller notes'})).list,record=node.b64u(node.randomBytes(16));await command('set',{list:cid,record,field:'title',value:node.b64u(Buffer.from('Native original'))});
     const {link}=await command('startPairing',{label:'Browser controller'}),hub=node.parsePairingLink(link).hub;
     const install=async({cfg,link,hub,resume})=>{
-      const t=window.t;window.controllerJournal=await t.BrowserJournal.open('controller');window.controllerKeys=await t.BrowserKeychain.open('controller-keys');
+      const t=window.t;window.controllerLink=link;window.controllerJournal=await t.BrowserJournal.open('controller');window.controllerKeys=await t.BrowserKeychain.open('controller-keys');
       window.controllerDevice=resume?await t.BrowserDevice.resume(t.unb64u(hub),window.controllerJournal,window.controllerKeys):await t.BrowserDevice.pair(link,'Browser controller',window.controllerJournal,window.controllerKeys);
-      window.controllerHub=hub;window.controllerAbort=new AbortController();window.controllerRun=window.controllerDevice.run(()=>t.JMAPStore.open(cfg),window.controllerAbort.signal);void window.controllerRun.catch(()=>{});
+      window.controllerHub=hub;window.controllerHoldRelease=!window.controllerDevice.state;window.controllerHeldRelease=[];window.controllerSawHomeKey=false;window.controllerAbort=new AbortController();
+      window.controllerRun=window.controllerDevice.run(async()=>{const store=await t.JMAPStore.open(cfg),read=store.changes.bind(store),keys=await window.controllerKeys.deviceKeys(),participant=t.parsePairingLink(window.controllerLink).participant;
+        store.changes=async(...args)=>{const batch=await read(...args),added=[];for(const message of batch.added){let type;try{if(message.channel===t.inboxTag(participant,t.unb64u(hub)))type=JSON.parse(new TextDecoder().decode(t.openInbox(t.unb64u(hub),participant,keys.agreement,message.body))).type;}catch{}
+          if(type==='home-key')window.controllerSawHomeKey=true;
+          if(window.controllerHoldRelease&&type==='pair-release')window.controllerHeldRelease.push(message);else added.push(message);
+        }return{...batch,added};};return store;
+      },window.controllerAbort.signal);void window.controllerRun.catch(()=>{});
       window.controllerReady=(async()=>{for await(const update of window.controllerDevice.updates(window.controllerAbort.signal)){if(update.status==='ready')return true;}return false;})();void window.controllerReady.catch(()=>{});
       window.waitControllerSends=async()=>{for await(const _ of window.controllerDevice.updates(window.controllerAbort.signal)){if(!(await window.controllerJournal.pending(hub)).length&&!window.controllerDevice.operations.length)return;}};
     };
     await page.evaluate(install,{cfg,link,hub:node.b64u(hub),resume:false});
     await page.evaluate(async()=>{for await(const update of window.controllerDevice.updates(window.controllerAbort.signal)){if(update.status==='approval')break;}await window.waitControllerSends();});
-    await page.reload();await page.evaluate(async()=>{window.t=await import('/sdk.js');});await page.evaluate(install,{cfg,hub:node.b64u(hub),resume:true});
+    await page.reload();await page.evaluate(async()=>{window.t=await import('/sdk.js');});await page.evaluate(install,{cfg,link,hub:node.b64u(hub),resume:true});
     await command('sync');const claims=(await command('claims')).claims;expect(claims).toHaveLength(1);await command('approve',{claim:claims[0].id});
+    await command('sync');
+    const held=await page.evaluate(async({cid,record})=>{
+      const t=window.t;for await(const _ of window.controllerDevice.updates(window.controllerAbort.signal))if(window.controllerHeldRelease.length&&window.controllerSawHomeKey)break;
+      let refused=false;try{await window.controllerDevice.writeFields(t.unb64u(cid),t.unb64u(record),[{field:'title',op:1,value:new TextEncoder().encode('Must wait for gate')}]);}catch{refused=true;}
+      const hidden=window.controllerDevice.state===undefined;window.controllerHoldRelease=false;
+      await window.controllerJournal.apply(window.controllerHub,{added:window.controllerHeldRelease,removed:[],cursor:await window.controllerJournal.cursor(window.controllerHub)});
+      return{hidden,refused};
+    },{cid,record});expect(held).toEqual({hidden:true,refused:true});
     expect(await page.evaluate(()=>window.controllerReady)).toBe(true);
     const certificate=await page.evaluate(()=>window.t.b64u(window.controllerDevice.state.certificate.id));
     const created=await page.evaluate(async()=>{const id=await window.controllerDevice.createList('Browser made');await window.waitControllerSends();return window.t.b64u(id);});await command('sync');
@@ -404,12 +418,28 @@ test('BrowserDevice pairs, restores offline edits, and refuses a revocation arri
       }finally{await store.close();}
     },{cfg,cid:created});expect(healed).toBe(true);
 
+    const retained=await page.evaluate(async cfg=>{
+      await window.waitControllerSends();const t=window.t,journal=window.controllerJournal,certificate=t.b64u(window.controllerDevice.state.certificate.id);
+      const event=(await journal.readEvents(window.controllerHub,0,100000)).find(row=>row.kind==='queued'&&row.guard?.purpose==='home-key'&&row.guard.certificate===certificate);
+      if(!event)throw new Error('no journalled key delivery');const copies=(await journal.deliveries(window.controllerHub)).filter(row=>row.present&&row.id===event.id);
+      window.controllerAbort.abort();await window.controllerRun;await window.controllerDevice.close();
+      const store=await t.JMAPStore.open(cfg);try{await store.destroy(copies.map(row=>row.remoteId),new AbortController().signal);}finally{await store.close();}
+      return{hash:event.id,old:copies.map(row=>row.remoteId)};
+    },cfg);
+    await page.reload();await page.evaluate(async()=>{window.t=await import('/sdk.js');});await page.evaluate(install,{cfg,link,hub:node.b64u(hub),resume:true});
+    const restoredEnvelope=await page.evaluate(async retained=>{
+      for await(const _ of window.controllerDevice.updates(window.controllerAbort.signal)){
+        const rows=await window.controllerJournal.deliveries(window.controllerHub);
+        if(rows.some(row=>row.present&&row.id===retained.hash&&!retained.old.includes(row.remoteId))){await window.waitControllerSends();return true;}
+      }return false;
+    },retained);expect(restoredEnvelope).toBe(true);
+
     const offline=await page.evaluate(async({cid,record})=>{
       const t=window.t;window.controllerAbort.abort();await window.controllerRun;
       await window.controllerDevice.writeFields(t.unb64u(cid),t.unb64u(record),[{field:'title',op:1,value:new TextEncoder().encode('Saved offline')}]);
       return{value:new TextDecoder().decode(window.controllerDevice.state.record(t.unb64u(cid),t.unb64u(record)).value('title')),pending:(await window.controllerJournal.pending(window.controllerHub)).length};
     },{cid,record});expect(offline.value).toBe('Saved offline');expect(offline.pending).toBeGreaterThan(0);
-    await page.reload();await page.evaluate(async()=>{window.t=await import('/sdk.js');});await page.evaluate(install,{cfg,hub:node.b64u(hub),resume:true});
+    await page.reload();await page.evaluate(async()=>{window.t=await import('/sdk.js');});await page.evaluate(install,{cfg,link,hub:node.b64u(hub),resume:true});
     await page.evaluate(async()=>{await window.controllerReady;await window.waitControllerSends();});await command('sync');
     expect((await command('items',{list:cid})).items.find(item=>item.record===record).values.title).toBe(node.b64u(Buffer.from('Saved offline')));
     await page.evaluate(async()=>{window.controllerAbort.abort();await window.controllerRun;});
@@ -532,4 +562,41 @@ test('held first-page outbox entries cannot starve later exportable edits',async
       return{appended,pending:(await journal.allPending(hub)).length,targetQueued:(await journal.queued(hub,[target])).has(target)};
     }finally{abort.abort();await running.catch(()=>{});journal.close();}
   });expect(result).toEqual({appended:1,pending:259,targetQueued:false});
+});
+
+test('browser admin resumes a journalled approval, revokes a native peer and changes the password capsule',async({page})=>{
+  test.skip(!process.env.TANDEM_NATIVE_FIXTURE,'run sdk/check_browser.py --native');test.setTimeout(180_000);
+  const native=JSON.parse(process.env.TANDEM_NATIVE_FIXTURE),cfg=JSON.parse(process.env.TANDEM_JMAP_FIXTURE),owner=nativeDriver(native),phone=nativeDriver(native),invitee=nativeDriver(native);
+  const password='Tandem browser admin fixture password',nextPassword='Tandem browser replacement password';
+  try{
+    await owner.command('hub',native);await owner.command('found',{label:'Admin Mac',hubPassword:password});
+    const link=(await owner.command('startPairing',{label:'Browser admin'})).link,hub=node.b64u(node.parsePairingLink(link).hub);
+    await page.evaluate(async({cfg,link,hub})=>{
+      const t=window.t;window.adminHub=hub;window.adminJournal=await t.BrowserJournal.open('admin');window.adminKeys=await t.BrowserKeychain.open('admin-keys');window.adminDevice=await t.BrowserDevice.pair(link,'Browser admin',window.adminJournal,window.adminKeys);
+      window.startAdmin=()=>{window.adminAbort=new AbortController();window.adminRun=window.adminDevice.run(()=>t.JMAPStore.open(cfg),window.adminAbort.signal);void window.adminRun.catch(()=>{});};window.startAdmin();
+      window.waitAdmin=async predicate=>{for await(const update of window.adminDevice.updates(window.adminAbort.signal))if(predicate(window.adminDevice,update))return;};
+      window.adminSends=async()=>{for await(const _ of window.adminDevice.updates(window.adminAbort.signal)){if(!(await window.adminJournal.allPending(hub)).length&&!window.adminDevice.operations.length)return;}};
+      await window.waitAdmin((device,update)=>update.status==='approval');await window.adminSends();
+    },{cfg,link,hub});
+    await owner.command('sync');const claim=(await owner.command('claims')).claims[0];await owner.command('approve',{claim:claim.id});
+    await page.evaluate(async password=>{await window.waitAdmin((device,update)=>update.status==='ready');window.adminSeed=await window.adminDevice.unlock(password);await window.adminSends();},password);
+    const childLink=await page.evaluate(async()=>{const link=await window.adminDevice.startPairing('Native peer approved by browser');await window.adminSends();return window.t.b64u(window.t.pairingLinkJSON(link));});await phone.command('hub',native);await phone.command('pair',{link:childLink,label:'Native peer approved by browser'});
+    const approved=await page.evaluate(async()=>{
+      const t=window.t;await window.waitAdmin(device=>device.state?.claims().some(claim=>claim.label==='Native peer approved by browser'));const claim=window.adminDevice.state.claims().find(claim=>claim.label==='Native peer approved by browser');
+      window.adminAbort.abort();await window.adminRun;await window.adminDevice.approve(claim.id,window.adminSeed);
+      const saved=await window.adminJournal.actions(window.adminHub);await window.adminDevice.close();
+      window.adminDevice=await t.BrowserDevice.resume(t.unb64u(window.adminHub),window.adminJournal,window.adminKeys);window.startAdmin();await window.adminSends();
+      return{saved:saved.length,claims:window.adminDevice.state.claims().length};
+    });expect(approved.saved).toBeGreaterThan(0);expect(approved.claims).toBe(0);
+    await phone.command('sync');const peer=await phone.command('me');expect(peer.awaitingApproval).toBe(false);
+    await page.evaluate(async certificate=>{const t=window.t;await window.adminDevice.revoke(t.unb64u(certificate),window.adminSeed);await window.adminSends();},peer.certificate);
+    const created=await page.evaluate(async()=>{const id=await window.adminDevice.createList('Private after browser revocation');await window.adminSends();return window.t.b64u(id);});
+    await phone.command('sync');expect((await phone.command('lists')).lists.some(list=>list.id===created)).toBe(false);
+    const invitation=await page.evaluate(async()=>{const link=await window.adminDevice.invite('Invited by browser',window.adminSeed);await window.adminSends();return link;});
+    await invitee.command('hub',native);await invitee.command('join',{link:invitation,label:'Invited by browser'});expect((await invitee.command('me')).awaitingApproval).toBe(false);expect((await invitee.command('lists')).lists).toHaveLength(0);
+    await page.evaluate(async password=>{await window.adminDevice.changePassword(password,window.adminSeed);await window.adminSends();window.adminSeed.fill(0);delete window.adminSeed;},nextPassword);
+    await owner.command('sync');await owner.command('unlock',{password:nextPassword});await expect(owner.command('unlock',{password})).rejects.toThrow();
+  }finally{
+    await page.evaluate(async()=>{window.adminSeed?.fill(0);window.adminAbort?.abort();await window.adminDevice?.close();window.adminJournal?.close();window.adminKeys?.close();});await owner.close();await phone.close();await invitee.close();
+  }
 });

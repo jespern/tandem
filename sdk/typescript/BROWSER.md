@@ -2,9 +2,10 @@
 
 `@tandem/protocol/browser` runs without Node built-ins or a Tandem backend. It
 talks directly to a JMAP mail server. This is the primitive layer: Liszto's UI
-still needs to be built on it. The browser controller currently supports pairing,
-verified home/collection reads and durable field/set edits. Owner sharing and home/collection key rotation now use durable stages. Other
-management workflows and delivery-envelope healing remain acceptance gates.
+still needs to be built on it. The browser controller supports pairing in both directions, hub invitations,
+verified home/collection reads, durable field/set edits, owner sharing, key
+rotation and administration. Key-envelope and record healing survive reloads.
+Browser-first hub founding/join/recovery and Liszto’s UI remain acceptance gates.
 
 ## Runtime and storage
 
@@ -12,7 +13,7 @@ The Node and browser builds share write/control encodings, strict JSON/base64url
 Ed25519 acceptance, inventories and record merging. Node keeps native crypto.
 The browser backend uses Noble hashes, curves and ciphers with Web Crypto's
 random source; `buffer` supplies the existing byte API. The SDK bundle costs
-about 74 KB gzip; the Argon2 worker loads separately.
+about 78 KB gzip; the Argon2 worker loads separately.
 
 Private keys now use an opaque SDK `PrivateKey` handle in both runtimes. Construct
 them with `privateKey(seed, algorithm)`; pass that handle to signing/agreement
@@ -32,7 +33,7 @@ remain candidates until signed commitments confirm them. Defaults hold 100,000
 home epochs/roster statements, eight candidate keys per epoch, 16 home witnesses,
 1,024 home ancestry links and 1,024 candidate collection epochs. Constructor limits
 are configurable; exhaustion raises a holding error rather than invalidating proof.
-These are authority primitives; they do not yet provide device operations.
+These authority primitives feed the durable device operations below.
 
 `BrowserJournal` owns a separate IndexedDB database. A synchronous signing/sealing
 callback in `queue` reserves the clock and journals exact encrypted/MIME bytes in
@@ -101,7 +102,10 @@ hashes, and prepares exact HPKE claim envelopes. Persist its pending secrets in
 `releasePairing` requires the exact admitted request, recipient keys, certificate,
 delegation and package hash before opening the gated package. Its home key is
 still a candidate for `HomePolicy`. `BrowserDevice` runs this enrollment flow;
-browser-side admin approval is not implemented yet.
+`unlock` opens a current signed capsule in the Argon2 worker. The returned seed
+is not persisted by the controller; pass it to an admin operation and erase it
+when finished. The controller supports approval/rejection, device revocation,
+invitation cancellation and password replacement.
 
 `InventoryAssembler` keeps competing fragment versions separately and accepts
 only canonical bytes matching the signed commitment. Defaults: 4,096 parts,
@@ -146,7 +150,9 @@ The controller re-signs its own installation’s late writes into a later epoch,
 retaining their original dot and causal base. It never re-signs another device’s
 writes. Implausible claims about its future clock cannot suppress a late edit;
 plausibly superseded edits that may have been left behind are exposed through
-`unshared` for app recovery. Local bookkeeping and re-signed bytes commit together.
+`unshared` for app recovery. `state.historicalWrite(scope, writeID)` retrieves
+a verified copy of the historical write for rescue; it grants no membership and
+never re-signs someone else’s edit. Local bookkeeping and re-signed bytes commit together.
 A reload immediately before announcement preserves an edit made in that gap.
 
 Current-channel hygiene restores missing kept records, roster ancestry, home starts
@@ -156,6 +162,39 @@ only a confirmed physical replacement permits deletion of dominated data. Held
 writes, metadata and equal-byte duplicate envelopes are retained. Concurrent home
 heads keep their own writes/inventory; healing does not copy sibling-head edits
 back and forth. This pass runs on durable events and local commits, without a timer.
+
+`startPairing(label, validForMs)` prepares a native-compatible delegation, gated
+package and gate box, then records it in the private home. Its default lifetime is
+24 hours. `cancelPairing(token)` atomically cancels unsent stages and publishes the
+participant-signed cancellation. `invite(label, seed, validForMs)` returns a native
+invitation; the default lifetime is seven days. The native IMAP credentials in the
+existing enrollment link remain separate from JMAP credentials. Lifetimes are
+configurable per call. These browser APIs return after durable local commit;
+`operations` reports the mail-confirmed stages, so links created offline become
+usable as their staged packets reach the mailbox.
+
+`approve`, `reject`, `revoke`, `cancelInvitation` and `changePassword` use the
+unlocked management seed. Approval journals exact admission proofs first, waits
+for mailbox confirmation, then releases the gate to the exact admitted keys.
+A later revocation retires a queued release. Missing dependencies hold operations;
+they do not falsely mark them revoked. Hypothetical certificates are checked in a
+separate registry fork, leaving live admission unchanged until confirmed.
+Revocations enter local authority with their durable outbox commit, so later
+private writes immediately require any necessary key rotation. Password changes
+confirm a signed replacement before deleting the capsules it supersedes. Seeds
+are not written into action plans. Plan boxes may contain pairing link secrets
+and exact encrypted release envelopes, under the separate keychain wrapping key.
+
+Before the exact gated release, `state` is unavailable and local device operations
+are refused, even if another peer has already forwarded a home-key notice. The
+controller publishes only its enrollment claim in that state. Once paired,
+queued recipient envelopes retain their guards in journal events. Reloads resend
+missing deliveries byte for byte; successor deliveries replace obsolete copies
+only after confirmation. New admitted recipients get current home keys/grants
+without bypassing an active rotation’s stages. Revoked recipients get no repair.
+A staged record can also remain confirmed through a newer, physically present
+valid record that dominates it; compaction cannot trap an action in a resend loop.
+Inventories and control proofs still require exact confirmation.
 
 The controller owns the journal's opaque per-hub action state. Device Web Locks
 serialize local actions across tabs. A write transaction also checks the last
@@ -209,19 +248,19 @@ home-key confirmation. It additionally verifies native/browser edits both ways,
 controller enrollment/reload, offline edit recovery and revocation between replay
 and commit. Native clients also read browser-created lists and acceptance answers;
 reader edits are refused, and browser writer edits survive native list rekeys.
-All browser scenarios passed locally, including native collection rotation,
-member removal, home cutoff and a late edit across an interrupted rotation. Only that fixture accepts self-signed TLS;
+All 19 browser scenarios passed locally, including native collection rotation,
+member removal, home cutoff, a late edit across an interrupted rotation, key
+envelope repair after reload, and browser administration accepted by Swift. Only that fixture accepts self-signed TLS;
 production SDK checks stay enabled.
 It explicitly enables browser CORS and publishes real loopback URLs, with no proxy.
 
 ## Remaining acceptance gates
 
-1. Finish the remaining management operations and healing.
-   Pairing/release, bidirectional field edits, list creation/acceptance, browser
-   sharing, home/list rotation, member removal and late-edit restart pass against
-   Swift; full home/list rotation parity still needs
-   the native crash/late-write scenarios. Reader and stale-epoch validation exist
-   in the authority layer and must remain enforced by every new operation.
+1. Browser-first hub founding, joining an invitation and creator recovery still
+   need controller entry points. The current onboarding path pairs with an
+   existing device; browsers can then stage further pairings and invitations.
+   Explicit owner-note finish/discard, broader restore/rescue UI and the full
+   native crash corpus remain parity work. No browser workspace is shipped here.
 2. Shared Liszto field-value vectors against its native adapter, then the browser
    store/operations layer and workspace with the same completion and keyboard rules.
 3. Fastmail passes direct Chromium CORS/push/replay/deletion and byte-exact IMAP

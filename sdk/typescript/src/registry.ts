@@ -98,6 +98,13 @@ export class Registry {
     }
     this.#revision++;this.#certCache.clear();return Uint8Array.from(id);
   }
+  /** Immutable private witnesses may be shared; all maps and witness arrays are
+   * separate, so preparing a certificate cannot change live admission state. */
+  fork():Registry{const copy=new Registry(this.#pin,this.#maxDepth,this.#maxWitnesses);
+    for(const [k,v]of this.#certs)copy.#certs.set(k,v);for(const [k,v]of this.#revs)copy.#revs.set(k,v);for(const [k,v]of this.#certWitnesses)copy.#certWitnesses.set(k,[...v]);
+    for(const [k,v]of this.#snapshots)copy.#snapshots.set(k,v);for(const [k,v]of this.#delegations)copy.#delegations.set(k,[...v]);for(const [k,v]of this.#capabilities)copy.#capabilities.set(k,v);copy.#revision=this.#revision;return copy;
+  }
+  delegation(id:Uint8Array):ControlObject|undefined{const rows=this.#delegations.get(b64u(id)),valid=rows?.find(o=>{const source=this.#certs.get(b64u(o.fields.source as Uint8Array));return !!source&&proof(o,'sig',source.sign);});return valid?copyObject(valid):undefined;}
   get revision():number{return this.#revision;}
   certificate(id: Uint8Array): Certificate | undefined { const witnesses=this.#certWitnesses.get(b64u(id)); const c=witnesses?.find(w=>this.#oneCertOK(w,0).kind==='valid')??witnesses?.[0]; return c ? certificate(copyObject(c.object)) : undefined; }
   get allCertificates(): Certificate[] { return [...this.#certs.values()].map(c => this.certificate(c.id)!); }

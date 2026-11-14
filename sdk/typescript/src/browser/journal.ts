@@ -9,7 +9,7 @@ export type {ExportGuard} from '../operation.js';
 export interface JournalAction {id:string;hub:string;sealed:Uint8Array}
 export interface PendingDelete {hub:string;id:string}
 export interface OutboxEntry {guard?:ExportGuard;deferred?:boolean;id: string; hub: string; channel: string; body: Uint8Array; wire: Uint8Array; remoteId?: string}
-export interface JournalEvent {deferred?:boolean;sequence: number; hub: string; kind: 'queued' | 'received' | 'removed'; id: string; channel: string; body: Uint8Array; remoteId?: string}
+export interface JournalEvent {guard?:ExportGuard;deferred?:boolean;sequence: number; hub: string; kind: 'queued' | 'received' | 'removed'; id: string; channel: string; body: Uint8Array; remoteId?: string}
 export interface LocalMessage {guard?:ExportGuard;deferred?:boolean;channel: string; body: Uint8Array}
 export interface LocalTransaction {
   /** Opaque device state, read under the same transaction lock as the outbox. */
@@ -133,7 +133,7 @@ export class BrowserJournal {
         if (previous && previous.channel !== message.channel) throw new Error('queued channel changed');
         if (!previous) {
           const entry: OutboxEntry = {...message, hub, wire: buildMessage(message.channel, message.body)};
-          outbox.put(entry, [hub, entry.id]); events.add({hub, kind: 'queued', id: entry.id, channel: entry.channel, body: entry.body, ...(entry.deferred?{deferred:true}:{})} satisfies EventRow); queued = true;
+          outbox.put(entry, [hub, entry.id]); events.add({hub, kind: 'queued', id: entry.id, channel: entry.channel, body: entry.body, ...(entry.guard?{guard:entry.guard}:{}), ...(entry.deferred?{deferred:true}:{})} satisfies EventRow); queued = true;
         }
       }
       await done; if (queued || reserved || updated !== undefined || !active || actionUpdates.length || plan.cancel?.length || plan.destroy?.length) this.#notify(queued || !!plan.destroy?.length); return messages.map(message => message.id);

@@ -115,7 +115,7 @@ test('a forged claim about this installation’s future clock cannot suppress it
     f.envelope(key,t.collectionTag(key,f.pin.hub,epoch),t.recordPayload(record,[write]));f.state.ingest(f.messages);
     const settled=f.state.prepareLateWrites(new Uint8Array(8),{millis:12,counter:65535},new Set());
     if(forged){f.apply(settled.messages);assert.ok(f.state.record(f.cid,record).siblings('title').some(entry=>entry.write.value.toString()==='Late own value'));assert.equal(settled.unshared.some(item=>item.write===t.b64u(original.id)),false);}
-    else{assert.equal(settled.messages.length,0);assert.ok(settled.unshared.some(item=>item.write===t.b64u(original.id)));}
+    else{assert.equal(settled.messages.length,0);assert.ok(settled.unshared.some(item=>item.write===t.b64u(original.id)));const rescued=f.state.historicalWrite(f.cid,original.id);assert.equal(Buffer.from(rescued.value).toString(),'Late own value');rescued.value.fill(0);assert.equal(Buffer.from(f.state.historicalWrite(f.cid,original.id).value).toString(),'Late own value');}
   }
 });
 
@@ -142,4 +142,31 @@ test('inventory healing requires the correct part index and count as well as sli
   const malformed=f.envelope(key,tag,Buffer.from(JSON.stringify({inventory:{epoch:t.b64u(epoch),part:1,parts:2,bytes:t.b64u(fragment.bytes)}})));f.state.ingest([malformed]);received.push(malformed);
   const repair=f.state.prepareHygiene(presence(received),new Set()),fragments=repair.messages.filter(message=>message.channel===tag).map(message=>t.parseKind1(t.openEnvelope(key,f.pin.hub,tag,message.body).plaintext,f.pin.hub,f.cid)).filter(p=>!('writes'in p));
   assert.equal(fragments.length,1);assert.equal(fragments[0].part,0);assert.equal(fragments[0].parts,1);assert.deepEqual(fragments[0].bytes,fragment.bytes);
+});
+
+test('an operation barrier accepts a valid physical replacement of a compacted record',()=>{
+  const f=fixture(),record=t.randomBytes(16),first=f.state.prepareField(f.cid,record,[{field:'title',op:1,value:Buffer.from('Old')}],f.reserve);f.apply(first);
+  const second=f.state.prepareField(f.cid,record,[{field:'title',op:1,value:Buffer.from('New')}],f.reserve);f.apply(second);
+  assert.equal(f.state.messageCovered(first[0],presence(second)),true);
+  assert.equal(f.state.messageCovered(second[0],presence(first)),false);
+  assert.equal(f.state.messageCovered(first[0],[]),false);
+  const roster=f.messages.find(m=>{if(m.channel!==f.tag)return false;const p=t.parseKind1(t.openEnvelope(f.collectionKey,f.pin.hub,f.tag,m.body).plaintext,f.pin.hub,f.cid);return'writes'in p&&t.b64u(p.record)===t.b64u(t.ROSTER_RECORD);});
+  assert.equal(f.state.messageCovered(roster,presence(f.messages)),false);
+});
+test('home key delivery slots suppress new HPKE generation and old epochs retire after rotation',()=>{
+  const f=fixture(),messages=f.state.prepareKeyDeliveries(new Set()),home=messages.filter(message=>message.guard?.purpose==='home-key');assert.equal(home.length,1);
+  const known=new Set(home.map(message=>JSON.stringify(['home-key',message.guard.certificate,null,message.guard.epoch])));assert.equal(f.state.prepareKeyDeliveries(known).length,0);
+  assert.equal(f.state.exportable(home[0]),true);
+  const rotation=f.state.prepareHomeRotation();f.state.offerHomeKey(t.unb64u(rotation.details.epoch),t.unb64u(rotation.details.key));f.apply(rotation.phases[0].messages);f.apply(rotation.phases[1].messages);
+  assert.equal(f.state.deliveryRetired(home[0]),true);assert.equal(f.state.exportable(home[0]),false);
+});
+
+test('a browser stages an exact native pairing package and can cancel it in its private home',()=>{
+  const f=fixture(),prepared=f.state.preparePairing('Another browser',{host:'mail.example.test',port:993,user:'fixture',pass:'app-password'}),stage=prepared.operation.phases[0].messages;
+  assert.equal(stage.length,3);assert.equal(f.state.homeRecord('pairing:'+t.b64u(prepared.link.token)),undefined);
+  const proposal=t.proposePairing(prepared.link,f.registry,stage.map(message=>({...message,id:t.b64u(t.sha(message.body))})),t.deviceKeys(),'Another browser');assert.ok(proposal);
+  f.apply(f.state.prepareIntent(prepared.operation.phases[1].intent,f.reserve).messages);const name='pairing:'+t.b64u(prepared.link.token);
+  assert.equal(f.state.homeRecord(name).value('label').toString(),'Another browser');assert.equal(f.state.homeRecord(name).elements('outcome').length,0);
+  f.apply(f.state.prepareCancelPairing(prepared.link.token,f.reserve));assert.equal(f.state.homeRecord(name).elements('outcome').length,1);
+  assert.throws(()=>f.state.preparePairing('Expired',prepared.link.mail,0),/lifetime/);
 });

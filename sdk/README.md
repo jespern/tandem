@@ -11,8 +11,8 @@ implementations on `testbed` are separate.
 The [browser target](typescript/BROWSER.md) adds direct JMAP push, an IndexedDB
 journal, remembered browser keys and worker-based admin capsules for Liszto.
 Its durable controller supports pairing, verified reads/edits, sharing and
-home/collection rotation, removal and healing. Remaining browser admin workflows
-and Liszto’s web workspace still need integration. All four SDKs also offer an
+home/collection rotation, removal and healing. Browser administration and pairing/invitation creation are implemented. Browser-first
+founding/join/recovery and Liszto’s web workspace still need integration. All four SDKs also offer an
 [optional JMAP transport](JMAP.md); native applications keep IMAP as the default.
 
 | Language | Runtime | Changes arrive as | Runtime dependencies |

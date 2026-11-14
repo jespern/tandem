@@ -1,6 +1,6 @@
 import {Buffer} from 'buffer';
 import {type PrivateKey,bytes,b64u,unb64u,sha,publicKey,randomBytes,commit,sealInbox,openEnvelope,openInbox,seal,directoryTag,directoryKey,homeTag,homeScope,inboxTag,collectionTag,namedID} from './crypto.js';
-import {type ControlObject,controlFromJSON,controlToJSON,parseControl,objectID,signControl,sealHomeRecovery,verifyControl} from './control.js';
+import {type ControlObject,controlFromJSON,controlToJSON,parseControl,objectID,signControl,sealHomeRecovery,verifyControl,pairingInviteKey,pairingKey,pairingTag,sealPackage,sealGate} from './control.js';
 import {parseJSON,validUnicode} from './json.js';
 import {type Dot,type Write,type Op,Entry,RecordState,parseKind1,recordPayload,signWrite,writeID,inventoryBytes,supersedes,join,MAX_VECTOR,verifyWrite} from './core.js';
 import {Registry,RegistryHoldingLimit,type Certificate,type Validity} from './registry.js';
@@ -9,7 +9,10 @@ import {CollectionPolicy,CollectionHoldingLimit,ROSTER_RECORD,META_RECORD,statem
 import {InventoryAssembler,InventoryHoldingLimit,inventoryPayloads,type InventoryFragment} from './inventory-assembly.js';
 import {adoptGrant,grantValidity} from './grant.js';
 import type {Message} from './session.js';
-import type {ExportGuard,OutgoingMessage,PreparedOperation,OperationIntent,MailboxPresence} from './operation.js';
+import {pairingLinkJSON,type PairingLink} from './pairing.js';
+import {DeviceManagement,type DeviceClaim} from './management.js';
+export type {DeviceClaim} from './management.js';
+import {deliveryKey,type ExportGuard,type OutgoingMessage,type PreparedOperation,type OperationIntent,type MailboxPresence} from './operation.js';
 export type {OutgoingMessage} from './operation.js';
 
 export interface DeviceStateOptions {maxMessages?:number;maxCachedBytes?:number;messageBytes?:number}
@@ -31,7 +34,7 @@ export class DeviceHoldingLimit extends Error {}
  * and re-evaluates them when authority/epoch facts change; delivery order is not
  * authority. No I/O, timers or trusted application records enter this layer. */
 export class DeviceState {
-  readonly #registry:Registry;readonly #participant:Uint8Array;readonly #directory:Uint8Array;
+  readonly #management:DeviceManagement;readonly #registry:Registry;readonly #participant:Uint8Array;readonly #directory:Uint8Array;
   readonly #keys:{signing:PrivateKey;agreement:PrivateKey};readonly #home:HomePolicy;readonly #limits:Required<DeviceStateOptions>;
   readonly #messages=new Map<string,Map<string,Message>>();readonly #decoded=new Set<string>();readonly #offered=new Set<string>();
   readonly #homePayloads:Payload[]=[];readonly #collections=new Map<string,Collection>();readonly #offers=new Map<string,Offer>();
@@ -41,7 +44,7 @@ export class DeviceState {
   readonly #assemblers=new Map<string,InventoryAssembler>();readonly #complete=new Set<string>();readonly #controls=new Set<string>();
   #homeRecords=new Map<string,RecordState>();#count=0;#cachedBytes=0;#revision=0;
   constructor(registry:Registry,directory:Uint8Array,participant:Uint8Array,keys:{signing:PrivateKey;agreement:PrivateKey},options:DeviceStateOptions={}){
-    this.#registry=registry;this.#directory=bytes(directory,32);this.#participant=bytes(participant,32);this.#keys=keys;this.#home=new HomePolicy(participant,registry);
+    this.#management=new DeviceManagement(registry,directory);this.#registry=registry;this.#directory=bytes(directory,32);this.#participant=bytes(participant,32);this.#keys=keys;this.#home=new HomePolicy(participant,registry);
     this.#limits={maxMessages:options.maxMessages??100000,maxCachedBytes:options.maxCachedBytes??64*1024*1024,messageBytes:options.messageBytes??64*1024};
     for(const n of Object.values(this.#limits))if(!Number.isSafeInteger(n)||n<1)throw new Error('invalid device holding limit');
     if(this.#limits.messageBytes>1024*1024)throw new Error('protocol messages must not exceed 1 MiB');
@@ -49,6 +52,7 @@ export class DeviceState {
   get revision():number{return this.#revision;}
   get participant():Uint8Array{return bytes(this.#participant);}
   get certificate():Certificate|undefined{return this.#registry.allCertificates.filter(c=>eq(c.participant,this.#participant)&&eq(c.sign,publicKey(this.#keys.signing))&&eq(c.agree,publicKey(this.#keys.agreement))&&this.#registry.activity(c.id).kind==='valid').sort((a,b)=>Buffer.compare(a.id,b.id))[0];}
+  get authorizationPending():boolean{return this.#registry.allCertificates.some(c=>eq(c.participant,this.#participant)&&eq(c.sign,publicKey(this.#keys.signing))&&eq(c.agree,publicKey(this.#keys.agreement))&&this.#registry.activity(c.id).kind==='pending');}
   get homeReady():boolean{return this.#home.inventoriesReady()&&this.#home.exposed().length===0;}
   offerHomeKey(epoch:Uint8Array,key:Uint8Array,anchor=false):void{const anchored=anchor&&this.#home.anchor(epoch),offered=this.#offerHome(epoch,key);if(anchored||offered){this.#drain();this.#revision++;}}
   #offerHome(epoch:Uint8Array,key:Uint8Array):boolean{const id=`home:${b64u(epoch)}:${b64u(sha(key))}`;if(this.#offered.has(id))return false;this.#home.offerKey(epoch,key);this.#offered.add(id);return true;}
@@ -70,6 +74,7 @@ export class DeviceState {
     }return changed;
   }
   #directoryObject(o:ControlObject):void{
+    this.#management.offerDirectory(o);
     if(!['certificate','snapshot','revocation','invitation','delegation'].includes(o.kind))return;
     const encoded=controlToJSON(o.kind,o.fields,o.signatures,o.extras),key=b64u(sha(encoded));if(this.#controls.has(key))return;this.#registry.add(o);this.#controls.add(key);
   }
@@ -80,7 +85,8 @@ export class DeviceState {
       changed=this.#read(dirTag,'directory',message=>{const opened=openEnvelope(dirKey,hub,dirTag,message.body);if(opened.kind===3)this.#directoryObject(controlFromJSON(opened.plaintext));})||changed;
       const inbox=inboxTag(this.#participant,hub);
       changed=this.#read(inbox,'inbox',message=>{const j=obj(parseJSON(openInbox(hub,this.#participant,this.#keys.agreement,message.body)));
-        if(j.type==='home-key')this.#offerHome(raw(j.epoch,32),raw(j.k,32));
+        if(j.type==='pair-claim')this.#management.offerClaim(j);
+        else if(j.type==='home-key')this.#offerHome(raw(j.epoch,32),raw(j.k,32));
         else if(j.type==='grant'){
           const grant=parseControl(j.grant,'grant'),key=raw(j.k,32),certificate=raw(j.certificate,32);
           if(!eq(grant.fields.hub as Uint8Array,hub)||!eq(grant.fields.recipient as Uint8Array,this.#participant))return;
@@ -147,6 +153,13 @@ export class DeviceState {
   homeRecord(name:string):RecordState|undefined{const id=namedID(name);return this.#copy(this.#homeRecords.get(b64u(id)),homeScope(this.#registry.pin.hub,this.#participant),id);}
   record(cid:Uint8Array,id:Uint8Array):RecordState|undefined{return this.#copy(this.#collections.get(b64u(cid))?.records.get(b64u(id)),cid,id);}
   records(cid:Uint8Array):Uint8Array[]{return [...this.#collections.get(b64u(cid))?.records??[]].filter(([id,r])=>id!==b64u(META_RECORD)&&!r.deleted).map(([id])=>unb64u(id)).sort(Buffer.compare);}
+  /** A verified historical value for rescue UI; never re-signs it or changes
+   * membership. Missing proof/value stays undefined. Returned bytes are copies. */
+  historicalWrite(scope:Uint8Array,id:Uint8Array):Write|undefined{
+    const home=eq(scope,homeScope(this.#registry.pin.hub,this.#participant)),collection=this.#collections.get(b64u(scope)),policy=home?this.#home:collection?.policy;if(!policy)return;
+    for(const payload of home?this.#homePayloads:collection!.payloads)if('writes'in payload.parsed)for(const write of payload.parsed.writes)if(eq(writeID(write),id)&&policy.sourceValidity(write).kind==='valid')return structuredClone(write);
+    return;
+  }
   role(cid:Uint8Array):'owner'|'writer'|'reader'|undefined{const c=this.#collections.get(b64u(cid))?.policy,head=c?.head;return head?c!.statement(head)?.members.find(m=>eq(m.uid,this.#participant))?.role:undefined;}
   #answers(cid:Uint8Array,admission:Uint8Array):Set<number>{return new Set((this.homeRecord(`membership:${b64u(cid)}`)?.elements('answers')??[]).filter(value=>value.length===33&&eq(value.subarray(0,32),admission)).map(value=>value[32]!));}
   lists():{id:Uint8Array;name:string|undefined;role:'owner'|'writer'|'reader'|undefined;dead:boolean}[]{
@@ -212,6 +225,7 @@ export class DeviceState {
     if(guard.type==='action')return true; // The controller also checks the durable operation's current guard.
     if(guard.type==='recipient'){
       const cert=this.#registry.certificate(unb64u(guard.certificate));if(!cert||this.#registry.activity(cert.id).kind!=='valid')return false;
+      if(guard.purpose==='home-key')return eq(cert.participant,this.#participant)&&this.homeReady&&this.#home.heads().some(epoch=>b64u(epoch)===guard.epoch);
       if(!guard.collection)return true;const c=this.#collections.get(guard.collection)?.policy,head=c?.head,s=head&&c?.statement(head);
       return !!s&&!s.deleted&&!c!.dead&&!!c!.owner&&eq(c!.owner!,this.#participant)&&s.members.some(member=>eq(member.uid,cert.participant))&&(!guard.epoch||b64u(c!.epoch(head!)!)===guard.epoch)&&c!.exposed().length===0;
     }
@@ -222,13 +236,16 @@ export class DeviceState {
   deliveryRetired(message:OutgoingMessage):boolean{
     const guard=message.guard;if(guard?.type!=='recipient')return false;const active=this.#registry.activity(unb64u(guard.certificate));
     if(active.kind==='invalid'&&active.reason==='revoked')return true;
+    if(guard.purpose==='home-key'&&this.#home.heads().length&&!this.#home.heads().some(epoch=>b64u(epoch)===guard.epoch))return true;
     if(guard.collection){const c=this.#collections.get(guard.collection)?.policy,head=c?.head,s=head&&c?.statement(head),cert=this.#registry.certificate(unb64u(guard.certificate));
       return !!s&&!!cert&&(s.deleted||c!.exposed().length>0||!s.members.some(member=>eq(member.uid,cert.participant))||!!guard.epoch&&b64u(c!.epoch(head!)!)!==guard.epoch);
     }return false;
   }
   members(cid:Uint8Array):import('./roster.js').RosterMember[]{const c=this.#collections.get(b64u(cid))?.policy,head=c?.head;return head?c!.statement(head)?.members??[]:[];}
   operationValid(kind:string,details:Record<string,string>):boolean{
-    if(!this.certificate)return false;
+    if(kind.startsWith('admin-'))return this.#management.operationValid(kind,details);
+    if(!this.certificate)return this.authorizationPending;
+    if(kind==='pairing-start')return Date.now()<Number(details.expires)&&this.#registry.activity(unb64u(details.source!)).kind!=='invalid';
     if(kind==='home-rotation'){
       const planned=this.#registry.snapshot(unb64u(details.auth!));if(!planned)return false;
       return this.#registry.revocationIDs.every(id=>{const target=this.#registry.revocationTarget(id);return !target||!eq(target.participant,this.#participant)||this.#registry.revocationValidity(id).kind!=='valid'||planned.revocations.some(known=>eq(known,id));});
@@ -247,6 +264,28 @@ export class DeviceState {
       return !!c&&!!head&&!c.dead&&!!c.owner&&eq(c.owner,this.#participant)&&(b64u(head)===details.parent||c.chain(head).some(id=>b64u(id)===details.statement));
     }
     return true;
+  }
+  claims(now=Date.now()):DeviceClaim[]{return this.#management.claims(now);}
+  adminCapsules():Uint8Array[]{return this.#management.capsules();}
+  prepareApprove(claim:Uint8Array,seed:Uint8Array):PreparedOperation{return this.#management.approve(bytes(claim,32),seed);}
+  prepareRevoke(certificate:Uint8Array,seed:Uint8Array):PreparedOperation{return this.#management.revoke(bytes(certificate,32),seed);}
+  prepareReject(claim:Uint8Array,seed:Uint8Array):PreparedOperation{return this.#management.receipt(1,bytes(claim,32),seed);}
+  prepareCancelInvitation(capability:Uint8Array,seed:Uint8Array):PreparedOperation{return this.#management.receipt(3,bytes(capability,32),seed);}
+  preparePassword(box:Uint8Array,seed:Uint8Array):PreparedOperation{return this.#management.password(box,seed);}
+  prepareInvitation(label:string,mail:PairingLink['mail'],seed:Uint8Array,validForMs=7*24*3600*1000):{link:Uint8Array;operation:PreparedOperation}{if(!this.certificate||!this.homeReady)throw new Error('invitation requires an admitted device with a private home');return this.#management.invite(label,mail,seed,validForMs);}
+  preparePairing(label:string,mail:PairingLink['mail'],validForMs=24*3600*1000,now=Date.now()):{link:PairingLink;operation:PreparedOperation}{
+    const identity=this.#identity(),epoch=this.#home.heads()[0];if(!epoch||!this.homeReady)throw new Error('pairing requires a private home');if(!Number.isSafeInteger(validForMs)||validForMs<1||!Number.isSafeInteger(now+validForMs))throw new Error('invalid pairing lifetime');
+    const hub=this.#registry.pin.hub,token=randomBytes(16),secret=randomBytes(32),a=randomBytes(32),invite=pairingInviteKey(secret,hub,token),key=this.#home.key(epoch)!;
+    const packageBytes=sealPackage(secret,a,hub,token,Buffer.from(JSON.stringify({home:b64u(epoch),k:b64u(key)}))),gate=sealGate(this.#registry.pin.agree,hub,token,this.#participant,a);a.fill(0);
+    const fields={hub,genesis:this.#registry.pin.genesis,participant:this.#participant,source:identity.certificate.id,key:publicKey(invite),token,expires:now+validForMs,package:sha(packageBytes),gate:sha(gate)},delegation=controlToJSON('delegation',fields,{sig:signControl('delegation',fields,this.#keys.signing)}),delegationID=objectID('delegation',fields),channel=pairingTag(secret,hub,token),channelKey=pairingKey(secret,hub,token);
+    const link:PairingLink={hub,genesis:this.#registry.pin.genesis,directoryKey:bytes(this.#directory),secret,token,participant:bytes(this.#participant),mail:{...mail}};
+    const messages=[delegation,Buffer.from(JSON.stringify({type:'package',bytes:b64u(packageBytes)})),Buffer.from(JSON.stringify({type:'gate',bytes:b64u(gate)}))].map(plain=>({channel,body:seal(channelKey,hub,channel,plain,3),guard:{type:'action' as const,id:''}}));
+    return{link,operation:{kind:'pairing-start',details:{source:b64u(identity.certificate.id),expires:String(fields.expires),token:b64u(token),delegation:b64u(delegationID),link:b64u(pairingLinkJSON(link))},phases:[{name:'stage-pairing',messages},{name:'remember-pairing',requires:[0],messages:[],intent:{type:'pairing-home',values:{token:b64u(token),delegation:b64u(delegationID),label,expires:String(fields.expires)}}}]}};
+  }
+  prepareCancelPairing(token:Uint8Array,reserve:()=>Dot,fallback?:Uint8Array):OutgoingMessage[]{
+    bytes(token,16);const identity=this.#identity(),name=`pairing:${b64u(token)}`,delegation=this.homeRecord(name)?.value('delegation')??fallback;if(!delegation)throw new Error('no such pairing');
+    const fields={hub:this.#registry.pin.hub,genesis:this.#registry.pin.genesis,outcome:2,subject:bytes(delegation,32),signer:identity.certificate.id},plain=controlToJSON('receipt',fields,{sig:signControl('receipt',fields,this.#keys.signing)}),channel=directoryTag(this.#directory,this.#registry.pin.hub);
+    return[{channel,body:seal(directoryKey(this.#directory,this.#registry.pin.hub),this.#registry.pin.hub,channel,plain,3),guard:{type:'control'}},...this.prepareHome(name,[{field:'delegation',op:1,value:delegation},{field:'outcome',op:2,element:objectID('receipt',fields)}],reserve)];
   }
   get canRotateHome():boolean{return !!this.certificate&&this.#home.inventoriesReady();}
   get homeNeedsRotation():boolean{return this.#home.exposed().length>0;}
@@ -267,9 +306,34 @@ export class DeviceState {
     const announce:OutgoingMessage[]=[{channel:tag,body:seal(key,hub,tag,start,3),guard:{type:'control'},deferred:true}];
     for(const parent of heads){const old=this.#home.key(parent)!;const oldTag=homeTag(old,hub,this.#participant,parent);announce.push({channel:oldTag,body:seal(old,hub,oldTag,start,3),guard:{type:'control'},deferred:true});}
     const channel=inboxTag(this.#participant,hub),notice=Buffer.from(JSON.stringify({type:'home-key',epoch:b64u(epoch),k:b64u(key)}));
-    const deliver:OutgoingMessage[]=recipients.map(cert=>({channel,body:sealInbox(hub,this.#participant,cert.agree,notice),guard:{type:'recipient',certificate:b64u(cert.id)}}));
+    const deliver:OutgoingMessage[]=recipients.map(cert=>({channel,body:sealInbox(hub,this.#participant,cert.agree,notice),guard:{type:'recipient',purpose:'home-key',epoch:b64u(epoch),certificate:b64u(cert.id)}}));
     if(eq(this.#participant,this.#registry.pin.creator)){const recovery=sealHomeRecovery(this.#registry.pin.agree,hub,epoch,key);deliver.push({channel:directoryTag(this.#directory,hub),body:seal(directoryKey(this.#directory,hub),hub,directoryTag(this.#directory,hub),Buffer.from(JSON.stringify({type:'home-recovery',epoch:b64u(epoch),bytes:b64u(recovery)})),3),guard:{type:'control'}});}
     return{kind:'home-rotation',details:{epoch:b64u(epoch),key:b64u(key),auth:b64u(identity.auth)},phases:[{name:'upload-home-inventory',messages:upload},{name:'announce-home',messages:announce},{name:'deliver-home-keys',messages:deliver}]};
+  }
+  prepareKeyDeliveries(known:ReadonlySet<string>,blockedCollections:ReadonlySet<string>=new Set(),blockedHome=false):OutgoingMessage[]{
+    const messages:OutgoingMessage[]=[],hub=this.#registry.pin.hub;if(!this.certificate)return messages;
+    if(this.homeReady&&!blockedHome)for(const epoch of this.#home.heads()){
+      const key=this.#home.key(epoch)!,channel=inboxTag(this.#participant,hub);
+      for(const cert of this.#registry.allCertificates)if(eq(cert.participant,this.#participant)&&this.#registry.activity(cert.id).kind==='valid'){
+        const guard={type:'recipient' as const,purpose:'home-key' as const,epoch:b64u(epoch),certificate:b64u(cert.id)};
+        if(!known.has(deliveryKey(guard)!))messages.push({channel,guard,body:sealInbox(hub,this.#participant,cert.agree,Buffer.from(JSON.stringify({type:'home-key',epoch:b64u(epoch),k:b64u(key)})))});
+      }
+    }
+    for(const row of this.lists())if(!blockedCollections.has(b64u(row.id))){const c=this.#collections.get(b64u(row.id))!.policy,head=c.head,epoch=head&&c.epoch(head),key=epoch&&c.key(epoch);
+      if(head&&epoch&&key&&c.owner&&eq(c.owner,this.#participant)&&this.collectionStatus(row.id).ready){const grants=this.#grants(row.id,head,key,known);if(grants.some(message=>message.guard?.type==='recipient'))messages.push(...grants);}
+    }return messages;
+  }
+  /** A staged record remains confirmed if physical, valid data now dominates it.
+   * Exact ciphertext presence is still required for inventories and control proofs. */
+  messageCovered(message:OutgoingMessage,presence:readonly MailboxPresence[]):boolean{
+    const packet=this.#packets.get(JSON.stringify([message.channel,b64u(sha(message.body))]));if(!packet||!('writes'in packet.parsed)||eq(packet.parsed.record,ROSTER_RECORD))return false;
+    const parsed=packet.parsed,hub=this.#registry.pin.hub;
+    let policy:HomePolicy|CollectionPolicy|undefined;
+    for(const row of this.#home.readableKeys())if(homeTag(row.key,hub,this.#participant,row.epoch)===message.channel)policy=this.#home;
+    if(!policy)for(const c of this.#collections.values())for(const row of c.policy.readableKeys())if(collectionTag(row.key,hub,row.epoch)===message.channel)policy=c.policy;
+    if(!policy)return false;const entries=new Map<string,Entry>();
+    for(const row of presence)if(row.channel===message.channel){const p=this.#packets.get(JSON.stringify([row.channel,row.hash]));if(p&&'writes'in p.parsed&&eq(p.parsed.record,parsed.record))for(const w of p.parsed.writes)if(policy.dataValidity(w,p.epoch).kind==='valid')entries.set(b64u(writeID(w)),policy.entry(w));}
+    return parsed.writes.every(w=>entries.has(b64u(writeID(w)))||[...entries.values()].some(candidate=>supersedes(candidate,policy!.entry(w))));
   }
   prepareHygiene(presence:readonly MailboxPresence[],pending:ReadonlySet<string>):{messages:OutgoingMessage[];destroy:string[]}{
     const messages:OutgoingMessage[]=[],destroy:string[]=[];if(!this.certificate)return{messages,destroy};
@@ -356,11 +420,15 @@ export class DeviceState {
     return{messages:messages.length?[...identity.messages,...messages]:[],processed,unshared,cancel:[...new Set(cancel)]};
   }
   intentReady(intent:OperationIntent):boolean{
-    if(intent.type==='settle-collection')return this.homeReady;
+    if(intent.type==='capsule-cleanup')return true;
+    if(['settle-collection','invitation-home','pairing-home'].includes(intent.type))return this.homeReady;
     return !!this.certificate;
   }
   prepareIntent(intent:OperationIntent,reserve:()=>Dot,context:{deliveries?:readonly Message[];outbox?:readonly Message[]}={}):{messages:OutgoingMessage[];destroy?:string[];cancel?:string[]}{
+    if(intent.type==='capsule-cleanup')return{messages:[],destroy:this.#management.cleanup(new Set(parseJSON(Buffer.from(intent.values.ids!)) as string[]),context.deliveries??[])};
     const v=intent.values,cid=v.collection?unb64u(v.collection):undefined;
+    if(intent.type==='pairing-home')return{messages:this.prepareHome(`pairing:${v.token}`,[{field:'delegation',op:1,value:unb64u(v.delegation!)},{field:'label',op:1,value:Buffer.from(v.label!)},{field:'expires',op:1,value:Buffer.from(v.expires!)}],reserve)};
+    if(intent.type==='invitation-home')return{messages:this.prepareHome(v.name!,[{field:'label',op:1,value:Buffer.from(v.label!)},{field:'capability',op:1,value:unb64u(v.capability!)},{field:'made',op:1,value:Buffer.from(v.made!)},{field:'hint',op:1,value:Buffer.from(v.hint!)}],reserve)};
     if(intent.type==='settle-collection'){
       const name=`membership:${v.collection}`,epoch=unb64u(v.epoch!),key=unb64u(v.key!),edits:FieldEdit[]=[];
       const element=Buffer.from(JSON.stringify({epoch:b64u(epoch),k:b64u(key)}));
@@ -388,13 +456,13 @@ export class DeviceState {
     }
     throw new Error('unknown operation intent');
   }
-  #grants(cid:Uint8Array,at:Uint8Array,key:Uint8Array):OutgoingMessage[]{
+  #grants(cid:Uint8Array,at:Uint8Array,key:Uint8Array,known:ReadonlySet<string>=new Set()):OutgoingMessage[]{
     const identity=this.#identity(),c=this.#collections.get(b64u(cid))?.policy,s=c?.statement(at),epoch=c?.epoch(at);if(!c||!s||!epoch||!c.owner||!eq(c.owner,this.#participant)||!eq(s.commit,commit(key)))throw new Error('grant requires the fixed owner and exact epoch key');
     const hub=this.#registry.pin.hub,messages=[...identity.messages];
     for(const member of s.members)if(!eq(member.uid,this.#participant)){
       const admission=c.admission(member.uid,at);if(!admission)continue;
       const fields={hub,collection:cid,recipient:member.uid,admission,at,epoch,key:commit(key),signer:identity.certificate.id,auth:identity.auth},grant=controlToJSON('grant',fields,{sig:signControl('grant',fields,this.#keys.signing)}),channel=inboxTag(member.uid,hub);
-      for(const target of this.#registry.allCertificates)if(eq(target.participant,member.uid)&&this.#registry.activity(target.id).kind==='valid')messages.push({channel,body:sealInbox(hub,member.uid,target.agree,Buffer.from(JSON.stringify({type:'grant',grant:parseJSON(grant),certificate:b64u(target.id),k:b64u(key)}))),guard:{type:'recipient',certificate:b64u(target.id),collection:b64u(cid),epoch:b64u(epoch)}});
+      for(const target of this.#registry.allCertificates)if(eq(target.participant,member.uid)&&this.#registry.activity(target.id).kind==='valid'&&!known.has(deliveryKey({type:'recipient',certificate:b64u(target.id),collection:b64u(cid),epoch:b64u(epoch)})!))messages.push({channel,body:sealInbox(hub,member.uid,target.agree,Buffer.from(JSON.stringify({type:'grant',grant:parseJSON(grant),certificate:b64u(target.id),k:b64u(key)}))),guard:{type:'recipient',certificate:b64u(target.id),collection:b64u(cid),epoch:b64u(epoch)}});
     }return messages;
   }
   prepareCollectionRotation(cid:Uint8Array,reserve:()=>Dot,edit:{remove?:Uint8Array;role?:{participant:Uint8Array;role:'writer'|'reader'}}={}):PreparedOperation{
