@@ -140,10 +140,13 @@ export class BrowserJournal {
     } catch (error) { try { tx.abort(); } catch {} await done.catch(() => {}); throw error; }
   }
   async cursor(hub: string): Promise<string> { return (await request(this.#db.transaction('cursors').objectStore('cursors').get(hub)) as string | undefined) ?? ''; }
-  async pending(hub: string, limit = 128): Promise<OutboxEntry[]> {
+  async pending(hub: string, limit = 128, after?:string): Promise<OutboxEntry[]> {
     if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('invalid pending page limit');
-    return await request(this.#db.transaction('outbox').objectStore('outbox').index('hub').getAll(hub, limit)) as OutboxEntry[];
+    const range=IDBKeyRange.bound([hub,after??''],[hub,'\uffff'],after!==undefined);
+    return await request(this.#db.transaction('outbox').objectStore('outbox').getAll(range, limit)) as OutboxEntry[];
   }
+  /** Complete snapshot for atomic late-write/cleanup planning; transport uses pages. */
+  async allPending(hub:string):Promise<OutboxEntry[]>{return this.pending(hub,0xffffffff);}
   async pendingIDs(hub:string):Promise<Set<string>>{const keys=await request(this.#db.transaction('outbox').objectStore('outbox').index('hub').getAllKeys(hub));return new Set(keys.map(key=>(key as IDBValidKey[])[1] as string));}
   async queued(hub:string,ids:readonly string[]):Promise<Set<string>>{
     const store=this.#db.transaction('outbox').objectStore('outbox');

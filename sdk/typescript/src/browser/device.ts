@@ -132,7 +132,7 @@ export class BrowserDevice {
   }
   async #edit(prepare:(state:DeviceState,reserve:()=>Dot)=>import('../device-state.js').OutgoingMessage[]):Promise<void>{await this.#commitPlan((state,reserve)=>({messages:prepare(state,reserve)}));}
   async #settleLateWrites():Promise<boolean>{
-    if(!this.#view?.certificate)return false;const installation=await this.#journal.installation(),stamp=`${b64u(installation)}:${this.#view.revision}`;if(stamp===this.#lastLate)return false;const pending=await this.#journal.pending(this.#hub);let changed=false;
+    if(!this.#view?.certificate)return false;const installation=await this.#journal.installation(),stamp=`${b64u(installation)}:${this.#view.revision}`;if(stamp===this.#lastLate)return false;const pending=await this.#journal.allPending(this.#hub);let changed=false;
     try{await this.#journal.commit(this.#hub,installation,Date.now(),tx=>{
       if(tx.sequence!==this.#sequence)throw new StaleDeviceState();const local=localState(tx.state),done=new Set(local.processed),prepared=this.#view!.prepareLateWrites(installation,tx.clock,done,pending);
       if(!prepared.messages.length&&!prepared.processed.length&&!prepared.cancel.length)return{messages:[]};
@@ -158,7 +158,7 @@ export class BrowserDevice {
   async #phasePlan(action:DeviceAction,phase:ActionPhase):Promise<(tx:LocalTransaction)=>LocalPlan>{
     const context=phase.intent?.type==='collection-cleanup'?{
       deliveries:(await this.#journal.deliveries(this.#hub)).filter(row=>row.present).map(row=>({id:row.remoteId,channel:row.channel,body:row.body})),
-      outbox:await this.#journal.pending(this.#hub)
+      outbox:await this.#journal.allPending(this.#hub)
     }:{};
     return tx=>{
       if(phase.intent){const prepared=this.#view!.prepareIntent(phase.intent,()=>tx.nextDot(),context);phase.messages=prepared.messages;if(prepared.destroy)phase.destroy=prepared.destroy;if(prepared.cancel)phase.cancel=prepared.cancel;delete phase.intent;}

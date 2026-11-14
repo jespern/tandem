@@ -520,3 +520,16 @@ test('BrowserDevice accepts native grants and enforces reader permissions',async
 
   }finally{await page.evaluate(async()=>{window.sharingAbort?.abort();await window.sharingDevice?.close();window.sharingJournal?.close();window.sharingKeys?.close();});await phone.close();await owner.close();}
 });
+
+test('held first-page outbox entries cannot starve later exportable edits',async({page})=>{
+  const result=await page.evaluate(async()=>{
+    const t=window.t,journal=await t.BrowserJournal.open('held-outbox-pages'),installation=await journal.installation(),hub='hub',key=new Uint8Array(32).fill(1),id=new Uint8Array(32).fill(2),tag=t.collectionTag(key,id,id),signal=AbortSignal.timeout(10000);
+    await journal.commit(hub,installation,1,()=>({messages:Array.from({length:260},(_,i)=>({channel:tag,body:t.seal(key,id,tag,new TextEncoder().encode(String(i)))}))}));
+    const all=await journal.allPending(hub),target=all.at(-1).id,replica=new t.BrowserReplica(journal,hub),abort=new AbortController();let appended=0,received=[],cursor=0;
+    const running=replica.run(async()=>({watch:async()=>({async *[Symbol.asyncIterator](){await new Promise(()=>{});}}),changes:async()=>({added:received.splice(0),removed:[],cursor:String(++cursor)}),
+      appendPrepared:async()=>{appended++;received.push({id:'remote',channel:tag,body:all.at(-1).body});return'remote';},close:async()=>{}}),AbortSignal.any([abort.signal,signal]),{allowExport:entry=>entry.id===target});void running.catch(()=>{});
+    try{for await(const event of replica.events(0,signal))if(event.kind==='received'&&event.id===target)break;
+      return{appended,pending:(await journal.allPending(hub)).length,targetQueued:(await journal.queued(hub,[target])).has(target)};
+    }finally{abort.abort();await running.catch(()=>{});journal.close();}
+  });expect(result).toEqual({appended:1,pending:259,targetQueued:false});
+});

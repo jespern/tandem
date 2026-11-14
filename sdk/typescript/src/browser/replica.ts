@@ -39,20 +39,23 @@ export class BrowserReplica {
           const committed = this.#journal.outboxChanged();
           try {
             if (needsSync) { await reconcile(); needsSync = false; }
+            let after:string|undefined;
             exportQueued: while (true) {
-              const pending = await this.#journal.pending(this.#hub);
+              const pending = await this.#journal.pending(this.#hub,128,after);
               if (!pending.length) break;
               let sent=false;
               for (const entry of pending) {
                 await hooks.beforeExport?.();
                 if(hooks.allowExport&&!await hooks.allowExport(entry))continue;
                 // A previous reconciliation may have confirmed later snapshot entries.
-                if (!(await this.#journal.pending(this.#hub)).some(row => row.id === entry.id)) continue;
+                if (!(await this.#journal.queued(this.#hub,[entry.id])).has(entry.id)) continue;
                 sent=true;const id = await store.appendPrepared(entry.wire, signal);
                 await this.#journal.markAppended(this.#hub, entry.id, id); await reconcile();
-                if ((await this.#journal.pending(this.#hub)).some(row => row.id === entry.id)) break exportQueued;
+                if ((await this.#journal.queued(this.#hub,[entry.id])).has(entry.id)) break exportQueued;
               }
-              if(!sent)break;
+              if(sent){after=undefined;continue;}
+              if(pending.length<128)break;
+              after=pending[pending.length-1]!.id;
             }
             await hooks.beforeExport?.();
             while(true){
