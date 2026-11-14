@@ -167,6 +167,11 @@ extension Device {
     public func isDead(list cid: Bytes) -> Bool { collections[cid]?.dead ?? false }
 
     func writeRecord(_ cid: Bytes, record: Bytes, field: Bytes, op: Op, value: Bytes = [], element: Bytes? = nil) async throws {
+        try await writeRecord(cid, record: record, [(field, op, value, element)])
+    }
+
+    /// Several changes to one record, sent as one message.
+    func writeRecord(_ cid: Bytes, record: Bytes, _ changes: [(field: Bytes, op: Op, value: Bytes, element: Bytes?)]) async throws {
         try takeExternalChanges()   // an extension may have written this record meanwhile
         guard let me, var c = collections[cid], !c.dead, let head = c.head, let epoch = c.epoch(of: head), c.keys[epoch] != nil,
               c.statements[head]?.statement.deleted == false
@@ -180,8 +185,10 @@ extension Device {
             writes.append(try signRecord(c, me: me, record: record, field: Bytes("_name".utf8), op: .assign,
                                          value: Bytes("_meta".utf8), element: nil, head: head, epoch: epoch, after: []))
         }
-        writes.append(try signRecord(c, me: me, record: record, field: field, op: op, value: value, element: element,
-                                     head: head, epoch: epoch, after: writes))
+        for x in changes {
+            writes.append(try signRecord(c, me: me, record: record, field: x.field, op: x.op, value: x.value, element: x.element,
+                                         head: head, epoch: epoch, after: writes))
+        }
         var r = try c.records[record] ?? Record(hub: pin.hub, scope: cid, id: record)
         try r.merge(try writes.map { try Entry($0, epoch: epoch, epochNumber: c.statements[head]!.statement.keyN) })
         c.records[record] = r

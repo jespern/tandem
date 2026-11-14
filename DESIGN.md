@@ -1168,6 +1168,8 @@ A collection can't be administered any more in four cases:
 
 There is no recovery under the same collection ID. Anyone who can read it can preserve a local copy. Publishing a **new collection** requires a currently admitted device of its new owner: they create it on the same hub or on another one they are on, of which they are the owner, write the current state of the records into it as writes of their own, and share it again. Tombstones and the old writes' signatures are not carried over; a copied item is the copier's. Apps do not silently redirect an old membership to the copy.
 
+A copy keeps its records' IDs and the old `_meta` fields, and adds one: `copyof`, the 16-byte ID of the collection it was copied from. A member is offered the copy like any other collection (§11.2); a client shows the offer as the continuation of the old collection only if it knows a statement of that collection, signed by its owner, that lists the copy's owner, since anyone can write `copyof`. The copier shares the copy again with every participant that each end of the old roster lists with the same role, an old owner as a writer. Anyone the ends disagree on, listed in one and not another or with different roles, is left for the copier's user to decide. A device that finds a copy of the same collection already owned by its participant, through `copyof`, finishes that copy instead of starting another. Two devices of one owner copying in the same moment make two copies; nothing is lost, and the user deletes one.
+
 If no readable replica survives, the contents are lost.
 
 ### 11.9 Deleting a collection
