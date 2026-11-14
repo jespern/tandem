@@ -470,7 +470,7 @@ class JMAPStore:
         if len(unb32(channel)) != 20 or not _valid_envelope(body):
             raise ValueError('invalid Tandem channel or envelope')
         message = EmailMessage(policy=policy.SMTP)
-        for key, value in [('From', 'Tandem <tandem@invalid>'), ('Date', formatdate(usegmt=True)), ('Message-ID', make_msgid(domain='tandem.invalid')), ('Subject', 'tandem'), ('Tandem-Version', '2'), ('Tandem-Channel', channel)]:
+        for key, value in [('From', 'Tandem <tandem@tandem.airforce>'), ('Date', formatdate(usegmt=True)), ('Message-ID', make_msgid(domain='tandem.invalid')), ('Subject', 'tandem'), ('Tandem-Version', '2'), ('Tandem-Channel', channel)]:
             message[key] = value
         encoded = base64.b64encode(body).decode()
         message.set_content('\r\n'.join(encoded[at:at + 76] for at in range(0, len(encoded), 76)) + '\r\n', subtype='plain', charset='us-ascii', cte='7bit')

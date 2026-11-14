@@ -6,7 +6,7 @@ A sync protocol whose only server is somebody else's mail server.
 
 Tandem keeps collections of records in sync across devices and people, end-to-end
 encrypted. Its relay is an ordinary mailbox: devices append encrypted messages,
-listen for changes over IMAP, and merge edits locally. There is no Tandem server
+listen for pushed changes over IMAP or JMAP, and merge edits locally. There is no Tandem server
 to run and no application backend to trust with the contents.
 
 A collection can be a private list, a shared shopping list, or an application's

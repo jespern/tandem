@@ -9,7 +9,7 @@ export function checkChannel(channel: string): void { if (unb32(channel).length 
 export function buildMessage(channel: string, body: Uint8Array): Uint8Array {
   checkChannel(channel); if (!validEnvelope(body)) throw new Error('invalid v2 envelope');
   const encoded = Buffer.from(body).toString('base64').match(/.{1,76}/g)!.join('\r\n');
-  return new TextEncoder().encode(['From: Tandem <tandem@invalid>', `Date: ${new Date().toUTCString()}`,
+  return new TextEncoder().encode(['From: Tandem <tandem@tandem.airforce>', `Date: ${new Date().toUTCString()}`,
     `Message-ID: <${randomBytes(16).toString('hex')}@tandem.invalid>`, 'Subject: tandem', 'MIME-Version: 1.0',
     'Tandem-Version: 2', `Tandem-Channel: ${channel}`, 'Content-Type: text/plain; charset=us-ascii',
     'Content-Transfer-Encoding: 7bit', '', encoded, ''].join('\r\n'));
