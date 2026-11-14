@@ -280,11 +280,30 @@ func (d *driver) handle(ctx context.Context, a args) (map[string]any, error) {
 		return nil, dev.RemoveMember(ctx, participant, list)
 	case "rekey":
 		return nil, dev.Rekey(ctx, list)
+	case "copy":
+		cp, err := dev.Copy(ctx, list)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"list": tandem.B64u(cp.List), "shared": b64us(cp.Shared), "undecided": b64us(cp.Undecided)}, nil
+	case "copyOf":
+		if from := dev.CopyOf(list); from != nil {
+			return map[string]any{"from": tandem.B64u(from)}, nil
+		}
+		return map[string]any{"from": nil}, nil
 	}
 	return nil, errors.New("unknown op")
 }
 
 func str(v any) string { s, _ := v.(string); return s }
+
+func b64us(xs [][]byte) []string {
+	out := []string{}
+	for _, x := range xs {
+		out = append(out, tandem.B64u(x))
+	}
+	return out
+}
 
 func main() {
 	d := &driver{folder: "Tandem"}
