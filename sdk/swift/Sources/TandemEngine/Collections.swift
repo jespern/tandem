@@ -479,9 +479,9 @@ extension Device {
         guard c.counts(w.ref), c.counts(source) else { return .pending([source]) }
         guard let member = s.statement.members.first(where: { $0.uid == w.author }), member.role != .reader,
               w.record != Self.meta || member.role == .owner else { return .invalid("not a writer here") }
-        var checks = [registry.authorizes(snapshot: w.authorization, certificate: w.certificate)]
+        var checks = [registry.authorizes(snapshot: w.authorization, certificate: w.certificate),
+                      registry.extends(w.authorization, floor: member.floor)]
         if source == epoch {
-            checks.append(registry.extends(w.authorization, floor: member.floor))
             checks.append(dataLateness(w, c: c, epoch: epoch))
         } else {
             guard c.precedes(w.ref, epoch) || w.ref == epoch else { return .invalid("not from an earlier epoch of this chain") }

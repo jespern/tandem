@@ -92,9 +92,8 @@ export class HomePolicy {
     if(!eq(w.hub,this.#registry.pin.hub)||!eq(w.author,this.#participant)||!eq(w.scope,homeScope(this.#registry.pin.hub,this.#participant)))return bad('not this participant home');
     if(w.op===4)return bad('home named records cannot be deleted');
     const start=this.#object(channel);if(!start)return hold(channel);const historical=this.validity(channel);if(historical.kind!=='valid')return historical;
-    const checks=[this.#registry.authorizes(w.authorization,w.certificate)];
+    const source=this.#object(w.ref);if(!source)return hold(w.ref);const checks=[this.#registry.authorizes(w.authorization,w.certificate),this.#registry.extendsFloor(w.authorization,source.fields.auth as Uint8Array)];
     if(eq(w.ref,channel)){
-      checks.push(this.#registry.extendsFloor(w.authorization,start.fields.auth as Uint8Array));
       const children=[...this.#accepted()].map(unb64u).filter(id=>(this.#object(id)!.fields.parents as Uint8Array[]).some(parent=>eq(parent,channel)));
       if(children.length&&!children.some(child=>this.listed(child,w))){const missing=children.filter(child=>!this.#inventories.has(b64u(child)));checks.push(missing.length?hold(...missing):bad('late write in replaced home epoch'));}
     }else{if(!this.#ancestor(w.ref,channel))return bad('home write is not from an ancestor');if(!this.#inventories.has(b64u(channel)))return hold(channel);if(!this.listed(channel,w))return bad('home write not carried into this epoch');}

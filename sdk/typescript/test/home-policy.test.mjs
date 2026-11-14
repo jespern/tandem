@@ -57,3 +57,13 @@ test('checking a revoked device branch does not adopt its parents or replace an 
   for(let n=1;n<=2;n++){const fields={...oldFields,n,parents:[parent],key:t.commit(key),snapshot:t.sha(empty),signer:tabletID,recipients:[tabletID]},o=t.controlFromJSON(t.controlToJSON('home-epoch',fields,{sig:t.signControl('home-epoch',fields,tabletKey)}));parent=f.policy.accept(o);f.policy.offerKey(parent,key);assert.equal(f.policy.validity(parent).kind,'valid');}
   assert.deepEqual(f.policy.heads(),[root]);assert.deepEqual(f.policy.acceptedObjects().map(o=>t.objectID(o.kind,o.fields)),[Buffer.from(root)]);
 });
+
+test('inventory import still enforces the original home source authorization floor',()=>{
+  const f=fixture(),old=f.registry.currentSnapshot(f.participant);old.fields.revocations=[];const oldAuth=f.registry.add(old);
+  f.policy.accept(f.start);f.policy.offerKey(f.id,f.key);
+  const write=t.signWrite({hub:f.registry.pin.hub,scope:t.homeScope(f.registry.pin.hub,f.participant),record:t.namedID('settings:liszto'),field:'theme',op:1,author:f.participant,certificate:f.start.fields.signer,authorization:oldAuth,dot:{device:new Uint8Array(8),millis:12,counter:0},value:Buffer.from('stale'),element:null,ref:f.id,context:[],base:[],signature:new Uint8Array(64)},f.signing);
+  assert.equal(f.policy.dataValidity(write,f.id).kind,'invalid');
+  const inventory=t.inventoryBytes(new Map([[Buffer.from(write.record).toString('hex'),[t.writeID(write)]]])),key=t.randomBytes(32),fields={...f.start.fields,n:1,parents:[f.id],key:t.commit(key),snapshot:t.sha(inventory)};
+  const next=t.controlFromJSON(t.controlToJSON('home-epoch',fields,{sig:t.signControl('home-epoch',fields,f.signing)})),id=f.policy.accept(next);f.policy.offerKey(id,key);f.policy.addInventory(id,inventory);
+  assert.equal(f.policy.dataValidity(write,id).kind,'invalid');
+});

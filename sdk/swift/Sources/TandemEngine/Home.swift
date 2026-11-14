@@ -195,10 +195,12 @@ extension Device {
     /// policy, or written earlier and listed in this epoch's inventory.
     func homeWriteValidity(_ w: Write, epoch: ID, me: Me) -> Validity {
         guard w.author == me.participant, w.hub == pin.hub else { return .invalid("not this participant's home write") }
-        guard let start = homeEpochs[epoch], case let .id(floor)? = start.fields["auth"] else { return .pending([epoch]) }
-        var ok = registry.authorizes(snapshot: w.authorization, certificate: w.certificate)
+        guard homeEpochs[epoch] != nil else { return .pending([epoch]) }
+        guard let source = homeEpochs[w.ref], case let .id(floor)? = source.fields["auth"] else { return .pending([w.ref]) }
+        var ok = Validity.all([registry.authorizes(snapshot: w.authorization, certificate: w.certificate),
+                               registry.extends(w.authorization, floor: floor)])
         if w.ref == epoch {
-            ok = Validity.all([ok, registry.extends(w.authorization, floor: floor), lateness(w, epoch: epoch)])
+            ok = Validity.all([ok, lateness(w, epoch: epoch)])
         } else {
             guard let inv = inventory(epoch) else { return .pending([epoch]) }
             guard let id = try? w.id(), inv.entries[w.record]?.contains(id) == true else { return .invalid("not carried into this epoch") }

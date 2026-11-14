@@ -120,9 +120,8 @@ export class CollectionPolicy {
     if(!this.#counts(row)||!this.#counts(this.#rows.get(b64u(source))!))return hold(source);
     const member=row.statement.members.find(m=>eq(m.uid,w.author));if(!member||member.role==='reader'||eq(w.record,META_RECORD)&&member.role!=='owner')return bad('not a writer here');
     if(w.op===4&&(eq(w.record,META_RECORD)||eq(w.record,ROSTER_RECORD)))return bad('named records cannot be deleted');
-    const checks=[this.#registry.authorizes(w.authorization,w.certificate)];
+    const checks=[this.#registry.authorizes(w.authorization,w.certificate),this.#registry.extendsFloor(w.authorization,member.floor)];
     if(eq(source,channel)){
-      checks.push(this.#registry.extendsFloor(w.authorization,member.floor));
       const successors=[...this.#rows.values()].filter(child=>this.#starts(child)&&this.#announced.has(b64u(child.id))&&this.epoch(child.write.ref)&&eq(this.epoch(child.write.ref)!,source));
       if(successors.length&&!successors.some(child=>this.listed(child.id,w))){const missing=successors.filter(child=>!this.#inventories.has(b64u(child.id))).map(child=>child.id);checks.push(missing.length?hold(...missing):bad('late write in replaced epoch'));}
     }else{if(!this.#precedes(w.ref,channel))return bad('not an ancestor of this epoch');if(!this.#inventories.has(b64u(channel)))return hold(channel);if(!this.listed(channel,w))return bad('not carried into this epoch');}

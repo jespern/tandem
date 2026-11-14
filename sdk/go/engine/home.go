@@ -344,9 +344,13 @@ func (d *Device) homeWriteValidity(w *tandem.Write, epoch []byte, me *Me) Validi
 	if start == nil {
 		return pending(epoch)
 	}
-	ok := d.registry.Authorizes(w.Authorization, w.Certificate)
+	source := d.homeEpochs[string(w.Ref)]
+	if source == nil {
+		return pending(w.Ref)
+	}
+	ok := allValid(d.registry.Authorizes(w.Authorization, w.Certificate), d.registry.Extends(w.Authorization, fid(source, "auth")))
 	if bytes.Equal(w.Ref, epoch) {
-		ok = allValid(ok, d.registry.Extends(w.Authorization, fid(start, "auth")), d.lateness(w, epoch))
+		ok = allValid(ok, d.lateness(w, epoch))
 	} else {
 		inv, has := d.inventories[string(epoch)]
 		if !has {

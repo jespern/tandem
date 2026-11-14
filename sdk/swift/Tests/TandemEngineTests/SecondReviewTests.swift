@@ -277,6 +277,58 @@ final class SecondReviewTests: XCTestCase {
         let titles = await carol.items(list: list).compactMap { $0.text("title") }
         XCTAssertEqual(titles, ["Kept"], "Carol moves over through the restored inventory")
     }
+    /// An inventory preserves original source authorization; it cannot turn a stale-policy write into a valid one.
+    func testInventoryCannotBypassTheOriginalHomeFloor() async throws {
+        let w = try await world()
+        let oldAuth = await w.tablet.me!.auth
+        try await w.phone.sync()
+        let me = await w.phone.me!, parent = await w.phone.currentHomeEpoch!
+        var bad = Write(hub: w.f.pin.hub, certificate: me.certificate, authorization: oldAuth,
+                        scope: Tandem.homeScope(hub: w.f.pin.hub, uid: me.participant), record: Tandem.namedID(Bytes("settings:floor".utf8)),
+                        field: Bytes("v".utf8), op: .assign, value: [9], author: me.participant,
+                        dot: Dot(device: me.installation, millis: 1, counter: 0), ref: parent)
+        try bad.sign(with: me.keys.signing)
+        let before = await w.phone.homeWriteValidity(bad, epoch: parent, me: me)
+        guard case .invalid = before else { return XCTFail("the stale source must be rejected") }
+        let inventory = Inventory([bad.record: [try bad.id()]])
+        let number = await w.phone.epochNumber(parent)
+        let next = try Founder.homeEpoch(pin: w.f.pin, participant: me.participant, n: number + 1, parents: [parent],
+                                         homeKey: Bytes(repeating: 7, count: 32), recipients: [me.certificate], signer: me.certificate,
+                                         auth: me.auth, inventory: inventory, keys: me.keys)
+        let nextID = try next.id()
+        _ = try await w.phone.acceptHomeEpoch(next, me: me)
+        try await w.phone.keepInventory(inventory, epoch: nextID)
+        let imported = await w.phone.homeWriteValidity(bad, epoch: nextID, me: me)
+        guard case .invalid = imported else { return XCTFail("inventory import bypassed the source floor: \(imported)") }
+    }
+
+    func testInventoryCannotBypassTheOriginalCollectionFloor() async throws {
+        let w = try await world(), oldAuth = await w.tablet.me!.auth
+        try await w.bob.rekey(list: w.list)
+        try await w.phone.sync()
+        let me = await w.phone.me!, owner = await w.bob.me!, c = await w.phone.collections[w.list]!
+        let parent = c.head!, epoch = c.epoch(of: parent)!
+        var bad = Write(hub: w.f.pin.hub, certificate: me.certificate, authorization: oldAuth, scope: w.list,
+                        record: Bytes(repeating: 8, count: 16), field: Bytes("title".utf8), op: .assign, value: [9], author: me.participant,
+                        dot: Dot(device: me.installation, millis: 1, counter: 0), ref: parent)
+        try bad.sign(with: me.keys.signing)
+        let before = await w.phone.dataWriteValidity(bad, cid: w.list, epoch: epoch)
+        guard case .invalid = before else { return XCTFail("stale source accepted") }
+        let inventory = Inventory([bad.record: [try bad.id()]])
+        var next = c.statements[parent]!.statement
+        next.n += 1; next.keyN += 1; next.nonce = nil; next.prev = next.commit
+        next.commit = Tandem.commit(Bytes(repeating: 6, count: 32)); next.snapshot = H(try inventory.bytes())
+        var statement = Write(hub: w.f.pin.hub, certificate: owner.certificate, authorization: owner.auth, scope: w.list,
+                              record: Roster.record, field: Roster.field, op: .assign, value: next.json(), author: owner.participant,
+                              dot: Dot(device: owner.installation, millis: 2, counter: 0), ref: parent)
+        try statement.sign(with: owner.keys.signing)
+        _ = try await w.phone.acceptStatement(statement, cid: w.list, channel: epoch)
+        let id = try statement.id()
+        try await w.phone.keepInventory(inventory, epoch: id)
+        let imported = await w.phone.dataWriteValidity(bad, cid: w.list, epoch: id)
+        guard case .invalid = imported else { return XCTFail("inventory import bypassed the member's source floor") }
+    }
+
 }
 
 /// A connection whose appends land but whose answers are lost, once `lose` is set (§10.3, "Lost answers").
@@ -294,4 +346,6 @@ final class LostAnswers: PushStore, @unchecked Sendable {
     func fetch(ids: [String]) async throws -> [Message] { try await inner.fetch(ids: ids) }
     func destroy(ids: [String]) async throws { try await inner.destroy(ids: ids) }
     func close() async { await inner.close() }
+
+
 }

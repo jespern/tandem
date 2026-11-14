@@ -52,3 +52,11 @@ test('candidate budgets still admit a key confirmed by signed genesis',()=>{
   policy.offerKey(f.epoch,t.randomBytes(32));assert.throws(()=>policy.offerKey(f.epoch,t.randomBytes(32)),t.CollectionHoldingLimit);
   assert.equal(policy.accept(f.genesis,f.epoch).kind,'valid');policy.offerKey(f.epoch,f.epochKey);assert.deepEqual(policy.key(f.epoch),f.epochKey);
 });
+
+test('a carried collection write must still extend its original member floor',()=>{
+  const f=fixture(),old=f.registry.currentSnapshot(f.me.participant);old.fields.revocations=[];const oldAuth=f.registry.add(old);
+  const write=f.write(Buffer.from('stale'),f.cid,f.epoch,{record:t.randomBytes(16),field:'title',authorization:oldAuth});assert.equal(f.policy.dataValidity(write,f.epoch).kind,'invalid');
+  const inventory=t.inventoryBytes(new Map([[Buffer.from(write.record).toString('hex'),[t.writeID(write)]]])),key=t.randomBytes(32),{nonce,...rest}=f.statement;
+  const next=f.write(t.statementJSON({...rest,n:1,keyN:1,commit:t.commit(key),prev:f.statement.commit,snapshot:t.sha(inventory)}),f.cid,f.epoch),epoch=t.writeID(next);
+  f.policy.offerKey(epoch,key);assert.equal(f.policy.accept(next,f.epoch).kind,'valid');f.policy.addInventory(epoch,inventory);assert.equal(f.policy.dataValidity(write,epoch).kind,'invalid');
+});

@@ -971,9 +971,9 @@ func (d *Device) dataWriteValidity(w *tandem.Write, cid, epoch []byte) Validity 
 	if member == nil || member.Role == Reader || (bytes.Equal(w.Record, metaRecord) && member.Role != Owner) {
 		return invalid("not a writer here")
 	}
-	checks := []Validity{d.registry.Authorizes(w.Authorization, w.Certificate)}
+	checks := []Validity{d.registry.Authorizes(w.Authorization, w.Certificate), d.registry.Extends(w.Authorization, member.Floor)}
 	if bytes.Equal(source, epoch) {
-		checks = append(checks, d.registry.Extends(w.Authorization, member.Floor), d.dataLateness(w, c, epoch))
+		checks = append(checks, d.dataLateness(w, c, epoch))
 	} else {
 		if !c.precedes(w.Ref, epoch) && !bytes.Equal(w.Ref, epoch) {
 			return invalid("not from an earlier epoch of this chain")
