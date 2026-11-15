@@ -48,7 +48,7 @@ The trade-off, accepted on purpose: anyone holding the hub credential can **dele
 - **Forward secrecy / post-compromise security per message.** Keys rotate on membership changes, not per message. Whoever holds a collection key reads that collection's epoch. (MLS-style continuous key agreement is discussed in §16 and left for a later version.)
 - **Protecting a collection from its own members.** Writers can overwrite and delete within a collection. Roles limit honest clients; they don't stop a malicious member from vandalising content they can write, including keeping a field in conflict (§9.3). Removing them ends it.
 - **Huge hubs.** Every device downloads the change feed of the whole hub (bodies only for channels it follows). Designed for tens of users and thousands of collections per hub, not millions.
-- **Large binary attachments.** Records are small (§10.6). Blobs are a possible later extension.
+- **Large binary attachments.** Records are small (§10.6). Blobs are a possible later extension; [`BLOBS.md`](BLOBS.md) proposes one. It is a slow link by nature, measured at 0.2 to 12 MiB per second depending on the provider, and is meant only for files that should be shared among a hub's devices without ever leaving its mailbox. It is not a file service.
 - **Collections that span hubs.** A client can be on several hubs (§6.5), but every collection, home and inbox lives on exactly one hub, and nothing crosses between hubs. Moving a collection to another hub is a copy (§11.8).
 - **OAuth-only mail providers**, such as Outlook.com for personal accounts. The IMAP binding targets servers that accept a password or app password. Gmail works with an app password, at the costs listed in §10.3.
 

@@ -16,6 +16,48 @@ that cannot know what a chunk is needed for collects nothing. A third found thre
 a good local file, and a refused binary append falls back to text. A fourth found that the guard for
 unknown manifest versions missed manifests protected only by the feed rule (section 7).
 
+## What this is for, and how slow it is
+
+**This is a slow link for a narrow purpose.** Use it when files should be shared among the devices
+of a hub and never leave that hub's mailbox: a device appends encrypted chunks to the mail server
+over IMAP on TLS, and the other devices fetch them the same way. Nothing is ever mailed. No SMTP,
+no second mail server and no other service sees the bytes, and the one server that stores them
+holds only ciphertext. That is the whole reason to do it this way.
+
+It is not a file service. A mailbox is built for messages of a few megabytes, it charges a round
+trip for each one, and providers limit how fast and how much an account may move. If speed or
+volume matters more than keeping the files inside the mailbox, use something built for files.
+
+Measured on 2026-11-15 from one machine on one line, with 1 MiB chunks, in MiB of file content per
+second. Other lines and other days will differ; section 12 has every figure and how it was taken.
+
+| Provider | Upload, 1 connection | Upload, default connections | Upload, 8 connections | Download, 1 connection | Download, default connections | Download, 8 connections |
+|---|---|---|---|---|---|---|
+| **Fastmail** (binary form, batched) | 7.4 to 9.6 | 10.5 (two) | 11.7 | 10.2 to 12.4 | 13.6 (two) | 13.5 |
+| **Gmail** (text form, no batched upload) | 0.16 to 0.17 | 0.39 to 0.54 (four) | 0.81 to 0.91 | 0.59 to 0.65 | 1.6 (four) | 3.9 |
+| **Stalwart 1.1.0** on the same machine | works; speed not meaningful | | | | | |
+
+What that means for a file, by arithmetic from the rates above with the default connections, not
+measured end to end:
+
+| File | Fastmail up | Fastmail down | Gmail up | Gmail down |
+|---|---|---|---|---|
+| 5 MB photo | about 1 s | about 1 s | about 11 s | about 3 s |
+| 100 MB | about 10 s | about 8 s | about 4 minutes | about 1 minute |
+| 1 GB | about 2 minutes | about 80 s | not in one day: over the daily upload allowance | about 11 minutes |
+
+Other costs a user will meet:
+
+| | Fastmail | Gmail |
+|---|---|---|
+| Storage used per byte of file | 1.37 (stored as base64 even when sent as binary) | 1.37 |
+| Largest message | 200 MB | 35 MB |
+| Daily volume over IMAP | not documented | 500 MB up and 2500 MB down per account, as Google documents for Workspace |
+| A record change reaching another device | 0.5 s; about 1 s while that account uploads | about 30 s (§10.3) |
+| Connections per account | 40 accepted when tried (§10.3) | 15, as Google documents; not tried |
+
+A hub is one account, so every figure per account is shared by all its devices and people.
+
 ## 1. Summary
 
 A **blob** is an immutable sequence of bytes: a photo, a PDF, any file. It is cut into **chunks**,
@@ -55,10 +97,9 @@ Costs, accepted on purpose:
 - **The hub learns file sizes** and which channel a file belongs to, as it does for records (§14).
 - **Provider ceilings.** Google documents 500 MB of IMAP upload and 2500 MB of download per day and
   account for Workspace; a hub is one account, so all its participants share that. Gmail is also
-  slow: about 0.2 MiB per second up and 0.5 down on one connection, and 0.5 up and 0.9 down on
-  four, against 8 to 12 on Fastmail (section 12). This design suits documents and photos, not a
-  media library, and on Gmail a photo of 10 MB takes about 20 seconds to upload over four
-  connections.
+  slow: about 0.2 MiB per second up and 0.6 down on one connection, and about 0.5 up and 1.6 down
+  on four, against 8 to 12 on Fastmail (the table at the top, and section 12). This design suits
+  documents and photos, not a media library.
 
 ## 3. Terms
 
@@ -210,8 +251,9 @@ to transfer, so the feed connection stays in IDLE and edits keep arriving during
 device shares the chunks of a transfer among them. How many it uses is a per-hub setting from 0 to
 8, and the default follows what the server can do: **two where appends can be batched, four where
 they cannot.** With batching, a second connection added about 40% to uploads on Fastmail and more
-added nothing. Without it, as on Gmail, connections are the only lever: four moved 3.4 times as
-much as one, eight 5 times (section 12). The default stops at four there because servers cap
+added nothing. Without it, as on Gmail, connections are the only lever for uploads: four moved 2.4 to 3.4 times
+as much as one, eight 5 to 6 times (section 12). Fetching several chunks with one command needs no
+extension and is done everywhere. The default stops at four there because servers cap
 connections per account or address (§10.3 lists the caps; Google documents 15 per account for
 Gmail), a hub is one account, and every connection one device holds is one another device cannot
 open, its feed connection included. Where the server refuses a further connection the device
@@ -494,13 +536,13 @@ A writer may reuse an entry only from a kept manifest of the same scope.
 `probes/blob_probe.py` appends chunks of 256 KiB, 1 MiB and 4 MiB in both forms, fetches them back
 and compares every one byte for byte. Each chunk begins with NUL bytes, bare CR and LF, a lone dot
 and a line of 2,000 bytes. Reports are in `probes/results/*-blobs-*.json`. Fastmail was run twice
-and Gmail once, from the same machine. Stalwart is the disposable test server on that machine, so
+and Gmail twice, from the same machine. Stalwart is the disposable test server on that machine, so
 its speeds mean nothing and are left out.
 
 | | Fastmail | Stalwart 1.1.0 | Gmail |
 |---|---|---|---|
 | `BINARY` | yes | yes | no; `BINARY.PEEK` is refused as unparsable |
-| Text chunks intact | 126 of 126, both runs | 126 of 126 | 21 of 21 |
+| Text chunks intact | 126 of 126, both runs | 126 of 126 | 21 of 21, both runs |
 | Binary chunks intact through `BINARY.PEEK[1]` | 126 of 126, both runs | 126 of 126 | |
 | How a binary chunk is stored | as base64, header rewritten to `Content-Transfer-Encoding: base64`, quota charged at 1.37 times the bytes sent | raw | |
 | `BODY.PEEK[TEXT]` of a binary chunk | base64 | the raw bytes | |
@@ -538,34 +580,38 @@ What follows from it:
 - **The chunk index scan works as specified**: one command returned the ID and both headers of all
   126 messages in 0.32 s on Fastmail, and of 21 in 0.70 s on Gmail. Scale is unmeasured (B11).
 
-Gmail, text form, one append and one fetch at a time, which is all it offers:
+Gmail, text form, one connection, first run / second run. Gmail offers no way to batch appends.
+Fetching several messages with one command is plain IMAP (RFC 9051 §6.4.9) and was measured in the
+second run only, because the probe at first tied the way of fetching to the way of appending.
 
-| Chunk | Append, MiB per second | Seconds per append | Fetch, MiB per second | Seconds per fetch |
+| Chunk | Append, MiB per second | Seconds per append | Fetch, one at a time | Fetch, one command |
 |---|---|---|---|---|
-| 256 KiB | 0.09 | 2.7 | 0.24 | 1.0 |
-| 1 MiB | 0.17 | 5.7 | 0.47 | 2.1 |
-| 4 MiB | 0.22 | 18.3 | 0.61 | 6.6 |
+| 256 KiB | 0.09 / 0.10 | 2.7 | 0.24 / 0.24 | 0.56 |
+| 1 MiB | 0.17 / 0.17 | 5.7 | 0.47 / 0.47 | 0.59 |
+| 4 MiB | 0.22 / 0.21 | 18.3 | 0.61 / 0.53 | 0.66 |
 
 - **Gmail limits the rate, not the count.** An append costs about 1.5 s plus about 4 s per MiB, so a
   larger chunk gains little: 4 MiB is 1.3 times as fast as 1 MiB, not the three times that a fixed
   cost alone would give. A 4 MiB chunk takes 18 s, and a lost connection costs that much.
+- **Downloads level off at about 0.6 MiB per second a connection.** One command for several chunks
+  more than doubles the speed of small chunks and adds a quarter at 1 MiB.
 - **1 MiB is the default everywhere.** That closes the chunk-size question.
 
-Gmail, 16 text chunks of 1 MiB spread over several connections at once, one append and one fetch at
-a time on each, MiB per second:
+Gmail, 16 text chunks of 1 MiB spread over several connections at once, MiB per second, first run /
+second run. Appends are one at a time on each connection.
 
-| Connections | Append | Fetch |
-|---|---|---|
-| 1 | 0.16 | 0.43 |
-| 2 | 0.24 | 0.59 |
-| 4 | 0.54 | 0.85 |
-| 8 | 0.81 | 1.88 |
+| Connections | Append | Fetch, one at a time | Fetch, one command each |
+|---|---|---|---|
+| 1 | 0.16 / 0.16 | 0.43 / 0.42 | 0.65 |
+| 2 | 0.24 / 0.33 | 0.59 / 0.83 | 1.30 |
+| 4 | 0.54 / 0.39 | 0.85 / 0.90 | 1.61 |
+| 8 | 0.81 / 0.91 | 1.88 / 2.28 | 3.88 |
 
-- **On Gmail connections are the lever.** The rate is mostly per connection: eight moved five times
-  as much up and over four times as much down as one. All chunks came back intact and no connection
-  was refused. One run.
-- **Four is the default there** (section 4.3): 3.4 times the upload of one connection, and it leaves
-  room under Gmail's cap for the other devices of the hub (B1).
+- **On Gmail connections are the lever.** The rate is mostly per connection: eight moved five to six
+  times as much up, and six times as much down, as one. All chunks came back intact and no
+  connection was refused. The runs differ by up to 40% at two and four connections.
+- **Four is the default there** (section 4.3): 2.4 to 3.4 times the upload of one connection, and it
+  leaves room under Gmail's cap for the other devices of the hub (B1).
 
 Fastmail, 16 binary chunks of 1 MiB spread over several connections at once, MiB per second:
 
