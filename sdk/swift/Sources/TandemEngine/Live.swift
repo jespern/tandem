@@ -25,6 +25,8 @@ public enum DeviceEvent: Hashable, Sendable {
     case syncFailed(String)
     /// This device put something on the hub: the cue to send a wake hint naming `wakeTag`, if the app sends any.
     case published
+    /// `blob(list:record:name:)` for these records: an upload or download started, moved or ended.
+    case blobs(list: Bytes, records: [Bytes])
 }
 
 /// Lets the device hear of its own appends, wherever they happen, to announce `.published`.

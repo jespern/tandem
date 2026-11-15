@@ -58,6 +58,8 @@ public actor Device {
     var changing: Set<Bytes> = []
     /// Tests stop a key change here (§11.6's crash points).
     var crashPoint: String?
+    /// The blob worker's state; nil until `useBlobs` (BLOBS.md).
+    var blobs: BlobRuntime?
 
     var directoryTag: String { Tandem.directoryTag(directoryKey, hub: pin.hub) }
     var directoryChannelKey: Bytes { Tandem.directoryKey(directoryKey, hub: pin.hub) }
@@ -223,7 +225,9 @@ public actor Device {
         }
         syncing = task
         defer { if syncing == task { syncing = nil }; flushEvents() }
-        return try await task.value
+        let applied = try await task.value
+        afterSync()
+        return applied
     }
 
     func syncOnce() async throws -> Int {

@@ -31,10 +31,27 @@ public final class Store: @unchecked Sendable {
         CREATE TABLE IF NOT EXISTS contents (message TEXT NOT NULL, record BLOB NOT NULL, write BLOB NOT NULL,
             PRIMARY KEY (message, write));
         CREATE INDEX IF NOT EXISTS messages_channel ON messages (channel);
+        CREATE INDEX IF NOT EXISTS contents_write ON contents (write);
+        CREATE TABLE IF NOT EXISTS chunks (id TEXT PRIMARY KEY, address BLOB NOT NULL, channel TEXT NOT NULL,
+            seen INTEGER NOT NULL, state INTEGER NOT NULL DEFAULT 0);
+        CREATE INDEX IF NOT EXISTS chunks_address ON chunks (address);
+        CREATE TABLE IF NOT EXISTS uploads (write BLOB PRIMARY KEY, scope BLOB NOT NULL, record BLOB NOT NULL,
+            field TEXT NOT NULL, epoch BLOB NOT NULL, payload BLOB NOT NULL, r BLOB NOT NULL, staged TEXT NOT NULL);
         """
+
+    /// The directory blob content is kept in (BLOBS.md): beside the database, or a temporary one for a store in memory.
+    public let blobDirectory: URL
+    private let temporaryBlobs: Bool
 
     /// Open (or create) the store at `path`; ":memory:" for tests.
     public init(path: String) throws {
+        if path == ":memory:" {
+            blobDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("tandem-blobs-" + UUID().uuidString)
+            temporaryBlobs = true
+        } else {
+            blobDirectory = URL(fileURLWithPath: path + ".blobs")
+            temporaryBlobs = false
+        }
         guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK
         else { throw Self.error(db, "open") }
         // The app and its extensions may share one store (an App Group container): wait for the other's write lock.
@@ -42,7 +59,10 @@ public final class Store: @unchecked Sendable {
         try exec(Self.schema)
     }
 
-    deinit { sqlite3_close(db) }
+    deinit {
+        sqlite3_close(db)
+        if temporaryBlobs { try? FileManager.default.removeItem(at: blobDirectory) }
+    }
 
     static func error(_ db: OpaquePointer?, _ what: String) -> TandemError {
         .invalid("store: \(what): \(db.map { String(cString: sqlite3_errmsg($0)) } ?? "no database")")
@@ -275,6 +295,75 @@ public final class Store: @unchecked Sendable {
     public func journalSteps() throws -> [String] {
         var out: [String] = []
         try run("SELECT step FROM journal ORDER BY rowid", []) { out.append(Self.text($0, 0)) }
+        return out
+    }
+
+    // MARK: Blobs (BLOBS.md)
+
+    /// Whether a message in the feed holds the write: the server answered this device's append of it, or a sync saw it.
+    public func onFeed(_ write: Bytes) throws -> Bool {
+        var found = false
+        try run("SELECT 1 FROM contents JOIN messages ON contents.message = messages.id WHERE contents.write = ? LIMIT 1", [.blob(write)]) { _ in found = true }
+        return found
+    }
+
+    public enum ChunkState: Int64, Sendable { case unverified = 0, verified = 1, rejected = 2 }
+
+    /// One message of the blob folder as this device knows it: `seen` is when this device first saw it, Unix
+    /// milliseconds by its own clock.
+    public struct ChunkRow: Sendable, Equatable {
+        public var id: String, address: Bytes, channel: String, seen: Int64, state: ChunkState
+    }
+
+    public func noteChunks(_ refs: [BlobRef], seen: Int64) throws {
+        for r in refs {
+            try run("INSERT OR IGNORE INTO chunks (id, address, channel, seen) VALUES (?, ?, ?, ?)", [.text(r.id), .blob(r.address), .text(r.channel), .int(seen)])
+        }
+    }
+
+    public func forgetChunks(_ ids: [String]) throws {
+        for id in ids { try run("DELETE FROM chunks WHERE id = ?", [.text(id)]) }
+    }
+
+    public func setChunkState(_ id: String, _ state: ChunkState) throws {
+        try run("UPDATE chunks SET state = ? WHERE id = ?", [.int(state.rawValue), .text(id)])
+    }
+
+    private func chunkRows(_ sql: String, _ args: [Arg]) throws -> [ChunkRow] {
+        var out: [ChunkRow] = []
+        try run(sql, args) {
+            out.append(ChunkRow(id: Self.text($0, 0), address: Self.blob($0, 1), channel: Self.text($0, 2), seen: sqlite3_column_int64($0, 3),
+                                state: ChunkState(rawValue: sqlite3_column_int64($0, 4)) ?? .unverified))
+        }
+        return out
+    }
+
+    public func chunks(address: Bytes) throws -> [ChunkRow] {
+        try chunkRows("SELECT id, address, channel, seen, state FROM chunks WHERE address = ?", [.blob(address)])
+    }
+
+    public func chunks() throws -> [ChunkRow] {
+        try chunkRows("SELECT id, address, channel, seen, state FROM chunks ORDER BY rowid", [])
+    }
+
+    /// One pending blob write: signed, not in the replica, its chunks going up (BLOBS.md section 6).
+    public struct Upload: Sendable, Equatable {
+        public var write: Bytes, scope: Bytes, record: Bytes, field: String, epoch: Bytes, payload: Bytes, r: Bytes, staged: String
+    }
+
+    public func putUpload(_ u: Upload) throws {
+        try run("INSERT OR REPLACE INTO uploads (write, scope, record, field, epoch, payload, r, staged) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [.blob(u.write), .blob(u.scope), .blob(u.record), .text(u.field), .blob(u.epoch), .blob(u.payload), .blob(u.r), .text(u.staged)])
+    }
+
+    public func removeUpload(_ write: Bytes) throws { try run("DELETE FROM uploads WHERE write = ?", [.blob(write)]) }
+
+    public func uploads() throws -> [Upload] {
+        var out: [Upload] = []
+        try run("SELECT write, scope, record, field, epoch, payload, r, staged FROM uploads ORDER BY rowid", []) {
+            out.append(Upload(write: Self.blob($0, 0), scope: Self.blob($0, 1), record: Self.blob($0, 2), field: Self.text($0, 3),
+                              epoch: Self.blob($0, 4), payload: Self.blob($0, 5), r: Self.blob($0, 6), staged: Self.text($0, 7)))
+        }
         return out
     }
 }

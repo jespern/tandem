@@ -232,7 +232,7 @@ extension Device {
         catch { changed(.syncFailed("\(error)")); flushEvents() }
     }
 
-    private func signRecord(_ c: CollectionState, me: Me, record: Bytes, field: Bytes, op: Op, value: Bytes, element: Bytes?,
+    func signRecord(_ c: CollectionState, me: Me, record: Bytes, field: Bytes, op: Op, value: Bytes, element: Bytes?,
                             head: ID, epoch: ID, after earlier: [Write]) throws -> Write {
         let n = c.statements[head]!.statement.keyN
         var r = try c.records[record] ?? Record(hub: pin.hub, scope: c.id, id: record)

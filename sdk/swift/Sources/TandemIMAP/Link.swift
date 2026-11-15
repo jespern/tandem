@@ -480,36 +480,36 @@ actor Link {
     // MARK: - The blob folder (BLOBS.md section 4.3)
 
     /// One page of the folder's changes, from the headers alone: no body is fetched.
-    func refs(since text: String) async throws -> BlobStore.Changes {
+    func refs(since text: String) async throws -> BlobChanges {
         let cursor = try Cursor(text)
         return try await retrying { c in
             let page = try await self.scanFolder(c, cursor, fetch: { c, set in
                 try await self.fetchWith(c, "UID FETCH \(set) (UID BODY.PEEK[HEADER.FIELDS (Tandem-Channel Tandem-Blob)])")
             }, decode: self.decodeRef)
-            return BlobStore.Changes(added: page.added, removed: page.removed, cursor: page.cursor, more: page.more)
+            return BlobChanges(added: page.added, removed: page.removed, cursor: page.cursor, more: page.more)
         }
     }
 
-    private func decodeRef(_ item: FetchItem, _ uid: UInt32) -> BlobStore.Ref? {
+    private func decodeRef(_ item: FetchItem, _ uid: UInt32) -> BlobRef? {
         guard let header = item.sections["HEADER.FIELDS"], let tag = MessageFormat.field("Tandem-Channel", in: header), !tag.isEmpty,
               let channel = String(validating: tag, as: UTF8.self), let claim = MessageFormat.field("Tandem-Blob", in: header),
               let address = B32.decode(String(decoding: claim, as: UTF8.self)), address.count == 32 else { return nil }
-        return BlobStore.Ref(id: MessageID.make(validity, uid), channel: channel, address: address)
+        return BlobRef(id: MessageID.make(validity, uid), channel: channel, address: address)
     }
 
     /// Chunk messages by ID; those that are gone, too large or don't decode are left out.
-    func chunks(ids: [String]) async throws -> [BlobStore.Chunk] {
+    func chunks(ids: [String]) async throws -> [Chunk] {
         try await retrying { c in
             let uids = self.current(ids)
             let fields = ChunkFormat.fields.joined(separator: " ")
-            var out: [BlobStore.Chunk] = []
+            var out: [Chunk] = []
             for set in self.chunks(uids) {
                 let items = try await self.fetchWith(c, "UID FETCH \(set) (UID RFC822.SIZE BODY.PEEK[HEADER.FIELDS (\(fields))] BODY.PEEK[TEXT]<0.\(self.config.maxMessageSize)>)")
                 for uid in items.keys.sorted() where uids.contains(uid) {
                     let item = items[uid]!
                     guard let size = item.size, size <= UInt64(self.config.maxMessageSize), let header = item.sections["HEADER.FIELDS"],
                           let text = item.sections["TEXT"], let envelope = try? ChunkFormat.decode(header: header, text: text) else { continue }
-                    out.append(BlobStore.Chunk(id: MessageID.make(self.validity, uid), envelope: envelope))
+                    out.append(Chunk(id: MessageID.make(self.validity, uid), envelope: envelope))
                 }
             }
             return out
@@ -517,17 +517,17 @@ actor Link {
     }
 
     /// The storage quota of the folder's root; unknown where the server has no QUOTA or reports no storage.
-    func quota() async throws -> BlobStore.Quota {
+    func quota() async throws -> Quota {
         try await retrying { c in
-            guard self.caps.contains("QUOTA") else { return BlobStore.Quota.unknown }
+            guard self.caps.contains("QUOTA") else { return Quota.unknown }
             let r: Connection.Result
-            do { r = try await c.execute([.text("GETQUOTAROOT "), .astring(self.folder)]) } catch IMAPError.rejected { return BlobStore.Quota.unknown }
+            do { r = try await c.execute([.text("GETQUOTAROOT "), .astring(self.folder)]) } catch IMAPError.rejected { return Quota.unknown }
             for case .quota(_, let resources) in r.untagged {
                 if let storage = resources.first(where: { $0.name == "STORAGE" }) {
-                    return BlobStore.Quota.known(used: Int64(storage.usage) * 1024, limit: Int64(storage.limit) * 1024)
+                    return Quota.known(used: Int64(storage.usage) * 1024, limit: Int64(storage.limit) * 1024)
                 }
             }
-            return BlobStore.Quota.unknown
+            return Quota.unknown
         }
     }
 

@@ -67,13 +67,11 @@ extension StalwartTests {
         let store = blobs(folder, options: BlobStore.Options(folder: folder, batchBytes: 64 << 10))
         var outgoing: [(channel: String, envelope: Bytes)] = []
         for i in 0..<12 { outgoing.append(("tag\(i % 3)", try chunkEnvelope(20000 + i))) }
-        let ids = try await store.append(outgoing)
+        let ids = try await store.append(outgoing, form: .escaped)
         XCTAssertEqual(ids.count, 12)
         let open = await store.connections
         XCTAssertEqual(open, 2, "Stalwart batches appends, so two transfer connections")
-        let base64 = BlobStore(config("unused"), options: BlobStore.Options(folder: folder, form: .base64))
-        let more = try await base64.append([("tag0", outgoing[0].envelope)])
-        await base64.close()
+        let more = try await store.append([("tag0", outgoing[0].envelope)], form: .base64)
         let changes = try await store.changes(since: "")
         XCTAssertEqual(changes.added.count, 13)
         var index = [more[0]: 0]

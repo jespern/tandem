@@ -4,12 +4,7 @@ import Tandem
 /// The chunk message of BLOBS.md section 4.2: building it, and reading its envelope back.
 public enum ChunkFormat {
     /// How a chunk's body is carried.
-    public enum Form: Sendable, Equatable {
-        /// 8-bit content with a few bytes escaped, 2% larger than the envelope. Writers use it.
-        case escaped
-        /// For a server seen to damage the escaped form; 37% larger.
-        case base64
-    }
+    public typealias Form = ChunkForm
 
     /// The header fields a chunk reader fetches with the body.
     static let fields = ["Tandem-Channel", "Tandem-Blob", "Tandem-Body", "Content-Type", "Content-Transfer-Encoding"]

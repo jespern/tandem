@@ -5,31 +5,12 @@ import Tandem
 /// device idles on. It lists the chunks' claimed addresses from their headers alone, fetches and decodes chunk
 /// bodies, appends chunks and reads the quota, on transfer connections of its own that open when work arrives
 /// and close at `release()`.
-public actor BlobStore {
+public actor BlobStore: BlobHub {
     /// The blob folder's name; a personal namespace prefix goes in front of it.
     public static let folder = "Tandem-Blobs"
 
-    /// A message in the blob folder as its headers claim it: the claims are unverified.
-    public struct Ref: Sendable, Equatable {
-        public var id: String, channel: String, address: Bytes
-    }
-
-    /// One page of what changed in the blob folder.
-    public struct Changes: Sendable, Equatable {
-        public var added: [Ref], removed: [String], cursor: String, more: Bool
-    }
-
-    /// A fetched chunk message, decoded but not verified.
-    public struct Chunk: Sendable, Equatable {
-        public var id: String, envelope: Bytes
-    }
-
-    /// The storage quota of the folder's root (RFC 9208): unknown where the server has no QUOTA or reports no
-    /// storage limit, never zero.
-    public enum Quota: Sendable, Equatable {
-        case unknown
-        case known(used: Int64, limit: Int64)
-    }
+    public typealias Ref = BlobRef
+    public typealias Changes = BlobChanges
 
     public struct Options: Sendable {
         /// The blob folder's name.
@@ -37,17 +18,14 @@ public actor BlobStore {
         /// How many connections a transfer may use: nil decides from the server, 2 where it batches appends
         /// (MULTIAPPEND or LITERAL+) and 4 where it doesn't (section 4.3); at most 8. Fewer when one is refused.
         public var transferConnections: Int?
-        /// How chunks are written.
-        public var form: ChunkFormat.Form
         /// The message bytes of one append batch.
         public var batchBytes: Int
         /// How many chunks one FETCH asks for.
         public var fetchBatch: Int
 
-        public init(folder: String = BlobStore.folder, transferConnections: Int? = nil, form: ChunkFormat.Form = .escaped,
-                    batchBytes: Int = 6 << 20, fetchBatch: Int = 4) {
+        public init(folder: String = BlobStore.folder, transferConnections: Int? = nil, batchBytes: Int = 6 << 20, fetchBatch: Int = 4) {
             self.folder = folder; self.transferConnections = transferConnections.map { min(8, max(1, $0)) }
-            self.form = form; self.batchBytes = max(1, batchBytes); self.fetchBatch = max(1, fetchBatch)
+            self.batchBytes = max(1, batchBytes); self.fetchBatch = max(1, fetchBatch)
         }
     }
 
@@ -132,8 +110,8 @@ public actor BlobStore {
     /// Appends chunks in batches of a few MiB over the transfer connections, each batch in as few commands as
     /// the server allows (MULTIAPPEND). IDs follow the order of `chunks`; "" where the server named no UID. Not
     /// retried: an append whose answer was lost may have landed, which the next `changes` shows.
-    public func append(_ chunks: [(channel: String, envelope: Bytes)]) async throws -> [String] {
-        let built = try chunks.map { try ChunkFormat.build(channel: $0.channel, envelope: $0.envelope, form: options.form) }
+    public func append(_ chunks: [(channel: String, envelope: Bytes)], form: ChunkForm = .escaped) async throws -> [String] {
+        let built = try chunks.map { try ChunkFormat.build(channel: $0.channel, envelope: $0.envelope, form: form) }
         guard !built.isEmpty else { return [] }
         var batches: [[Bytes]] = [], i = 0
         while i < built.count {
@@ -193,7 +171,7 @@ extension IMAPStore {
     /// Appends chunks to the blob folder on the feed's own connection, without selecting it: for a transfer of one
     /// batch, which takes less time than opening a transfer connection (BLOBS.md section 4.3).
     public func appendChunks(_ chunks: [(channel: String, envelope: Bytes)], folder: String = BlobStore.folder,
-                             form: ChunkFormat.Form = .escaped) async throws -> [String] {
+                             form: ChunkForm = .escaped) async throws -> [String] {
         let built = try chunks.map { try ChunkFormat.build(channel: $0.channel, envelope: $0.envelope, form: form) }
         return built.isEmpty ? [] : try await feedLink.append(built, toFolderNamed: folder)
     }
