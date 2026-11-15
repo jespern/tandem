@@ -15,16 +15,13 @@ import (
 type MemoryBlobHub struct {
 	// PageSize, if set, makes Changes return at most this many events per call, with More.
 	PageSize int
-	// DamageEscaped makes every chunk appended in the escaped form come back altered.
-	DamageEscaped bool
-	// QuotaReport is what Quota returns.
-	QuotaReport tandem.Quota
-	// FailAppends makes Append fail as an over-quota server does.
-	FailAppends bool
-	// PartialAppends, if set, stores only that many chunks of each Append, then fails it.
-	PartialAppends int
-	// FailDestroys makes Destroy fail, as a lost connection does.
-	FailDestroys bool
+	// The faults below are switched with their setters, which take the lock: a test changes them
+	// while the blob worker runs.
+	damageEscaped  bool         // every chunk appended in the escaped form comes back altered
+	quota          tandem.Quota // what Quota returns
+	failAppends    bool         // Append fails as an over-quota server does
+	partialAppends int          // if set, Append stores only that many chunks of each batch, then fails
+	failDestroys   bool         // Destroy fails, as a lost connection does
 
 	mu       sync.Mutex
 	events   []blobEvent
@@ -49,7 +46,22 @@ func NewMemoryBlobHub() *MemoryBlobHub { return &MemoryBlobHub{live: map[string]
 
 var _ tandem.BlobHub = (*MemoryBlobHub)(nil)
 
-// ErrOverQuota is what Append returns while FailAppends is set.
+// SetDamageEscaped makes every chunk appended in the escaped form come back altered.
+func (h *MemoryBlobHub) SetDamageEscaped(on bool) { h.mu.Lock(); h.damageEscaped = on; h.mu.Unlock() }
+
+// SetQuota sets what Quota returns.
+func (h *MemoryBlobHub) SetQuota(q tandem.Quota) { h.mu.Lock(); h.quota = q; h.mu.Unlock() }
+
+// SetFailAppends makes Append fail as an over-quota server does.
+func (h *MemoryBlobHub) SetFailAppends(on bool) { h.mu.Lock(); h.failAppends = on; h.mu.Unlock() }
+
+// SetPartialAppends makes Append store only n chunks of each batch, then fail; 0 turns it off.
+func (h *MemoryBlobHub) SetPartialAppends(n int) { h.mu.Lock(); h.partialAppends = n; h.mu.Unlock() }
+
+// SetFailDestroys makes Destroy fail, as a lost connection does.
+func (h *MemoryBlobHub) SetFailDestroys(on bool) { h.mu.Lock(); h.failDestroys = on; h.mu.Unlock() }
+
+// ErrOverQuota is what Append returns while SetFailAppends is on.
 var ErrOverQuota = errors.New("hub: over quota")
 
 func (h *MemoryBlobHub) Changes(_ context.Context, cursor string) (tandem.BlobChanges, error) {
@@ -92,17 +104,17 @@ func (h *MemoryBlobHub) add(channel string, address, body []byte, form tandem.Ch
 func (h *MemoryBlobHub) Append(_ context.Context, chunks []tandem.OutgoingChunk, form tandem.ChunkForm) ([]string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.FailAppends {
+	if h.failAppends {
 		return nil, ErrOverQuota
 	}
 	h.appends++
 	ids := make([]string, len(chunks))
 	for i, c := range chunks {
-		if h.PartialAppends > 0 && i >= h.PartialAppends {
+		if h.partialAppends > 0 && i >= h.partialAppends {
 			return nil, errors.New("hub: connection lost")
 		}
 		body := c.Envelope
-		if form == tandem.FormEscaped && h.DamageEscaped {
+		if form == tandem.FormEscaped && h.damageEscaped {
 			body = append(bytes.Clone(body[:len(body)-1]), body[len(body)-1]^0x20)
 		}
 		ids[i] = h.add(c.Channel, tandem.ChunkAddress(c.Envelope), body, form)
@@ -124,7 +136,7 @@ func (h *MemoryBlobHub) Fetch(_ context.Context, ids []string) ([]tandem.Chunk, 
 
 func (h *MemoryBlobHub) Destroy(_ context.Context, ids []string) error {
 	h.mu.Lock()
-	fail := h.FailDestroys
+	fail := h.failDestroys
 	h.mu.Unlock()
 	if fail {
 		return errors.New("hub: connection lost")
@@ -136,7 +148,7 @@ func (h *MemoryBlobHub) Destroy(_ context.Context, ids []string) error {
 func (h *MemoryBlobHub) Quota(context.Context) (tandem.Quota, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.QuotaReport, nil
+	return h.quota, nil
 }
 
 func (h *MemoryBlobHub) Release() {

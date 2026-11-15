@@ -246,7 +246,7 @@ func TestGCDroppedManifestsChunksAreStillCollected(t *testing.T) {
 	must(t, w.bob.AttachBytes(bg, w.list, photo, "photo", content(2500)))
 	settle(t, w.bob)
 	m1 := manifestOf(t, w.bob, w.list, photo, "photo")
-	w.blobs.FailDestroys = true
+	w.blobs.SetFailDestroys(true)
 	must(t, w.bob.AttachBytes(bg, w.list, photo, "photo", content(2600)))
 	settle(t, w.bob)
 	syncAll(t, w.alice)
@@ -259,7 +259,7 @@ func TestGCDroppedManifestsChunksAreStillCollected(t *testing.T) {
 	if n := pastWrites(t, w.bob, w.list); n != 0 {
 		t.Fatal("the replaced write was dropped", n)
 	}
-	w.blobs.FailDestroys = false
+	w.blobs.SetFailDestroys(false)
 	clean(t, w.bob, w.bob)
 	if n := onHub(w.blobs, m1); n != 0 {
 		t.Fatalf("%d chunks of a dropped manifest left", n)

@@ -182,7 +182,7 @@ func TestBlobPendingReplacementKeepsThePublishedVersion(t *testing.T) {
 	must(t, w.bob.AttachBytes(bg, w.list, photo, "photo", v1))
 	settle(t, w.bob)
 	m1 := manifestOf(t, w.bob, w.list, photo, "photo")
-	w.blobs.FailAppends = true
+	w.blobs.SetFailAppends(true)
 	must(t, w.bob.AttachBytes(bg, w.list, photo, "photo", v2))
 	settle(t, w.bob)
 	if s := blobState(t, w.bob, w.list, photo, "photo"); s != BlobUploading {
@@ -200,7 +200,7 @@ func TestBlobPendingReplacementKeepsThePublishedVersion(t *testing.T) {
 	if got := manifestOf(t, w.alice, w.list, photo, "photo"); !bytes.Equal(got.Hash, m1.Hash) || value_(w.alice, w.list, photo, "title") != "Beach" {
 		t.Fatal("a record message published meanwhile carries the old manifest")
 	}
-	w.blobs.FailAppends = false
+	w.blobs.SetFailAppends(false)
 	settle(t, w.bob)
 	m2 := manifestOf(t, w.bob, w.list, photo, "photo")
 	if bytes.Equal(m2.Hash, m1.Hash) {
@@ -273,12 +273,12 @@ func TestBlobJunkClaimsAreSettled(t *testing.T) {
 	tag, _ := w.bob.channelOf(w.list)
 	data := content(2500)
 	photo := NewRecordID()
-	w.blobs.FailAppends = true
+	w.blobs.SetFailAppends(true)
 	must(t, w.bob.AttachBytes(bg, w.list, photo, "photo", data))
 	settle(t, w.bob)
 	pending := w.pendingManifest(t, w.bob)
 	junk := w.blobs.Inject(tag, pending.Chunks[0].Address, []byte("junk"))
-	w.blobs.FailAppends = false
+	w.blobs.SetFailAppends(false)
 	settle(t, w.bob)
 	got := manifestOf(t, w.bob, w.list, photo, "photo")
 	if ids := w.blobs.WithAddress(got.Chunks[0].Address); len(ids) != 2 {
@@ -353,7 +353,7 @@ func TestBlobTwoHealersKeepOneCopy(t *testing.T) {
 // The binary form was dropped; the form check moves a hub that damages the escaped form to base64.
 func TestBlobFormCheckFallsBackToBase64(t *testing.T) {
 	w := newBlobWorld(t)
-	w.blobs.DamageEscaped = true
+	w.blobs.SetDamageEscaped(true)
 	photo, data := NewRecordID(), content(2500)
 	must(t, w.bob.AttachBytes(bg, w.list, photo, "photo", data))
 	settle(t, w.bob)
@@ -440,14 +440,14 @@ func TestBlobUploadResumesAfterARestart(t *testing.T) {
 	hub, _, keys, bob := found(t, "Bob’s Mac", store)
 	list := try(bob.CreateList(bg, "Photos"))
 	blobs := NewMemoryBlobHub()
-	blobs.FailAppends = true // signed and journalled, nothing up yet: then the app is killed
+	blobs.SetFailAppends(true) // signed and journalled, nothing up yet: then the app is killed
 	must(t, bob.UseBlobs(blobs, smallBlobs))
 	photo, data := NewRecordID(), content(4200)
 	must(t, bob.AttachBytes(bg, list, photo, "photo", data))
 	settle(t, bob)
 	bob.Close()
 	must(t, store.Close())
-	blobs.FailAppends = false
+	blobs.SetFailAppends(false)
 	store = try(OpenStore(path))
 	defer store.Close()
 	again := try(Reopen(store, keys, hub.Connect()))
@@ -500,7 +500,7 @@ func TestBlobOtherWritesGoOutWhilePending(t *testing.T) {
 	photo := NewRecordID()
 	must(t, w.bob.AttachBytes(bg, w.list, photo, "photo", content(500)))
 	syncAll(t, w.alice)
-	w.blobs.FailAppends = true
+	w.blobs.SetFailAppends(true)
 	must(t, w.bob.AttachBytes(bg, w.list, photo, "photo", content(2500)))
 	must(t, w.bob.SetField(bg, w.list, photo, "title", []byte("Beach")))
 	syncAll(t, w.alice)
@@ -509,7 +509,7 @@ func TestBlobOtherWritesGoOutWhilePending(t *testing.T) {
 	}
 	must(t, w.alice.AttachBytes(bg, w.list, photo, "photo", content(30))) // inline, at once
 	syncAll(t, w.bob)
-	w.blobs.FailAppends = false
+	w.blobs.SetFailAppends(false)
 	settle(t, w.bob)
 	syncAll(t, w.alice)
 	item, _ := w.alice.Item(w.list, photo)
@@ -522,7 +522,7 @@ func TestBlobOtherWritesGoOutWhilePending(t *testing.T) {
 func TestBlobCancelAndDeleteDropThePendingWrite(t *testing.T) {
 	w := newBlobWorld(t)
 	photo := NewRecordID()
-	w.blobs.PartialAppends = 1 // one chunk of each batch lands, then the connection drops: the upload stays pending
+	w.blobs.SetPartialAppends(1) // one chunk of each batch lands, then the connection drops: the upload stays pending
 	must(t, w.bob.AttachBytes(bg, w.list, photo, "photo", content(2500)))
 	round(t, w.bob)
 	pending := w.pendingManifest(t, w.bob)
@@ -530,7 +530,7 @@ func TestBlobCancelAndDeleteDropThePendingWrite(t *testing.T) {
 		t.Fatal("a chunk went up")
 	}
 	w.bob.CancelAttach(w.list, photo, "photo")
-	w.blobs.PartialAppends = 0
+	w.blobs.SetPartialAppends(0)
 	if _, ok := w.bob.Blob(w.list, photo, "photo"); ok {
 		t.Fatal("still shown")
 	}
@@ -539,11 +539,11 @@ func TestBlobCancelAndDeleteDropThePendingWrite(t *testing.T) {
 		t.Fatalf("%d chunks of the cancelled upload left", onHub(w.blobs, pending))
 	}
 	// Deleted before the commit.
-	w.blobs.FailAppends = true
+	w.blobs.SetFailAppends(true)
 	other := NewRecordID()
 	must(t, w.bob.AttachBytes(bg, w.list, other, "photo", content(2500)))
 	must(t, w.bob.DeleteRecord(bg, w.list, other))
-	w.blobs.FailAppends = false
+	w.blobs.SetFailAppends(false)
 	settle(t, w.bob)
 	if len(try(w.bob.store.Uploads())) != 0 {
 		t.Fatal("the pending write of a deleted record is dropped")
@@ -695,18 +695,18 @@ func TestBlobQuotaAndAFullHub(t *testing.T) {
 	if q := try(w.bob.BlobQuota(bg)); q.Known {
 		t.Fatal("unknown, never zero")
 	}
-	w.blobs.QuotaReport = tandem.Quota{Known: true, Used: 10, Limit: 100}
+	w.blobs.SetQuota(tandem.Quota{Known: true, Used: 10, Limit: 100})
 	if q := try(w.bob.BlobQuota(bg)); !q.Known || q.Limit != 100 {
 		t.Fatal(q)
 	}
-	w.blobs.FailAppends = true
+	w.blobs.SetFailAppends(true)
 	photo := NewRecordID()
 	must(t, w.bob.AttachBytes(bg, w.list, photo, "photo", content(2500)))
 	settle(t, w.bob)
 	if len(try(w.bob.store.Uploads())) != 1 {
 		t.Fatal("a full hub leaves the upload in the journal")
 	}
-	w.blobs.FailAppends = false
+	w.blobs.SetFailAppends(false)
 	settle(t, w.bob)
 	if s := blobState(t, w.bob, w.list, photo, "photo"); s != BlobHere {
 		t.Fatalf("resumed: %d", s)
