@@ -116,15 +116,14 @@ func TestStalwartBlobStore(t *testing.T) {
 		envs = append(envs, env)
 		out = append(out, OutgoingChunk{Channel: "tag" + fmt.Sprint(i%3), Envelope: env})
 	}
-	ids, err := b.Append(ctx, out)
+	ids, err := b.Append(ctx, out, FormEscaped)
 	if err != nil || len(ids) != len(out) {
 		t.Fatalf("append: %v %v", ids, err)
 	}
 	if n := b.Connections(); n != 2 {
 		t.Fatalf("%d transfer connections; Stalwart batches appends, so two", n)
 	}
-	b.opts.Form = FormBase64
-	more, err := b.Append(ctx, []OutgoingChunk{{Channel: "tag0", Envelope: envs[0]}})
+	more, err := b.Append(ctx, []OutgoingChunk{{Channel: "tag0", Envelope: envs[0]}}, FormBase64)
 	if err != nil || len(more) != 1 {
 		t.Fatal(err)
 	}

@@ -37,6 +37,8 @@ const (
 	EventSyncFailed
 	// EventPublished: this device put something on the hub: the cue to send a wake hint.
 	EventPublished
+	// EventBlobs: Blob(list, record, name) for these records: an upload or download started, moved or ended.
+	EventBlobs
 )
 
 // Event is one change. List and Records are set for EventItems and EventMembers.

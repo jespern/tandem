@@ -66,6 +66,8 @@ type Device struct {
 
 	life   context.Context
 	cancel context.CancelFunc
+
+	blobs *blobs // nil until UseBlobs
 }
 
 func (d *Device) directoryTag() string        { return tandem.DirectoryTag(d.directoryKey, d.pin.Hub) }
@@ -498,8 +500,14 @@ const (
 // Sync reads everything new on the hub and applies what this device can read, then retries
 // what was held. It returns how many messages it applied. Syncs never interleave.
 func (d *Device) Sync(ctx context.Context) (int, error) {
-	defer d.begin()()
-	return d.sync(ctx)
+	n, err := func() (int, error) {
+		defer d.begin()()
+		return d.sync(ctx)
+	}()
+	if err == nil {
+		d.afterSync()
+	}
+	return n, err
 }
 
 func (d *Device) sync(ctx context.Context) (int, error) {

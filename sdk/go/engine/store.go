@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"sync"
 
 	tandem "github.com/jespern/tandem/sdk/go"
@@ -21,14 +22,21 @@ import (
 //   - journal: exact bytes signed for a step that hasn't finished exporting.
 //   - held: messages waiting for something they depend on (§8.3).
 //   - contents: which writes each kind-1 message carries (§10.7).
+//   - chunks: the blob folder's index: each message's claimed address and tag, when this device
+//     first saw it, and whether it verified or rejected it (BLOBS.md section 4.3).
+//   - uploads: the upload journal: pending blob writes with their r and staged copy (section 6).
+//
+// Blob content lives in files, in BlobDir beside the database, never in SQLite.
 //
 // A Store belongs to one Device in one process.
 type Store struct {
-	db    *sql.DB
-	conn  *sql.Conn
-	mu    sync.Mutex
-	depth int
-	ctx   context.Context
+	db      *sql.DB
+	conn    *sql.Conn
+	mu      sync.Mutex
+	depth   int
+	ctx     context.Context
+	blobDir string
+	tempDir bool // blobDir is a temporary directory of a store in memory, removed at Close
 }
 
 const storeSchema = `
@@ -45,6 +53,12 @@ CREATE TABLE IF NOT EXISTS held (id TEXT PRIMARY KEY, channel TEXT NOT NULL, bod
 CREATE TABLE IF NOT EXISTS contents (message TEXT NOT NULL, record BLOB NOT NULL, write BLOB NOT NULL,
     PRIMARY KEY (message, write));
 CREATE INDEX IF NOT EXISTS messages_channel ON messages (channel);
+CREATE INDEX IF NOT EXISTS contents_write ON contents (write);
+CREATE TABLE IF NOT EXISTS chunks (id TEXT PRIMARY KEY, address BLOB NOT NULL, channel TEXT NOT NULL,
+    seen INTEGER NOT NULL, state INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS chunks_address ON chunks (address);
+CREATE TABLE IF NOT EXISTS uploads (write BLOB PRIMARY KEY, scope BLOB NOT NULL, record BLOB NOT NULL,
+    field TEXT NOT NULL, epoch BLOB NOT NULL, payload BLOB NOT NULL, r BLOB NOT NULL, staged TEXT NOT NULL);
 `
 
 // OpenStore opens (or creates) the store at path; ":memory:" for tests.
@@ -63,13 +77,26 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	s := &Store{db: db, conn: conn, ctx: ctx}
+	s := &Store{db: db, conn: conn, ctx: ctx, blobDir: path + ".blobs"}
+	if path == ":memory:" {
+		dir, err := os.MkdirTemp("", "tandem-blobs-")
+		if err != nil {
+			conn.Close()
+			db.Close()
+			return nil, err
+		}
+		s.blobDir, s.tempDir = dir, true
+	}
 	if _, err := conn.ExecContext(ctx, storeSchema); err != nil {
 		s.Close()
 		return nil, err
 	}
 	return s, nil
 }
+
+// BlobDir is the directory blob content is kept in: path + ".blobs", or a temporary one for a
+// store in memory.
+func (s *Store) BlobDir() string { return s.blobDir }
 
 // MemoryStore is a new store in memory, for tests.
 func MemoryStore() *Store {
@@ -82,7 +109,11 @@ func MemoryStore() *Store {
 
 func (s *Store) Close() error {
 	s.conn.Close()
-	return s.db.Close()
+	err := s.db.Close()
+	if s.tempDir {
+		os.RemoveAll(s.blobDir)
+	}
+	return err
 }
 
 // Transaction runs fn in one transaction: all of it is committed, or none of it. A
@@ -422,6 +453,101 @@ func (s *Store) JournalSteps() ([]string, error) {
 		var st string
 		err := r.Scan(&st)
 		out = append(out, st)
+		return err
+	})
+	return out, err
+}
+
+// OnFeed reports whether a message in the feed holds the write: the server answered this device's
+// append of it, or a sync saw it (BLOBS.md section 7).
+func (s *Store) OnFeed(write []byte) bool {
+	var one int
+	return s.conn.QueryRowContext(s.ctx, "SELECT 1 FROM contents JOIN messages ON contents.message = messages.id WHERE contents.write = ? LIMIT 1",
+		write).Scan(&one) == nil
+}
+
+// The blob folder's index (BLOBS.md section 4.3)
+
+const (
+	chunkUnverified = 0
+	chunkVerified   = 1 // this device had the body and saw it hash to its claim
+	chunkRejected   = 2 // its body hashes to something else: absent everywhere, for good
+)
+
+// ChunkRow is one message of the blob folder as this device knows it.
+type ChunkRow struct {
+	ID, Channel string
+	Address     []byte
+	Seen        int64 // when this device first saw it, Unix milliseconds by its own clock
+	State       int
+}
+
+func (s *Store) NoteChunks(refs []tandem.BlobRef, seen int64) error {
+	for _, r := range refs {
+		if err := s.exec("INSERT OR IGNORE INTO chunks (id, address, channel, seen) VALUES (?, ?, ?, ?)", r.ID, r.Address, r.Channel, seen); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ForgetChunks(ids []string) error {
+	for _, id := range ids {
+		if err := s.exec("DELETE FROM chunks WHERE id = ?", id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) SetChunkState(id string, state int) error {
+	return s.exec("UPDATE chunks SET state = ? WHERE id = ?", state, id)
+}
+
+func (s *Store) chunkRows(q string, args ...any) ([]ChunkRow, error) {
+	var out []ChunkRow
+	err := s.rows(q, args, func(r *sql.Rows) error {
+		var c ChunkRow
+		err := r.Scan(&c.ID, &c.Address, &c.Channel, &c.Seen, &c.State)
+		out = append(out, c)
+		return err
+	})
+	return out, err
+}
+
+// ChunksWithAddress is every message claiming an address.
+func (s *Store) ChunksWithAddress(address []byte) ([]ChunkRow, error) {
+	return s.chunkRows("SELECT id, address, channel, seen, state FROM chunks WHERE address = ?", address)
+}
+
+// Chunks is the whole index.
+func (s *Store) Chunks() ([]ChunkRow, error) {
+	return s.chunkRows("SELECT id, address, channel, seen, state FROM chunks ORDER BY rowid")
+}
+
+// The upload journal (BLOBS.md section 6)
+
+// Upload is one pending blob write: signed, not in the replica, its chunks going up.
+type Upload struct {
+	Write, Scope, Record, Epoch, Payload, R []byte
+	Field, Staged                           string
+}
+
+func (s *Store) PutUpload(u Upload) error {
+	return s.exec("INSERT OR REPLACE INTO uploads (write, scope, record, field, epoch, payload, r, staged) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		u.Write, u.Scope, u.Record, u.Field, u.Epoch, u.Payload, u.R, u.Staged)
+}
+
+func (s *Store) RemoveUpload(write []byte) error {
+	return s.exec("DELETE FROM uploads WHERE write = ?", write)
+}
+
+func (s *Store) Uploads() ([]Upload, error) {
+	var out []Upload
+	err := s.rows("SELECT write, scope, record, field, epoch, payload, r, staged FROM uploads ORDER BY rowid", nil, func(r *sql.Rows) error {
+		var u Upload
+		err := r.Scan(&u.Write, &u.Scope, &u.Record, &u.Field, &u.Epoch, &u.Payload, &u.R, &u.Staged)
+		out = append(out, u)
 		return err
 	})
 	return out, err

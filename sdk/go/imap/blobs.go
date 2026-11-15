@@ -23,13 +23,13 @@ import (
 const BlobFolder = "Tandem-Blobs"
 
 // ChunkForm is how a chunk's body is carried (BLOBS.md section 4.2).
-type ChunkForm int
+type ChunkForm = tandem.ChunkForm
 
 const (
 	// FormEscaped is 8-bit content with a few bytes escaped, 2% larger than the envelope. Writers use it.
-	FormEscaped ChunkForm = iota
+	FormEscaped = tandem.FormEscaped
 	// FormBase64 is for a server seen to damage the escaped form; 37% larger.
-	FormBase64
+	FormBase64 = tandem.FormBase64
 )
 
 // chunkHeaderFields are the header fields a chunk reader fetches with the body.
@@ -110,39 +110,16 @@ func DecodeChunkMessage(header, text []byte) ([]byte, error) {
 	return content, nil
 }
 
-// BlobRef is a message in the blob folder as its headers claim it: the claims are unverified.
-type BlobRef struct {
-	ID      string
-	Channel string
-	Address []byte // 32 bytes
-}
+// The blob folder's types are the core's, so the engine can take any binding.
+type (
+	BlobRef       = tandem.BlobRef
+	BlobChanges   = tandem.BlobChanges
+	Chunk         = tandem.Chunk
+	OutgoingChunk = tandem.OutgoingChunk
+	Quota         = tandem.Quota
+)
 
-// BlobChanges is one page of what changed in the blob folder.
-type BlobChanges struct {
-	Added   []BlobRef
-	Removed []string
-	Cursor  string
-	More    bool
-}
-
-// Chunk is a fetched chunk message, decoded but not verified.
-type Chunk struct {
-	ID       string
-	Envelope []byte
-}
-
-// OutgoingChunk is one envelope to append, under the channel tag of its scope.
-type OutgoingChunk struct {
-	Channel  string
-	Envelope []byte
-}
-
-// Quota is the storage quota of the blob folder's root (RFC 9208). Known is false where the
-// server has no QUOTA or reports no storage limit; Used and Limit are then zero and mean nothing.
-type Quota struct {
-	Known       bool
-	Used, Limit int64 // bytes
-}
+var _ tandem.BlobHub = (*BlobStore)(nil)
 
 // BlobOptions are the blob folder's settings. Zero values take the defaults.
 type BlobOptions struct {
@@ -152,8 +129,6 @@ type BlobOptions struct {
 	// 2 where it batches appends (MULTIAPPEND or LITERAL+) and 4 where it doesn't (BLOBS.md section
 	// 4.3); at most 8. Fewer are used when the server refuses one.
 	TransferConnections int
-	// Form is how chunks are written, default FormEscaped.
-	Form ChunkForm
 	// BatchBytes bounds the message bytes of one append batch; default 6 MiB.
 	BatchBytes int
 	// FetchBatch is how many chunks one FETCH asks for; default 4.
@@ -424,8 +399,8 @@ func (b *BlobStore) Fetch(ctx context.Context, ids []string) ([]Chunk, error) {
 // few commands as the server allows (MULTIAPPEND). IDs follow the order of chunks; "" where the
 // server named no UID. It is not retried: an append whose answer was lost may have landed, which
 // the caller learns from the next Changes.
-func (b *BlobStore) Append(ctx context.Context, outgoing []OutgoingChunk) ([]string, error) {
-	built, err := buildChunks(outgoing, b.opts.Form)
+func (b *BlobStore) Append(ctx context.Context, outgoing []OutgoingChunk, form ChunkForm) ([]string, error) {
+	built, err := buildChunks(outgoing, form)
 	if err != nil || len(built) == 0 {
 		return []string{}, err
 	}

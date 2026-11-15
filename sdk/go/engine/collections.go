@@ -417,24 +417,33 @@ func (d *Device) Write(ctx context.Context, list, record []byte, changes ...Chan
 // Only the owner writes it, with Write; anyone reads it with Item.
 func MetaRecord() []byte { return bytes.Clone(metaRecord) }
 
-// writeChanges makes several changes to one record, sent as one message.
-func (d *Device) writeChanges(ctx context.Context, cid, record []byte, changes []Change) error {
-	me, c := d.me, d.collections[string(cid)]
+// writable checks that this device may write the record now, and returns where a write goes.
+func (d *Device) writable(cid, record []byte) (c *collection, me *Me, head, epoch []byte, cur stmt, err error) {
+	me, c = d.me, d.collections[string(cid)]
 	if me == nil || c == nil || c.dead() {
-		return fail("device: no such list, or it can't sync")
+		return nil, nil, nil, nil, stmt{}, fail("device: no such list, or it can't sync")
 	}
-	head := c.head()
-	epoch := c.epochOf(head)
+	head = c.head()
+	epoch = c.epochOf(head)
 	cur, ok := c.statements[string(head)]
 	if head == nil || epoch == nil || c.keys[string(epoch)] == nil || !ok || cur.s.Deleted {
-		return fail("device: no key for the list's current epoch yet, or it was deleted")
+		return nil, nil, nil, nil, stmt{}, fail("device: no key for the list's current epoch yet, or it was deleted")
 	}
 	member := cur.s.member(me.Participant)
 	if member == nil || member.Role == Reader || (bytes.Equal(record, metaRecord) && member.Role != Owner) {
-		return fail("device: this participant may not write here")
+		return nil, nil, nil, nil, stmt{}, fail("device: this participant may not write here")
 	}
 	if len(d.exposure(cid)) > 0 {
-		return fail("device: waiting for the list's owner to change its key")
+		return nil, nil, nil, nil, stmt{}, fail("device: waiting for the list's owner to change its key")
+	}
+	return c, me, head, epoch, cur, nil
+}
+
+// writeChanges makes several changes to one record, sent as one message.
+func (d *Device) writeChanges(ctx context.Context, cid, record []byte, changes []Change) error {
+	c, me, head, epoch, cur, err := d.writable(cid, record)
+	if err != nil {
+		return err
 	}
 	var writes []*tandem.Write
 	if bytes.Equal(record, metaRecord) {
@@ -453,9 +462,16 @@ func (d *Device) writeChanges(ctx context.Context, cid, record []byte, changes [
 		}
 		writes = append(writes, w)
 	}
+	return d.keepWrites(ctx, c, record, epoch, cur.s.KeyN, writes)
+}
+
+// keepWrites merges this device's own new writes into its replica, stores them and publishes the
+// record's state.
+func (d *Device) keepWrites(ctx context.Context, c *collection, record, epoch []byte, n uint64, writes []*tandem.Write) error {
+	cid := c.id
 	var entries []tandem.Entry
 	for _, w := range writes {
-		e, err := entryOf(w, epoch, cur.s.KeyN)
+		e, err := entryOf(w, epoch, n)
 		if err != nil {
 			return err
 		}
