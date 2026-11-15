@@ -14,7 +14,8 @@ grace trusted a time a client can set (section 7). A second review found six mor
 that cannot know what a chunk is needed for collects nothing. A third found three, fixed in sections
 4.2, 7 and 8: a version stays protected until its replacement is on the feed, healing never discards
 a good local file, and a refused binary append falls back to text. A fourth found that the guard for
-unknown manifest versions missed manifests protected only by the feed rule (section 7).
+unknown manifest versions missed manifests protected only by the feed rule (section 7). Two of
+those findings concern a binary form of the chunk message that was dropped afterwards (section 4.2).
 
 ## What this is for, and what it costs
 
@@ -38,7 +39,7 @@ chunks and publishing the record, none of which was measured.
 
 | Provider | Upload, 1 connection | Upload, default connections | Upload, 8 connections | Download, 1 connection | Download, default connections | Download, 8 connections |
 |---|---|---|---|---|---|---|
-| **Fastmail** (binary form, batched) | 7.4 to 9.6 | 10.5 (two) | 11.7 | 10.2 to 12.4 | 13.6 (two) | 13.5 |
+| **Fastmail** (escaped form, batched) | 8.4 to 12.9 | 12.0 (two) | 13.9 on four; eight not run | 12 to 19, once 5.7 | 19.5 (two) | 15.2 on four; eight not run |
 | **Gmail** (escaped form, no batched upload) | 0.19 to 0.20 | 0.77 (four) | 1.26 | 0.72 to 0.76 | 2.8 (four) | 4.5 |
 | **Stalwart 1.1.0** on the same machine | works; speed not meaningful | | | | | |
 
@@ -49,14 +50,14 @@ measured end to end. Add the two or three seconds of a new connection where one 
 | File | Fastmail up | Fastmail down | Gmail up | Gmail down |
 |---|---|---|---|---|
 | 5 MB photo | about 1 s | about 1 s | about 6 s | about 2 s |
-| 100 MB | about 10 s | about 8 s | about 2 minutes | about 35 s |
-| 1 GB | about 2 minutes | about 80 s | not in one day: over the daily upload allowance | about 6 minutes |
+| 100 MB | about 8 s | about 5 s | about 2 minutes | about 35 s |
+| 1 GB | about 80 s | about 50 s | not in one day: over the daily upload allowance | about 6 minutes |
 
 Other costs a user will meet:
 
 | | Fastmail | Gmail |
 |---|---|---|
-| Storage used per byte of file | 1.37 in the binary form, which Fastmail stores as base64; 1.02 in the escaped form, at about half the speed | 1.02 |
+| Storage used per byte of file | 1.02 (the size sent and returned; the quota charge was not read) | 1.02 (likewise) |
 | Largest message | 200 MB | 35 MB |
 | Daily volume over IMAP | not documented | 500 MB up and 2500 MB down per account, as Google documents for Workspace |
 | A record change reaching another device | 0.5 s; about 1 s while that account uploads | about 30 s (§10.3) |
@@ -65,7 +66,7 @@ Other costs a user will meet:
 A hub is one account, so every figure per account is shared by all its devices and people.
 
 The line was not the limit. The same machine moved 21.6 MiB per second up and 26.4 down to another
-service that day, so Fastmail ran at about half of it and Gmail at a few percent. What was tried to
+service that day, so Fastmail ran at a little over half of it and Gmail at a few percent. What was tried to
 go faster, and what each bought, is in section 12; the forms of section 4.2 and the connections of
 section 4.3 are what came of it.
 
@@ -80,6 +81,9 @@ immutable chunks.
 
 - **Decided:** one generic layer. Attachments on records come first (Liszto), a shared-folder app
   later; both are records whose fields hold manifests.
+- **Decided:** chunks are written as 8-bit content with a few bytes escaped, with base64 as the
+  fallback. IMAP's `BINARY` extension is not used. It was the first choice, until measurement showed
+  the escaped form as fast on Fastmail, faster on Gmail, and a quarter smaller in storage on both.
 - **Decided:** the wire format allows a chunk to be reused by a later version of a file (delta
   sync). The first implementation does not reuse chunks: an edited file is uploaded whole.
 
@@ -96,11 +100,10 @@ immutable chunks.
 
 Costs, accepted on purpose:
 
-- **Three ways to carry a chunk**, because no one way is best everywhere (section 4.2). Binary,
-  where the server offers `BINARY` (RFC 3516), is the fastest, but Fastmail stores it as base64 and
-  charges quota for 1.37 bytes per byte. Escaped, 8-bit content with a few bytes escaped, is 2%
-  larger than the file, is the fastest on Gmail and the smallest everywhere, and is not a standard
-  encoding. Base64 is the fallback: 37% larger and understood by everything.
+- **An encoding of our own.** A chunk is stored as 8-bit content with a few bytes escaped (section
+  4.2), 2% larger than the file. That is legal mail and the encoding Usenet has carried binaries in
+  for decades, but no mail client reads it. Where a server damages it, chunks fall back to base64,
+  37% larger.
 - **No delta sync in the first implementation.** See the second decision above.
 - **Weaker durability than records.** Every device holds every record (§12.1); not every device
   holds every file. A blob destroyed on the hub survives only if some device kept it.
@@ -169,25 +172,13 @@ without fetching bodies; a body whose hash differs from the claim is junk and is
 says what a claim may be relied on for.
 `Tandem-Channel` only limits clean-up (section 7); it is not in the AAD and never authorizes anything.
 
-The body carries the envelope in one of three forms. A chunk's identity is its address, so the form
-is a property of the message, not of the chunk, and one hub may hold all three. Every form is
-`Content-Type: application/octet-stream`; a chunk is never a text body, which mail servers handle
-slowly and may re-encode (section 12, §10.4).
+The body carries the envelope in one of two forms. A chunk's identity is its address, so the form
+is a property of the message, not of the chunk, and one hub may hold both. Both are
+`Content-Type: application/octet-stream`: a chunk is never a text body, which a server may
+re-encode (§10.4) and which Fastmail returns more slowly (section 12).
 
-**Binary**, the envelope as it is:
-
-```
-Content-Type: application/octet-stream
-Content-Transfer-Encoding: binary
-
-<the envelope>
-```
-
-It needs `BINARY` (RFC 3516) and is appended as a binary literal (`APPEND Tandem-Blobs (\Seen)
-~{n}`). The server may keep it in another transfer encoding: Fastmail stores it as base64 and
-reports `Content-Transfer-Encoding: base64` from then on (section 12).
-
-**Escaped**, the envelope as 8-bit content that any mail store accepts:
+**Escaped**, the envelope as 8-bit content that any mail store accepts. Writers use it unless the
+server has been seen to damage it:
 
 ```
 Tandem-Body: escaped
@@ -212,7 +203,7 @@ read it, remove every CR and LF, then replace each `=` and the byte after it by 
 mod 256. A reader accepts lines of any length and an escape of any byte; an `=` with nothing after
 it means the body is not a chunk.
 
-**Base64**, for a server that damages the other two:
+**Base64**, for a server that damages the escaped form:
 
 ```
 Content-Type: application/octet-stream
@@ -221,46 +212,32 @@ Content-Transfer-Encoding: base64
 <base64 of the envelope, wrapped at 76 characters>
 ```
 
-**Writing.** Every device on a hub talks to the same server, so they agree without negotiating:
+**Checking the form.** A device does not learn of damage from its own appends, which it takes as
+verified (section 4.3); it would heal a damaged chunk in the same form again. So the first chunk a
+device appends in the escaped form on a hub, it fetches back and compares with what it sent, once
+for that device and hub. If the chunk comes back different, the device writes base64 on that hub
+from then on, says so, and sends the damaged chunk again. Chunks already stored stay, since an
+address does not depend on the form. Every device on a hub talks to the same server, so they come
+to the same form without negotiating.
 
-1. binary, if the server advertises `BINARY` and the hub is not set to save space;
-2. otherwise escaped;
-3. base64, once the server has been seen to damage an escaped chunk.
-
-"Save space" is a per-hub setting, off by default. It puts escaped before binary: on Fastmail that
-stores 1.02 bytes per byte instead of 1.37 and moves at about half the speed (section 12). On a
-server that stores binary chunks as they are, such as Stalwart, binary is both the fastest and the
-smallest, and the setting changes nothing worth having.
-
-**Checking a form.** The first chunk a device appends in a form on a hub, it fetches back and
-compares with what it sent, once for that device, hub and form. If the chunk comes back different,
-or a binary append is refused with `NO [UNKNOWN-CTE]`, which a server that advertises `BINARY` may
-still answer for a mailbox (RFC 3516 §4.4), the device moves that hub to the next form in the list
-above, says so, and goes on with the upload: the refused or damaged chunk, or the whole refused
-`MULTIAPPEND` batch, is sent again in the new form. Chunks already stored stay, since an address
-does not depend on the form. The hub keeps the form it fell back to until the user asks for
-another. Without the check a device would never learn of damage, because it takes its own appends
-as verified (section 4.3) and would heal a damaged chunk in the same form again.
-
-**Reading.** A reader accepts all three forms, whatever it would write. There are two ways to
-fetch, and the transfer encoding is undone exactly once, by the server or by the reader:
-
-- Where the server advertises `BINARY`: `UID FETCH <uid> (BINARY.PEEK[1] BODY.PEEK[HEADER.FIELDS
-  (Content-Type Tandem-Body)])`. The server has undone the transfer encoding (RFC 3516 §4.2),
-  whatever it stored. The reader does not look at `Content-Transfer-Encoding`.
-- Elsewhere, and where the server refuses a `BINARY.PEEK` with `UNKNOWN-CTE`: `BODY.PEEK[TEXT]` with
-  the `Content-Type`, `Content-Transfer-Encoding` and `Tandem-Body` header fields. The reader undoes
-  the transfer encoding that header names (§10.4 step 1).
-
-Either way the reader now has the body's content. If `Tandem-Body` is `escaped`, it undoes the
-escaping. What it then holds is the envelope, provided the content type is
-`application/octet-stream`; anything else is not a chunk. `Tandem-Body` is a header of its own
-because a server may rewrite the MIME headers when it re-encodes a body, as Fastmail does, and
-leaves others alone.
+**Reading.** A reader accepts both forms, whatever it would write. It fetches `BODY.PEEK[TEXT]`
+with the `Content-Type`, `Content-Transfer-Encoding` and `Tandem-Body` header fields, and undoes
+the transfer encoding that header names (§10.4 step 1), which for `8bit`, `7bit` and `binary` is
+nothing. If `Tandem-Body` is `escaped`, it then undoes the escaping. What it holds is the envelope,
+provided the content type is `application/octet-stream`; anything else is not a chunk.
+`Tandem-Body` is a header of its own, and not a MIME parameter, because a server that re-encodes a
+body rewrites the MIME headers and leaves others alone; Fastmail was seen to do that (section 12).
 
 Whatever arrives must hash to the address, so a server that damages a body produces a chunk that
 reads as missing, never wrong content; healing then restores it (section 8). On Fastmail, Gmail and
-Stalwart every chunk came back byte for byte in every form they accept (section 12).
+Stalwart every escaped chunk came back byte for byte (section 12).
+
+**Why not `BINARY`.** The extension of RFC 3516 stores and fetches raw bytes, and it was the first
+choice here. Gmail does not have it. Fastmail has it and keeps such a chunk as base64, charging
+1.37 bytes of quota per byte, while it stores the escaped form as sent and moves it as fast (section
+12). Writing binary would also need a second way to fetch and decode and a fallback for a mailbox
+that refuses it. A reader still reads a chunk stored that way, since undoing the transfer encoding
+covers it; no writer makes one.
 
 ### 4.3 The blob folder
 
@@ -325,7 +302,7 @@ there it takes less time than the connection would. The feed hears nothing for t
 catches up when IDLE starts again, as after any command.
 
 **Batching.** An implementation MUST send chunks in batches of a few MiB, by the first of these the
-server offers, in any form:
+server offers:
 
 1. one `MULTIAPPEND` per batch (with `LITERAL+` its literals are sent without waiting);
 2. with `LITERAL+` alone, the batch's `APPEND` commands sent without waiting for each answer;
@@ -598,7 +575,7 @@ A writer may reuse an entry only from a kept manifest of the same scope.
 | Work | What it does | What this takes or leaves |
 |---|---|---|
 | **IMAP Storage Filesystem** (2007), **GmailFS** (2004), **EMFS** (2016), **ePFS** (2007) | Mount or sync files as mail messages, with file metadata and state inside the messages. | They rewrite messages to change anything and leave concurrent edits, interrupted uploads and conflicts open. Here blobs never change and all mutable state is in CRDT records. |
-| **Usenet binaries**: yEnc, NZB, PAR2 | Files posted as many articles below about 1 MB, an index file listing every segment's message ID and size, and parity files to repair lost segments. | The same shape after decades of use: segments, a manifest of segment IDs, a repair path. Healing from replicas stands in for parity. yEnc's 1–2% overhead comes from an encoding mail servers don't know; IMAP's `BINARY` gets to zero within the standards, with base64 where it is missing. |
+| **Usenet binaries**: yEnc, NZB, PAR2 | Files posted as many articles below about 1 MB, an index file listing every segment's message ID and size, and parity files to repair lost segments. | The same shape after decades of use: segments, a manifest of segment IDs, a repair path. Healing from replicas stands in for parity. The escaped form of section 4.2 is yEnc's encoding without its checksums. |
 | **Matrix** encrypted attachments | A single-use key and a SHA-256 of the ciphertext travel in the encrypted event; the ciphertext sits in a media store. | The manifest is the same idea per chunk. Matrix's AES-CTR is unauthenticated (MSC4016 proposes fixing that); chunks here are AEAD. |
 | **restic**, **borg**, **Tahoe-LAFS**, **Perkeep** | Encrypted chunks addressed by hash; clean-up by reachability, guarded against uploads in progress. | Addresses are hashes of ciphertext; clean-up is conservative and repaired by healing instead of a repository lock. |
 | **Kolab** (§16) | Files as objects in IMAP folders, in production. | Confirms mail servers hold such data durably. |
@@ -641,8 +618,9 @@ What follows from it:
   batched, at 8 to 10.
 - **1 MiB stays the default where appends can be batched.** Batched, it is within about a quarter of
   4 MiB, and 256 KiB loses up to half. Where they cannot be batched the question is open (B1).
-- **The binary form is worth having on Fastmail for speed only**: about twice as fast both ways when
-  batched, and no saving in storage (B2).
+- **In these runs the binary form looked about twice as fast as text when batched.** A later
+  comparison on a warmed connection, with the order varied, did not bear that out ("Going faster"
+  below), and the binary form was dropped.
 - **Text appends sent pipelined were slow and uneven** (0.7 to 4.6); in one `MULTIAPPEND` they were
   steady, and binary ones were as fast as pipelined. Not explained. Section 4.3 therefore puts
   `MULTIAPPEND` first for both forms.
@@ -685,32 +663,60 @@ second run. Appends are one at a time on each connection.
 - **Four is the default there** (section 4.3): 2.4 to 3.4 times the upload of one connection, and it
   leaves room under Gmail's cap for the other devices of the hub (B1).
 
-Going faster. Four things were tried on one connection with 8 chunks of 1 MiB, MiB per second,
-append / fetch with one command. "Text" is the form the earlier tables used, a `text/plain` body of
-base64 as §10.4 has it; "base64" is the same bytes declared `application/octet-stream` with
-`Content-Transfer-Encoding: base64`; "escaped" is section 4.2's. Compressed means `COMPRESS=DEFLATE`
-(RFC 4978) on the connection, which Fastmail and Gmail offer and Stalwart does not.
+Going faster. Four ways of carrying a chunk were compared on one connection with 8 chunks of 1 MiB
+a row, each row one `MULTIAPPEND` where offered and one fetch command. "Text" is a `text/plain` body
+of base64 as §10.4 has it; "base64" is the same bytes declared `application/octet-stream`; "escaped"
+is section 4.2's; "binary" is a literal of RFC 3516.
 
-| Form | Fastmail | Fastmail, compressed | Gmail | Gmail, compressed |
-|---|---|---|---|---|
-| text | 4.7 / 5.1 | 4.3 / 5.9 | 0.16 / 0.60 | 0.17 / 0.75 |
-| base64 | 9.5 / 10.6 and 9.3 / 10.2 | 8.2 / 13.4 and 7.3 / 12.6 | 0.17 / 0.60 and 0.15 / 0.56 | 0.20 / 0.77 and 0.19 / 0.75 |
-| escaped | 5.0 / 5.6 | 4.4 / 5.4 | 0.19 / 0.72 | 0.20 / 0.76 |
-| binary | 10.6 / 13.0 and 10.5 / 10.5 | 9.2 / 12.0 and 8.1 / 12.4 | not offered | |
+**A first comparison was wrong, and the mistake is worth keeping.** It measured each form on a new
+connection in a fixed order, and whichever form came first ran at half speed: a connection is slow
+until its window has opened. That made the text form, and then the escaped form, look half as fast
+as binary on Fastmail, and a trade between speed and storage was written into this document on the
+strength of it. The comparison below throws one transfer away on each connection first and was run
+three times in different orders. Those first reports are still in `probes/results/` (the
+`blobs-forms` files made before the probe warmed its connections).
 
-- **A chunk should not be a text body.** On Fastmail the same base64 moved twice as fast declared
-  as `application/octet-stream` as declared `text/plain`. No form of section 4.2 is text.
-- **Fastmail is fast with binary and base64 and slow with the escaped form**, which it hands back
-  byte for byte under the header it was sent with: 8,541,323 bytes for 8 MiB, 1.02 times the file,
-  against the 1.37 it charges for the other two. The quota charge for the escaped form was not
-  read, here or on Gmail; 1.02 is the size sent and returned. Why 8-bit content
-  is slow there is not known. So on Fastmail speed and space pull apart, and binary is the default.
+Fastmail, MiB per second, append / fetch, the three runs:
+
+| Form | First run | Second run | Third run |
+|---|---|---|---|
+| escaped | 11.3 / 11.9 | 12.8 / 12.9 | 12.9 / 5.7 |
+| binary | 10.5 / 12.5 | 10.5 / 12.2 | 10.6 / 5.7 |
+| base64 | 10.4 / 12.1 | 10.4 / 12.8 | 9.6 / 4.8 |
+| text | 10.1 / 7.5 | 11.2 / 6.5 | 10.1 / 3.8 |
+
+The third run's fetches were all slow, for a reason outside the comparison. The same hour, on
+several connections with 16 chunks (append batched / fetch with one command each):
+
+| Connections | Escaped | Binary |
+|---|---|---|
+| 1 | 8.4 / 14.3 | 7.5 / 17.5 |
+| 2 | 12.0 / 19.5 | 10.8 / 18.6 |
+| 4 | 13.9 / 15.2 | 12.8 / 9.5 |
+
+- **The escaped form costs no speed on Fastmail.** Its appends were the fastest in every run, by a
+  tenth to a fifth, and its fetches level with binary. Fastmail handed it back byte for byte under
+  the header it was sent with, 8,541,323 bytes for 8 MiB, where a binary chunk comes back as base64
+  and is charged at 1.37. The quota charge for the escaped form was not read, here or on Gmail.
+- **A text body is slower to fetch**, by a fifth to a half, and no slower to append. A chunk is
+  therefore `application/octet-stream`.
+- **Nothing speaks for `BINARY`**: no faster, a third more storage on Fastmail, absent on Gmail.
+
+Gmail, one connection, where a new connection's window matters little at these rates; append /
+fetch, plain and with `COMPRESS=DEFLATE` (RFC 4978) on the connection:
+
+| Form | Plain | Compressed |
+|---|---|---|
+| text | 0.16 / 0.60 | 0.17 / 0.75 |
+| base64 | 0.17 / 0.60 and 0.15 / 0.56 | 0.20 / 0.77 and 0.19 / 0.75 |
+| escaped | 0.19 / 0.72 | 0.20 / 0.76 |
+
 - **On Gmail the escaped form is the fastest and the smallest.** Gmail limits each connection by the
   bytes of the message, and the escaped form has a quarter fewer than base64: about a fifth more
   file per second up and a quarter more down. Gmail stored it byte for byte.
-- **Compression is not worth a dependency.** Base64 shrinks to 0.76 on the wire. That added nothing
-  on Fastmail and a quarter to Gmail's downloads only, which the escaped form gets without it; the
-  escaped and binary forms, being ciphertext, do not shrink at all.
+- **Compression is not worth a dependency.** Base64 shrinks to 0.76 on the wire. On Gmail that
+  added a quarter to downloads, which the escaped form gets without it, and ciphertext does not
+  shrink at all. On Fastmail it was measured only in the flawed first comparison.
 - **The line was not the limit**: 21.6 MiB per second up and 26.4 down to another service, measured
   with `curl` against `speed.cloudflare.com` in the same hour.
 
@@ -750,7 +756,7 @@ Fastmail, 16 binary chunks of 1 MiB spread over several connections at once, MiB
 | # | Question |
 |---|---|
 | B1 | **Connection caps under transfer.** A hub is one account, and its devices share the server's cap: 15 per account on Gmail as documented, 16 on Stalwart, 10 per user and address on Dovecot (§10.3). Not measured: what a device that comes online gets when others are transferring on several connections each, and whether a refused feed connection should make transferring devices give one up. |
-| B2 | **Speed or space on Fastmail.** Binary is twice as fast as the escaped form there and takes a third more storage, because Fastmail stores binary as base64 (section 12). The default is speed, with a per-hub setting for space. Is that the right default for a mailbox that is paid for by the gigabyte? And why is 8-bit content slow on Fastmail? |
+| B2 | **Servers that damage the escaped form.** Fastmail, Gmail and Stalwart keep it. A server that is not clean for 8-bit content, or that rewrites line ends, would push a hub to base64 at 1.37 bytes per byte. Which providers do, and does any of them offer `BINARY` and keep a binary chunk raw, where a binary form would then be the better fallback? |
 | B3 | **Provider limits and terms.** Gmail's append limit was probed at about 35 MB and its daily IMAP volumes are documented for Workspace only. Fastmail advertises an append limit of 200 MB; its behaviour with large folders of large messages is unmeasured, and no provider's terms were checked for use as file storage. |
 | B4 | **Orphan grace.** Is 7 days right, and should the uploader's app show an upload that has waited that long? The grace runs on each device's own first sight of a chunk (section 7), so a device that opens the blob folder rarely collects late. |
 | B5 | **Copying a dead collection** (§11.8) uploads every blob again. Letting the copy list the old chunks would avoid that but nothing would ever collect them. |
@@ -759,7 +765,7 @@ Fastmail, 16 binary chunks of 1 MiB spread over several connections at once, MiB
 | B8 | **Waiting for an unavailable blob.** A device could idle on the blob folder while it wants a missing chunk. Today it retries at the next refresh. |
 | B9 | **Proofs.** The clean-up rule of section 7 and the pending write of section 6 should get the treatment the mailbox clean-up proofs give §10.7. |
 | B10 | **The browser binding** (§10.2): a second Mailbox and the same message format; JMAP could fetch byte ranges. Not designed. It needs an order of message IDs that every device shares (section 4.3), which JMAP's IDs do not give by themselves. |
-| B14 | **The feed's messages are text bodies** (§10.4). On Fastmail a text body of 1 MiB moved at half the speed of the same bytes declared `application/octet-stream`. Feed messages are small, where the cost per message dominates, so the gain there is probably nothing; it was not measured. |
+| B14 | **The feed's messages are text bodies** (§10.4). On Fastmail a text body of 1 MiB was a fifth to a half slower to fetch than the same bytes declared `application/octet-stream`, and no slower to append. Feed messages are small, where the cost per message dominates, so the gain there is probably nothing; it was not measured. |
 | B13 | **Compressing a file before sealing it.** For text, documents and other content that shrinks, fewer bytes is the only thing left that would speed Gmail up, by the factor the content shrinks; photos and video gain nothing. It would need a flag in the manifest and a rule for chunk lengths, it would let the hub see how well a file compresses, and deflate is in every platform's standard library. Not designed. |
 | B12 | **Uploading while describing.** Section 6 describes the whole file, one pass that seals every chunk to learn its address, before the first append. The two could overlap: sealing is deterministic, so a crash repeats the description and finds the chunks already there, provided the journal entry (`r` and the staged copy) exists before the first append and the write is signed when the description ends. The cost is that the write's context is fixed later and the pending file has no manifest while it uploads. The gain is one pass over the file, which should be small next to an upload at the measured rates; sealing speed has not been measured. Left out until it has. |
 | B11 | **Scale.** The chunk index was scanned for 126 messages only. How long does a folder of tens of thousands of chunks take to scan and to select? |
