@@ -1,4 +1,4 @@
-"""Regenerate public blob vectors (BLOBS.md) with the Python implementation. No real secrets.
+"""Regenerate public blob vectors (DESIGN.md §17) with the Python implementation. No real secrets.
 
 All four SDKs read the checked-in bytes; changes to this file are protocol changes.
 """
@@ -50,7 +50,7 @@ def generate():
                   manifest=blob.encode_manifest(empty).decode(), envelopes=[])]
 
     # Manifests every reader must classify the same way: "manifest", "unknown" (blob is an integer
-    # other than 1: section 7) or "none" (no manifest at all).
+    # other than 1: §17.7) or "none" (no manifest at all).
     h = t.b64u(t.sha(content))
     entry = lambda address, k, length: address + k + length.to_bytes(4, "big")
     one = t.b64u(entry(material("a1"), material("k1"), 7))
@@ -98,7 +98,7 @@ def generate():
         kind = "manifest" if isinstance(got, blob.Manifest) else "unknown" if isinstance(got, blob.UnknownManifest) else "none"
         assert kind == r, (n, kind)
 
-    # The escaped form (section 4.2). Every byte value as the only byte, at the start, in the middle
+    # The escaped form (§17.4.2). Every byte value as the only byte, at the start, in the middle
     # and at the end of a line; the line boundaries; and input where every byte is escaped.
     escapes = []
     for b in range(256):
@@ -126,7 +126,7 @@ def generate():
            dict(name="kind 1", envelope=(b"TNDM\x02\x01" + envelope[6:]).hex(), length=len(chunk_plain)),
            dict(name="version 1", envelope=(b"TNDM\x01\x04" + envelope[6:]).hex(), length=len(chunk_plain)),
            dict(name="another hub", envelope=blob.seal_chunk(key, material("other hub"), chunk_plain).hex(), length=len(chunk_plain))]
-    return dict(description="Public Tandem v2 blob vectors (BLOBS.md sections 4 and 5).",
+    return dict(description="Public Tandem v2 blob vectors (DESIGN.md §17.4 and §17.5).",
                 max_chunk=blob.MAX_CHUNK, chunk=chunk, blobs=blobs, manifests=manifests, escapes=escapes,
                 unescape_lenient=lenient, unescape_refused=refused, open_fails=bad)
 

@@ -23,8 +23,8 @@ import (
 //   - held: messages waiting for something they depend on (§8.3).
 //   - contents: which writes each kind-1 message carries (§10.7).
 //   - chunks: the blob folder's index: each message's claimed address and tag, when this device
-//     first saw it, and whether it verified or rejected it (BLOBS.md section 4.3).
-//   - uploads: the upload journal: pending blob writes with their r and staged copy (section 6).
+//     first saw it, and whether it verified or rejected it (DESIGN.md §17.4.3).
+//   - uploads: the upload journal: pending blob writes with their r and staged copy (§17.6).
 //
 // Blob content lives in files, in BlobDir beside the database, never in SQLite.
 //
@@ -459,14 +459,14 @@ func (s *Store) JournalSteps() ([]string, error) {
 }
 
 // OnFeed reports whether a message in the feed holds the write: the server answered this device's
-// append of it, or a sync saw it (BLOBS.md section 7).
+// append of it, or a sync saw it (DESIGN.md §17.7).
 func (s *Store) OnFeed(write []byte) bool {
 	var one int
 	return s.conn.QueryRowContext(s.ctx, "SELECT 1 FROM contents JOIN messages ON contents.message = messages.id WHERE contents.write = ? LIMIT 1",
 		write).Scan(&one) == nil
 }
 
-// The blob folder's index (BLOBS.md section 4.3)
+// The blob folder's index (DESIGN.md §17.4.3)
 
 const (
 	chunkUnverified = 0
@@ -525,7 +525,7 @@ func (s *Store) Chunks() ([]ChunkRow, error) {
 	return s.chunkRows("SELECT id, address, channel, seen, state FROM chunks ORDER BY rowid")
 }
 
-// The upload journal (BLOBS.md section 6)
+// The upload journal (DESIGN.md §17.6)
 
 // Upload is one pending blob write: signed, not in the replica, its chunks going up.
 type Upload struct {

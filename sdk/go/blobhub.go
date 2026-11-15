@@ -6,11 +6,11 @@ import (
 	"strings"
 )
 
-// The blob folder as the engine sees it (BLOBS.md section 4.3), beside the feed's PushStore. A
+// The blob folder as the engine sees it (DESIGN.md §17.4.3), beside the feed's PushStore. A
 // binding lists the chunks' claimed addresses from their headers alone, fetches chunk envelopes,
 // appends chunks, destroys them and reads the quota. Nothing here idles: a device asks.
 
-// ChunkForm is how a chunk's body is carried (BLOBS.md section 4.2).
+// ChunkForm is how a chunk's body is carried (DESIGN.md §17.4.2).
 type ChunkForm int
 
 const (
@@ -71,7 +71,7 @@ type BlobHub interface {
 	Release()
 }
 
-// BlobIDLess orders blob message IDs the way every device does (BLOBS.md section 4.3): by
+// BlobIDLess orders blob message IDs the way every device does (DESIGN.md §17.4.3): by
 // UIDVALIDITY, then UID, for "<validity>.<uid>"; plain numbers by value; anything else as text.
 func BlobIDLess(a, b string) bool {
 	av, au, aok := blobID(a)

@@ -181,7 +181,7 @@ def copying(new, hub):
 
 
 def blobs(new, hub):
-    """Files both ways (BLOBS.md): an upload on one engine is read on the other, over the real blob folder; a chunk
+    """Files both ways (DESIGN.md §17): an upload on one engine is read on the other, over the real blob folder; a chunk
     destroyed on the hub is restored by the other engine's device, which holds the file."""
     bob = new('a', 'Bob')
     bob('found', label='Bob’s Mac')

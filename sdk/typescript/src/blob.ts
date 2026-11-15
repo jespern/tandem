@@ -2,10 +2,10 @@ import {Buffer} from "buffer";
 import {bytes, sha, kdf, b64u, unb64u, encrypt, decrypt} from './crypto.js';
 import {parseJSON} from './json.js';
 
-// Blobs (BLOBS.md): chunk encryption, manifests and the escaped body form. No I/O.
+// Blobs (DESIGN.md §17): chunk encryption, manifests and the escaped body form. No I/O.
 
 export const KIND_CHUNK = 4;
-export const MAX_CHUNK = 4 * 1024 * 1024;       // plaintext bytes in one chunk (BLOBS.md section 4.1)
+export const MAX_CHUNK = 4 * 1024 * 1024;       // plaintext bytes in one chunk (DESIGN.md §17.4.1)
 export const DEFAULT_CHUNK = 1024 * 1024;       // what a writer cuts files into
 export const DEFAULT_INLINE = 16 * 1024;        // content up to this size goes in the manifest itself
 const ENTRY = 68, LINE = 490, MAGIC = Buffer.from([84, 78, 68, 77, 2, KIND_CHUNK]);
@@ -13,10 +13,10 @@ const ENTRY = 68, LINE = 490, MAGIC = Buffer.from([84, 78, 68, 77, 2, KIND_CHUNK
 export interface ChunkEntry {address: Buffer; key: Buffer; length: number}
 /** A blob's description: its chunks, or its bytes inline in `data`. */
 export interface Manifest {size: number; hash: Buffer; chunks?: ChunkEntry[]; data?: Buffer}
-/** How a _blob: field's value reads (section 5). 'unknown' is a JSON object whose blob is an integer other than 1: it stops clean-up (section 7). */
+/** How a _blob: field's value reads (§17.5). 'unknown' is a JSON object whose blob is an integer other than 1: it stops clean-up (§17.7). */
 export type ParsedManifest = {kind: 'manifest'; manifest: Manifest} | {kind: 'unknown'; version: number} | {kind: 'none'};
 
-/** The writer's key for one chunk: never the same for two contents (section 4.1). */
+/** The writer's key for one chunk: never the same for two contents (§17.4.1). */
 export const chunkKey = (r: Uint8Array, plaintext: Uint8Array): Buffer => kdf(bytes(r, 32), sha(plaintext), 'tandem/v2/blob-chunk');
 const chunkAAD = (hub: Uint8Array): Buffer => Buffer.concat([MAGIC, bytes(hub, 32)]);
 
@@ -26,7 +26,7 @@ export function sealChunk(key: Uint8Array, hub: Uint8Array, plaintext: Uint8Arra
   return Buffer.concat([MAGIC, encrypt(key, Buffer.alloc(12), chunkAAD(hub), plaintext)]);
 }
 
-/** The plaintext, which must be exactly `length` bytes (section 5). */
+/** The plaintext, which must be exactly `length` bytes (§17.5). */
 export function openChunk(key: Uint8Array, hub: Uint8Array, envelope: Uint8Array, length: number): Buffer {
   bytes(key, 32);
   if (envelope.length < 6 + 16 + 1 || !Buffer.from(envelope.subarray(0, 6)).equals(MAGIC)) throw new Error('not a chunk envelope');
@@ -75,7 +75,7 @@ export function parseManifest(value: Uint8Array): ParsedManifest {
   return total === size ? {kind: 'manifest', manifest: {size, hash, chunks}} : {kind: 'none'};
 }
 
-/** The manifest of `content` and its envelopes in order (section 6, step 2), all in memory. */
+/** The manifest of `content` and its envelopes in order (§17.6, step 2), all in memory. */
 export function describe(r: Uint8Array, hub: Uint8Array, content: Uint8Array, chunkSize = DEFAULT_CHUNK, inline = DEFAULT_INLINE): {manifest: Manifest; envelopes: Buffer[]} {
   if (!Number.isInteger(chunkSize) || chunkSize < 1 || chunkSize > MAX_CHUNK) throw new Error('invalid chunk size');
   if (content.length <= inline) return {manifest: {size: content.length, hash: sha(content), data: Buffer.from(content)}, envelopes: []};
@@ -91,7 +91,7 @@ const anywhere = (b: number) => b === 0x00 || b === 0x0A || b === 0x0D || b === 
 const atStart = (b: number) => anywhere(b) || b === 0x09 || b === 0x20 || b === 0x2E || b === 0x3E || b === 0x46;
 const atEnd = (b: number) => anywhere(b) || b === 0x09 || b === 0x20;
 
-/** The escaped body form of section 4.2: lines of at most 490 envelope bytes, CRLF after each. */
+/** The escaped body form of §17.4.2: lines of at most 490 envelope bytes, CRLF after each. */
 export function escape(envelope: Uint8Array): Buffer {
   const out = Buffer.alloc(envelope.length * 2 + 2 * Math.ceil(envelope.length / LINE)); let n = 0;
   for (let i = 0; i < envelope.length; i += LINE) {

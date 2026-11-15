@@ -1,4 +1,4 @@
-"""Blobs (BLOBS.md): chunk encryption, manifests and the escaped body form. No I/O."""
+"""Blobs (DESIGN.md §17): chunk encryption, manifests and the escaped body form. No I/O."""
 from dataclasses import dataclass
 import json
 import re
@@ -11,7 +11,7 @@ from .core import parse_json
 from .crypto import b64u, kdf, sha, unb64u
 
 KIND_CHUNK = 4
-MAX_CHUNK = 4 * 1024 * 1024          # plaintext bytes in one chunk (BLOBS.md section 4.1)
+MAX_CHUNK = 4 * 1024 * 1024          # plaintext bytes in one chunk (DESIGN.md §17.4.1)
 DEFAULT_CHUNK = 1024 * 1024           # what a writer cuts files into
 DEFAULT_INLINE = 16 * 1024            # content up to this size goes in the manifest itself
 ENTRY = 68                            # address (32) || key (32) || u32(length)
@@ -19,7 +19,7 @@ LINE = 490                            # envelope bytes per line in the escaped f
 
 
 def chunk_key(r: bytes, plaintext: bytes) -> bytes:
-    """The writer's key for one chunk: never the same for two contents (section 4.1)."""
+    """The writer's key for one chunk: never the same for two contents (§17.4.1)."""
     if len(r) != 32:
         raise ValueError("r must be 32 bytes")
     return kdf(r, sha(plaintext), "tandem/v2/blob-chunk")
@@ -37,7 +37,7 @@ def seal_chunk(key: bytes, hub: bytes, plaintext: bytes) -> bytes:
 
 
 def open_chunk(key: bytes, hub: bytes, envelope: bytes, length: int) -> bytes:
-    """The plaintext, which must be exactly `length` bytes (section 5)."""
+    """The plaintext, which must be exactly `length` bytes (§17.5)."""
     if len(key) != 32 or len(hub) != 32 or len(envelope) < 6 + 16 + 1 or envelope[:6] != b"TNDM\x02\x04":
         raise ValueError("not a chunk envelope")
     try:
@@ -77,7 +77,7 @@ class Manifest:
 
 @dataclass(frozen=True)
 class UnknownManifest:
-    """A JSON object whose `blob` is an integer other than 1 (section 7)."""
+    """A JSON object whose `blob` is an integer other than 1 (§17.7)."""
     version: int
 
 
@@ -97,7 +97,7 @@ def encode_manifest(m: Manifest) -> bytes:
 
 
 def parse_manifest(value: bytes):
-    """A Manifest, an UnknownManifest, or None for a value that is no manifest (section 5)."""
+    """A Manifest, an UnknownManifest, or None for a value that is no manifest (§17.5)."""
     try:
         doc = parse_json(value)
     except (ValueError, UnicodeDecodeError):
@@ -134,7 +134,7 @@ def parse_manifest(value: bytes):
 
 
 def describe(r: bytes, hub: bytes, content: bytes, chunk_size: int = DEFAULT_CHUNK, inline: int = DEFAULT_INLINE):
-    """The manifest of `content` and its envelopes in order (section 6, step 2), all in memory."""
+    """The manifest of `content` and its envelopes in order (§17.6, step 2), all in memory."""
     if not 1 <= chunk_size <= MAX_CHUNK:
         raise ValueError("invalid chunk size")
     if len(content) <= inline:
@@ -159,7 +159,7 @@ def _escaped(b: int) -> bytes:
 
 
 def escape(envelope: bytes) -> bytes:
-    """The escaped body form of section 4.2: lines of at most 490 envelope bytes, CRLF after each."""
+    """The escaped body form of §17.4.2: lines of at most 490 envelope bytes, CRLF after each."""
     out = []
     for i in range(0, len(envelope), LINE):
         line = envelope[i:i + LINE]

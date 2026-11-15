@@ -9,7 +9,7 @@
 -- Dates are marked so that they stay on one line.
 
 -- Sections that are pages of their own; everything else is in the spec.
-local pages = { ["16"] = "prior-art.html", ["18"] = "questions.html" }
+local pages = { ["16"] = "prior-art.html", ["19"] = "questions.html" }
 
 local function target(n)
   local page = pages[n]

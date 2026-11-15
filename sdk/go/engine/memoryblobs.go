@@ -10,8 +10,7 @@ import (
 	tandem "github.com/jespern/tandem/sdk/go"
 )
 
-// MemoryBlobHub is a blob folder in memory, shared by every device of a test (BLOBS.md section
-// 4.3). Like a credential holder, a test can drop chunks, append junk under any claim, make the
+// MemoryBlobHub is a blob folder in memory, shared by every device of a test (DESIGN.md§17.). Like a credential holder, a test can drop chunks, append junk under any claim, make the
 // escaped form come back damaged, or set a quota.
 type MemoryBlobHub struct {
 	// PageSize, if set, makes Changes return at most this many events per call, with More.

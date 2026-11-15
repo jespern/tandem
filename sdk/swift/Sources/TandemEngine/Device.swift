@@ -58,7 +58,7 @@ public actor Device {
     var changing: Set<Bytes> = []
     /// Tests stop a key change here (§11.6's crash points).
     var crashPoint: String?
-    /// The blob worker's state; nil until `useBlobs` (BLOBS.md).
+    /// The blob worker's state; nil until `useBlobs` (DESIGN.md §17).
     var blobs: BlobRuntime?
 
     var directoryTag: String { Tandem.directoryTag(directoryKey, hub: pin.hub) }

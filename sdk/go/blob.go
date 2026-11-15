@@ -8,11 +8,11 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
-// Blobs (BLOBS.md): chunk encryption, manifests and the escaped body form. No I/O.
+// Blobs (DESIGN.md §17): chunk encryption, manifests and the escaped body form. No I/O.
 
 const (
 	KindChunk     byte = 4
-	MaxChunk           = 4 * 1024 * 1024 // plaintext bytes in one chunk (BLOBS.md section 4.1)
+	MaxChunk           = 4 * 1024 * 1024 // plaintext bytes in one chunk (DESIGN.md §17.4.1)
 	DefaultChunk       = 1024 * 1024     // what a writer cuts files into
 	DefaultInline      = 16 * 1024       // content up to this size goes in the manifest itself
 	manifestEntry      = 68              // address (32) || key (32) || u32(length)
@@ -24,7 +24,7 @@ var errChunk = errors.New("tandem: invalid chunk or authentication failed")
 // ErrChunkLength means a chunk opened but holds another number of bytes than its manifest entry says.
 var ErrChunkLength = errors.New("tandem: chunk length differs from its manifest entry")
 
-// ChunkKey is the writer's key for one chunk: never the same for two contents (section 4.1).
+// ChunkKey is the writer's key for one chunk: never the same for two contents (§17.4.1).
 func ChunkKey(r, plaintext []byte) ([]byte, error) {
 	if len(r) != 32 {
 		return nil, errChunk
@@ -48,7 +48,7 @@ func SealChunk(key, hub, plaintext []byte) ([]byte, error) {
 	return a.Seal(out, make([]byte, 12), plaintext, chunkAAD(hub)), nil
 }
 
-// OpenChunk returns the plaintext, which must be exactly length bytes (section 5).
+// OpenChunk returns the plaintext, which must be exactly length bytes (§17.5).
 func OpenChunk(key, hub, envelope []byte, length int) ([]byte, error) {
 	if len(key) != 32 || len(hub) != 32 || len(envelope) < 6+16+1 || !bytes.Equal(envelope[:6], []byte{'T', 'N', 'D', 'M', 2, KindChunk}) {
 		return nil, errChunk
@@ -88,13 +88,13 @@ type Manifest struct {
 // Inline reports whether the content is in the manifest itself.
 func (m *Manifest) Inline() bool { return m.Chunks == nil }
 
-// ManifestKind is how a value of a _blob: field reads (section 5).
+// ManifestKind is how a value of a _blob: field reads (§17.5).
 type ManifestKind uint8
 
 const (
 	ManifestNone    ManifestKind = iota // no manifest at all: unreadable, blocks nothing
 	ManifestV1                          // a manifest this client reads
-	ManifestUnknown                     // a JSON object whose blob is an integer other than 1: unreadable, and it stops clean-up (section 7)
+	ManifestUnknown                     // a JSON object whose blob is an integer other than 1: unreadable, and it stops clean-up (§17.7)
 )
 
 // EncodeManifest returns the canonical writer form: keys blob, size, hash, then chunks or data.
@@ -175,7 +175,7 @@ func ParseManifest(value []byte) (*Manifest, ManifestKind) {
 	return m, ManifestV1
 }
 
-// Describe returns the manifest of content and its envelopes in order (section 6, step 2), all in memory.
+// Describe returns the manifest of content and its envelopes in order (§17.6, step 2), all in memory.
 func Describe(r, hub, content []byte, chunkSize, inline int) (*Manifest, [][]byte, error) {
 	if chunkSize < 1 || chunkSize > MaxChunk || len(r) != 32 || len(hub) != 32 {
 		return nil, nil, errChunk
@@ -204,7 +204,7 @@ func escapedAtStart(b byte) bool {
 }
 func escapedAtEnd(b byte) bool { return escapedAnywhere(b) || b == 0x09 || b == 0x20 }
 
-// Escape returns the escaped body form of section 4.2: lines of at most 490 envelope bytes, CRLF after each.
+// Escape returns the escaped body form of §17.4.2: lines of at most 490 envelope bytes, CRLF after each.
 func Escape(envelope []byte) []byte {
 	out := make([]byte, 0, len(envelope)+len(envelope)/32+2*(len(envelope)/escapedLine+1))
 	for i := 0; i < len(envelope); i += escapedLine {

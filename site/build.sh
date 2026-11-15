@@ -46,9 +46,9 @@ page() {
 
 status | pandoc -f gfm -t html5 --wrap=none --lua-filter=refs.lua > "$tmp/status.html"
 sed -e "s/@DATE@/$date/g" -e "s/@TAGLINE@/$tagline/g" front.html > "$tmp/front.html"
-{ sections 0 15; sections 17 17; } > "$tmp/spec.md"
+{ sections 0 15; sections 17 18; } > "$tmp/spec.md"
 sections 16 16 | sed 1d > "$tmp/prior-art.md"
-sections 18 18 | sed 1d > "$tmp/questions.md"
+sections 19 19 | sed 1d > "$tmp/questions.md"
 for cut in spec prior-art questions; do
   [ -s "$tmp/$cut.md" ] || die "nothing in $src for the $cut page"
 done

@@ -14,7 +14,7 @@ import (
 	tandem "github.com/jespern/tandem/sdk/go"
 )
 
-// Collecting and healing chunks (BLOBS.md sections 7 and 8). Both decide from one view of each
+// Collecting and healing chunks (DESIGN.md §17.7 and §17.8). Both decide from one view of each
 // list: which manifests are live (healed) and which are protected (never collected), which
 // addresses any write this device holds has listed, and whether anything stops clean-up there.
 
@@ -76,7 +76,7 @@ func (d *Device) blobScopes() ([]*blobScope, error) {
 			m, kind := tandem.ParseManifest(value)
 			switch kind {
 			case tandem.ManifestUnknown:
-				s.collect = false // it may list chunks this device can't tell (section 7)
+				s.collect = false // it may list chunks this device can't tell (§17.7)
 			case tandem.ManifestV1:
 				for _, e := range m.Chunks {
 					s.protected[string(e.Address)] = true
@@ -154,7 +154,7 @@ func (d *Device) blobScopes() ([]*blobScope, error) {
 			}
 		}
 		// Orphans only while the current inventory is whole here: a missing listed write may be a
-		// manifest that devices holding it will publish again (section 7).
+		// manifest that devices holding it will publish again (§17.7).
 		s.orphans = s.collect
 		if s.collect && !bytes.Equal(epoch, c.genesis) {
 			inv, ok := d.inventories[string(epoch)]
@@ -188,7 +188,7 @@ func (d *Device) placeIn(c *collection, w *tandem.Write) *tandem.Entry {
 	return &e
 }
 
-// doomed is what clean-up may destroy now, by the rules of section 7 that need no fetch: chunks
+// doomed is what clean-up may destroy now, by the rules of §17.7 that need no fetch: chunks
 // no protected manifest lists that a write this device holds listed, and orphans past the grace.
 // Copies are settled separately.
 func doomed(scopes []*blobScope, rows []ChunkRow, grace time.Duration, now int64) []string {
@@ -280,7 +280,7 @@ func (d *Device) blobHygiene(ctx context.Context, b *blobs) error {
 	for _, id := range doomed(scopes, rows, settings.OrphanGrace, time.Now().UnixMilli()) {
 		gone[id] = true
 	}
-	// Copies (section 7): every device keeps the lowest verified one.
+	// Copies (§17.7): every device keeps the lowest verified one.
 	byTag := map[string]*blobScope{}
 	for _, s := range scopes {
 		for t := range s.tags {
@@ -340,7 +340,7 @@ func (d *Device) blobHygiene(ctx context.Context, b *blobs) error {
 }
 
 // heal restores the chunks of live manifests in current channels whose content this device holds
-// (section 8). A local copy that seals to another address is checked against the manifest's hash:
+// (§17.8). A local copy that seals to another address is checked against the manifest's hash:
 // a good copy means the manifest is inconsistent, which is marked unreadable; a bad one is dropped.
 func (d *Device) heal(ctx context.Context, b *blobs, scopes []*blobScope) error {
 	for _, s := range scopes {

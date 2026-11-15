@@ -1,10 +1,10 @@
 import Foundation
 
-// The blob folder as the engine sees it (BLOBS.md section 4.3), beside the feed's PushStore. A binding lists the
+// The blob folder as the engine sees it (DESIGN.md §17.4.3), beside the feed's PushStore. A binding lists the
 // chunks' claimed addresses from their headers alone, fetches chunk envelopes, appends chunks, destroys them and reads
 // the quota. Nothing here idles: a device asks.
 
-/// How a chunk's body is carried (BLOBS.md section 4.2).
+/// How a chunk's body is carried (DESIGN.md §17.4.2).
 public enum ChunkForm: Sendable, Equatable {
     /// 8-bit content with a few bytes escaped, 2% larger than the envelope. Writers use it.
     case escaped
@@ -55,7 +55,7 @@ public protocol BlobHub: Sendable {
     func release() async
 }
 
-/// Orders blob message IDs the way every device does (BLOBS.md section 4.3): by UIDVALIDITY, then UID, for
+/// Orders blob message IDs the way every device does (DESIGN.md §17.4.3): by UIDVALIDITY, then UID, for
 /// "<validity>.<uid>"; plain numbers by value; anything else as text.
 public func blobIDLess(_ a: String, _ b: String) -> Bool {
     func parse(_ s: String) -> (UInt64, UInt64)? {

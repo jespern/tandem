@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measures how an IMAP account carries blob chunks (BLOBS.md §4, questions B1 and B2).
+"""Measures how an IMAP account carries blob chunks (DESIGN.md §17.4, questions B1 and B2).
 
     probes/blob_probe.py --stalwart
     probes/blob_probe.py --fastmail
@@ -213,7 +213,7 @@ def astring(text):
 
 
 def chunk(size):
-    """An envelope-shaped chunk (BLOBS.md §4.1): magic, version, kind 4, ciphertext, tag."""
+    """An envelope-shaped chunk (DESIGN.md §17.4.1): magic, version, kind 4, ciphertext, tag."""
     return b'TNDM\x02\x04' + TRICKY + os.urandom(size - len(TRICKY)) + os.urandom(16)
 
 
@@ -357,7 +357,7 @@ def cell(c, folder, run, counter, size, count, binary, mode):
 
 
 def append_batch(c, prefix, messages, binary):
-    """Append a batch the best way the server offers (BLOBS.md section 4.3). Returns the UIDs."""
+    """Append a batch the best way the server offers (DESIGN.md §17.4.3). Returns the UIDs."""
     if 'MULTIAPPEND' in c.caps:
         parts = [prefix]
         for i, m in enumerate(messages):
@@ -544,7 +544,7 @@ def other_fetches(c, folder, uid, envelope, binary):
 
 
 def index_scan(c, folder, expected):
-    """The fetch a chunk index is built from (BLOBS.md §4.3): UID, stored time and two headers."""
+    """The fetch a chunk index is built from (DESIGN.md §17.4.3): UID, stored time and two headers."""
     c.cmd([b'SELECT ' + astring(folder)])
     start = time.monotonic()
     _, untagged = c.cmd([b'UID FETCH 1:* (UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (Tandem-Channel Tandem-Blob)])'])

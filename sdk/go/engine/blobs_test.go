@@ -14,7 +14,7 @@ import (
 	tandem "github.com/jespern/tandem/sdk/go"
 )
 
-// BLOBS.md in the engine: attaching, the pending write, uploads, downloads, clean-up and healing,
+// DESIGN.md §17 in the engine: attaching, the pending write, uploads, downloads, clean-up and healing,
 // on a memory hub and a memory blob folder.
 
 var smallBlobs = BlobSettings{ChunkSize: 1000, Inline: 100}
@@ -433,7 +433,7 @@ func TestBlobUnknownVersionStopsCleanup(t *testing.T) {
 	}
 }
 
-// A crash at each step of section 6 resumes and commits exactly one blob.
+// A crash at each step of §17.6 resumes and commits exactly one blob.
 func TestBlobUploadResumesAfterARestart(t *testing.T) {
 	path := t.TempDir() + "/hub.sqlite"
 	store := try(OpenStore(path))

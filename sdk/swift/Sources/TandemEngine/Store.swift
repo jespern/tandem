@@ -39,7 +39,7 @@ public final class Store: @unchecked Sendable {
             field TEXT NOT NULL, epoch BLOB NOT NULL, payload BLOB NOT NULL, r BLOB NOT NULL, staged TEXT NOT NULL);
         """
 
-    /// The directory blob content is kept in (BLOBS.md): beside the database, or a temporary one for a store in memory.
+    /// The directory blob content is kept in (DESIGN.md §17): beside the database, or a temporary one for a store in memory.
     public let blobDirectory: URL
     private let temporaryBlobs: Bool
 
@@ -298,7 +298,7 @@ public final class Store: @unchecked Sendable {
         return out
     }
 
-    // MARK: Blobs (BLOBS.md)
+    // MARK: Blobs (DESIGN.md §17)
 
     /// Whether a message in the feed holds the write: the server answered this device's append of it, or a sync saw it.
     public func onFeed(_ write: Bytes) throws -> Bool {
@@ -346,7 +346,7 @@ public final class Store: @unchecked Sendable {
         try chunkRows("SELECT id, address, channel, seen, state FROM chunks ORDER BY rowid", [])
     }
 
-    /// One pending blob write: signed, not in the replica, its chunks going up (BLOBS.md section 6).
+    /// One pending blob write: signed, not in the replica, its chunks going up (DESIGN.md §17.6).
     public struct Upload: Sendable, Equatable {
         public var write: Bytes, scope: Bytes, record: Bytes, field: String, epoch: Bytes, payload: Bytes, r: Bytes, staged: String
     }

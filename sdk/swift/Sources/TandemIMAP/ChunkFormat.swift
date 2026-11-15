@@ -1,7 +1,7 @@
 import Foundation
 import Tandem
 
-/// The chunk message of BLOBS.md section 4.2: building it, and reading its envelope back.
+/// The chunk message of DESIGN.md §17.4.2: building it, and reading its envelope back.
 public enum ChunkFormat {
     /// How a chunk's body is carried.
     public typealias Form = ChunkForm

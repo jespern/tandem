@@ -1,5 +1,5 @@
 {
- "description": "Public Tandem v2 blob vectors (BLOBS.md sections 4 and 5).",
+ "description": "Public Tandem v2 blob vectors (DESIGN.md §17.4 and §17.5).",
  "max_chunk": 4194304,
  "chunk": {
   "r": "ec2571f03bf15568b66ec3fa0f8fac147c308a832aff06cbbdbb91efd8210f8e",

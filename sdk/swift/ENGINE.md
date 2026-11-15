@@ -40,7 +40,7 @@ Built by the Liszto session at Jesper's request, from its handover; tests in `Ap
 
 `ChangeBatch.more` (Go `More`, as the TypeScript binding already had): a store may return one page of what's new, and the caller asks again with the new cursor at once. Both engines' sync takes a page at a time, saving each with its cursor in one transaction and applying it before the next, so a first sync of a big hub holds one page in memory and keeps what it took if it stops; `followUp` runs once at the end. A page that says there's more without moving the cursor is an error, not a loop. IMAP: `pageSize` (Go `PageSize`), default 500; new UIDs lie below UIDNEXT, so when the gap is smaller than a page it fetches `n:*` as before, else it searches the new UIDs and fetches the first page. JMAP (Swift, Go, Python): as the browser binding, a full scan lists IDs into the cursor's `pending` and each call delivers a page of them; `Email/changes` is one call per page, `hasMoreChanges` is `more`. This replaces the hard "batch byte limit exceeded" on a big first scan. `MemoryHub` has a page size for tests (`PagingTests`, Go `TestAppSyncsAPageAtATime`).
 
-## Files (BLOBS.md, 2026-11-15)
+## Files (DESIGN.md §17, 2026-11-15)
 
 `Blobs.swift` and `BlobGC.swift`, the same as the Go engine's `blobs.go` and `blobgc.go`. A file attached to a record field
 `_blob:<name>` is inline up to 16 KiB; larger content is described off the actor (one pass, sealing each chunk to learn

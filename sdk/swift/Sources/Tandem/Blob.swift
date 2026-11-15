@@ -1,10 +1,10 @@
 import CryptoKit
 import Foundation
 
-/// Blobs (BLOBS.md): chunk encryption, manifests and the escaped body form. No I/O.
+/// Blobs (DESIGN.md §17): chunk encryption, manifests and the escaped body form. No I/O.
 public enum Blob {
     public static let kind: UInt8 = 4
-    /// Plaintext bytes in one chunk (BLOBS.md section 4.1).
+    /// Plaintext bytes in one chunk (DESIGN.md §17.4.1).
     public static let maxChunk = 4 * 1024 * 1024
     /// What a writer cuts files into.
     public static let defaultChunk = 1024 * 1024
@@ -27,15 +27,15 @@ public enum Blob {
         }
     }
 
-    /// How a `_blob:` field's value reads (section 5). `unknown` is a JSON object whose `blob` is an
-    /// integer other than 1: unreadable, and it stops clean-up (section 7).
+    /// How a `_blob:` field's value reads (§17.5). `unknown` is a JSON object whose `blob` is an
+    /// integer other than 1: unreadable, and it stops clean-up (§17.7).
     public enum Parsed: Equatable, Sendable {
         case manifest(Manifest)
         case unknown(version: Int64)
         case none
     }
 
-    /// The writer's key for one chunk: never the same for two contents (section 4.1).
+    /// The writer's key for one chunk: never the same for two contents (§17.4.1).
     public static func chunkKey(r: Bytes, plaintext: Bytes) throws -> Bytes {
         guard r.count == 32 else { throw TandemError.invalid("blob: r must be 32 bytes") }
         return KDF(r, salt: H(plaintext), info: "tandem/v2/blob-chunk")
@@ -50,7 +50,7 @@ public enum Blob {
         return magic + Bytes(box.ciphertext) + Bytes(box.tag)
     }
 
-    /// The plaintext, which must be exactly `length` bytes (section 5).
+    /// The plaintext, which must be exactly `length` bytes (§17.5).
     public static func open(key: Bytes, hub: Bytes, envelope: Bytes, length: Int) throws -> Bytes {
         guard key.count == 32, hub.count == 32, envelope.count >= 6 + 16 + 1, Array(envelope.prefix(6)) == magic
         else { throw TandemError.invalid("blob: not a chunk envelope") }
@@ -106,7 +106,7 @@ public enum Blob {
         return total == Int(size) ? .manifest(Manifest(size: Int(size), hash: hash, chunks: entries)) : .none
     }
 
-    /// The manifest of `content` and its envelopes in order (section 6, step 2), all in memory.
+    /// The manifest of `content` and its envelopes in order (§17.6, step 2), all in memory.
     public static func describe(r: Bytes, hub: Bytes, content: Bytes, chunkSize: Int = defaultChunk, inline: Int = defaultInline) throws -> (manifest: Manifest, envelopes: [Bytes]) {
         guard (1...maxChunk).contains(chunkSize) else { throw TandemError.invalid("blob: invalid chunk size") }
         if content.count <= inline { return (Manifest(size: content.count, hash: H(content), data: content), []) }
@@ -125,7 +125,7 @@ public enum Blob {
     static func atStart(_ b: UInt8) -> Bool { anywhere(b) || b == 0x09 || b == 0x20 || b == 0x2E || b == 0x3E || b == 0x46 }
     static func atEnd(_ b: UInt8) -> Bool { anywhere(b) || b == 0x09 || b == 0x20 }
 
-    /// The escaped body form of section 4.2: lines of at most 490 envelope bytes, CRLF after each.
+    /// The escaped body form of §17.4.2: lines of at most 490 envelope bytes, CRLF after each.
     public static func escape(_ envelope: Bytes) -> Bytes {
         var out = Bytes()
         out.reserveCapacity(envelope.count + envelope.count / 32 + 2 * (envelope.count / line + 1))

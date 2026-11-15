@@ -348,7 +348,7 @@ actor Link {
 
     /// One page of what changed in the folder since the cursor: the new messages that decode, in UID
     /// order, the IDs removed, the next cursor and whether more is waiting. The feed fetches bodies with
-    /// it; the blob folder only the headers its index needs (BLOBS.md section 4.3).
+    /// it; the blob folder only the headers its index needs (DESIGN.md §17.4.3).
     private func scanFolder<T>(_ c: Connection, _ cursor: Cursor?, fetch: (Connection, String) async throws -> [UInt32: FetchItem],
                                decode: (FetchItem, UInt32) -> T?) async throws -> (added: [T], removed: [String], cursor: String, more: Bool) {
         // SELECT every time: it is where UIDVALIDITY and HIGHESTMODSEQ are learned, and a
@@ -477,7 +477,7 @@ actor Link {
         return ids
     }
 
-    // MARK: - The blob folder (BLOBS.md section 4.3)
+    // MARK: - The blob folder (DESIGN.md §17.4.3)
 
     /// One page of the folder's changes, from the headers alone: no body is fetched.
     func refs(since text: String) async throws -> BlobChanges {

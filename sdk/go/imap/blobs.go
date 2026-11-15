@@ -14,7 +14,7 @@ import (
 	tandem "github.com/jespern/tandem/sdk/go"
 )
 
-// The blob folder of BLOBS.md section 4.3: chunks, each one message, in a folder next to the
+// The blob folder of DESIGN.md §17.4.3: chunks, each one message, in a folder next to the
 // feed's that no device idles on. A BlobStore lists the chunks' claimed addresses from their
 // headers alone, fetches and decodes chunk bodies, appends chunks and reads the quota, on
 // transfer connections of its own that open when work arrives and close at Release.
@@ -22,7 +22,7 @@ import (
 // BlobFolder is the blob folder's name; a personal namespace prefix goes in front of it.
 const BlobFolder = "Tandem-Blobs"
 
-// ChunkForm is how a chunk's body is carried (BLOBS.md section 4.2).
+// ChunkForm is how a chunk's body is carried (DESIGN.md §17.4.2).
 type ChunkForm = tandem.ChunkForm
 
 const (
@@ -126,8 +126,7 @@ type BlobOptions struct {
 	// Folder is the blob folder's name, default BlobFolder.
 	Folder string
 	// TransferConnections is how many connections a transfer may use: 0 decides from the server,
-	// 2 where it batches appends (MULTIAPPEND or LITERAL+) and 4 where it doesn't (BLOBS.md section
-	// 4.3); at most 8. Fewer are used when the server refuses one.
+	// 2 where it batches appends (MULTIAPPEND or LITERAL+) and 4 where it doesn't (DESIGN.md§17.); at most 8. Fewer are used when the server refuses one.
 	TransferConnections int
 	// BatchBytes bounds the message bytes of one append batch; default 6 MiB.
 	BatchBytes int
@@ -531,7 +530,7 @@ func (l *link) quota(ctx context.Context, c *conn) (Quota, error) {
 
 // AppendChunks appends chunks to the blob folder on the feed's own connection, without selecting
 // it: for a transfer of one batch, which takes less time than opening a transfer connection
-// (BLOBS.md section 4.3). folder "" is BlobFolder.
+// (DESIGN.md §17.4.3). folder "" is BlobFolder.
 func (s *Store) AppendChunks(ctx context.Context, folder string, outgoing []OutgoingChunk, form ChunkForm) ([]string, error) {
 	if folder == "" {
 		folder = BlobFolder

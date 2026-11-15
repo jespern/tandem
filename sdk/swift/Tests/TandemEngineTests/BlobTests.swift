@@ -4,7 +4,7 @@ import Tandem
 @testable import TandemEngine
 import XCTest
 
-/// BLOBS.md in the engine: attaching, the pending write, uploads, downloads, clean-up and healing, on a memory hub and a
+/// DESIGN.md §17 in the engine: attaching, the pending write, uploads, downloads, clean-up and healing, on a memory hub and a
 /// memory blob folder. The scenarios of the Go engine's blobs_test.go.
 final class BlobTests: XCTestCase {
     let account = MailboxAccount(host: "imap.example.org", port: 993, user: "hub@example.org", password: "app-password")

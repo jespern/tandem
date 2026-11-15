@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import Tandem
 
-// Collecting and healing chunks (BLOBS.md sections 7 and 8). Both decide from one view of each list: which manifests
+// Collecting and healing chunks (DESIGN.md §17.7 and §17.8). Both decide from one view of each list: which manifests
 // are live (healed) and which are protected (never collected), which addresses any write this device holds has listed,
 // and whether anything stops clean-up there.
 
@@ -34,7 +34,7 @@ extension Device {
             if !s.tags.isDisjoint(with: heldIn) { s.collect = false }   // a held write may be a manifest this device can't see yet
             func protect(_ value: Bytes, live: Entry?) {
                 switch Blob.parse(value) {
-                case .unknown: s.collect = false   // it may list chunks this device can't tell (section 7)
+                case .unknown: s.collect = false   // it may list chunks this device can't tell (§17.7)
                 case let .manifest(m):
                     for e in m.chunks ?? [] { s.protected.insert(e.address) }
                     if let live { s.live.append((live.id, m)) }
@@ -73,7 +73,7 @@ extension Device {
                 }
             }
             // Orphans only while the current inventory is whole here: a missing listed write may be a manifest that
-            // devices holding it will publish again (section 7).
+            // devices holding it will publish again (§17.7).
             s.orphans = s.collect
             if s.collect, let epoch, epoch != c.genesis {
                 if let inv = inventory(epoch) {
@@ -87,7 +87,7 @@ extension Device {
         return out
     }
 
-    /// What clean-up may destroy now by the rules of section 7 that need no fetch.
+    /// What clean-up may destroy now by the rules of §17.7 that need no fetch.
     static func doomed(_ scopes: [BlobScope], _ rows: [Store.ChunkRow], grace: Duration, now: Int64) -> [String] {
         var byTag: [String: BlobScope] = [:]
         for s in scopes { for t in s.tags { byTag[t] = s } }
@@ -132,7 +132,7 @@ extension Device {
         b.view = view
         rows = try store.chunks()
         var gone = Set(Self.doomed(scopes, rows, grace: b.settings.orphanGrace, now: now()))
-        // Copies (section 7): every device keeps the lowest verified one.
+        // Copies (§17.7): every device keeps the lowest verified one.
         var byTag: [String: BlobScope] = [:]
         for s in scopes { for t in s.tags { byTag[t] = s } }
         var groups: [Bytes: [Store.ChunkRow]] = [:]
@@ -157,7 +157,7 @@ extension Device {
         try forgetDropped()
     }
 
-    /// Restores the chunks of live manifests in current channels whose content this device holds (section 8). A local
+    /// Restores the chunks of live manifests in current channels whose content this device holds (§17.8). A local
     /// copy that seals to another address is checked against the manifest's hash: a good copy means the manifest is
     /// inconsistent, which is marked unreadable; a bad one is dropped.
     func heal(_ b: BlobRuntime, _ scopes: [BlobScope]) async throws {

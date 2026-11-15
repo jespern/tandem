@@ -1,6 +1,6 @@
 import Tandem
 
-/// A blob folder in memory, shared by every device of a test (BLOBS.md section 4.3). Like a credential holder, a test
+/// A blob folder in memory, shared by every device of a test (DESIGN.md §17.4.3). Like a credential holder, a test
 /// can drop chunks, append junk under any claim, make the escaped form come back damaged, or set a quota.
 public actor MemoryBlobHub: BlobHub {
     struct Stored { let ref: BlobRef; let body: Bytes }

@@ -2,13 +2,13 @@ import CryptoKit
 import Foundation
 import Tandem
 
-// Blobs (BLOBS.md): files as immutable encrypted chunks in the hub's blob folder, pointed at by a manifest in a record
-// field named _blob:<name>. A file attached here is a pending write (section 6): signed, kept in the upload journal and
+// Blobs (DESIGN.md §17): files as immutable encrypted chunks in the hub's blob folder, pointed at by a manifest in a record
+// field named _blob:<name>. A file attached here is a pending write (§17.6): signed, kept in the upload journal and
 // out of the replica until every chunk is on the hub, then merged and published like any write. Transfers run on the
 // blob hub's own connections in a worker that starts when there is work (an attach, a sync, `useBlobs`) and stops when
 // there is none; nothing waits on a timer. File reading, sealing and hashing run off the actor.
 
-/// What this device can do with a blob now (section 8).
+/// What this device can do with a blob now (§17.8).
 public enum BlobState: Sendable, Hashable {
     /// Inline, or downloaded and verified; `path` is the file.
     case here
@@ -29,9 +29,9 @@ public struct BlobInfo: Sendable, Equatable {
     public var name: String, state: BlobState, size: Int, hash: Bytes?, path: URL?, chunks: Int, done: Int
 }
 
-/// The per-hub settings of BLOBS.md, changeable at runtime.
+/// The per-hub settings of DESIGN.md §17, changeable at runtime.
 public struct BlobSettings: Sendable, Equatable {
-    /// How a file is cut; at most 4 MiB (section 12).
+    /// How a file is cut; at most 4 MiB (BLOBS.md has the measurements).
     public var chunkSize: Int
     /// The largest content kept in the manifest itself.
     public var inline: Int
@@ -50,7 +50,7 @@ public struct BlobSettings: Sendable, Equatable {
 }
 
 public enum BlobError: Error, Equatable {
-    /// A chunk of the blob is not on the hub (section 8); a device that holds the file restores it.
+    /// A chunk of the blob is not on the hub (§17.8); a device that holds the file restores it.
     case unavailable
     /// The field holds no manifest this device reads, or its chunks don't match it.
     case unreadable
@@ -144,7 +144,7 @@ extension Device {
     func forgetHealing() { blobs?.healed = false }
 
     /// Makes the next clean-up pass check that the chunks of files this device holds are still on the hub, and restore
-    /// those that aren't, as after a restart (section 8). An app may call it when it comes to the foreground.
+    /// those that aren't, as after a restart (§17.8). An app may call it when it comes to the foreground.
     public func checkBlobs() {
         guard let b = blobs else { return }
         b.healed = false
@@ -201,7 +201,7 @@ extension Device {
         return false
     }
 
-    // MARK: Attaching (section 6)
+    // MARK: Attaching (§17.6)
 
     /// Attaches a copy of the file at `path` to a field of a record, as _blob:<name>. Content up to the inline size is
     /// written at once; anything larger is pending until its chunks are on the hub, and shows as `.uploading` meanwhile.
@@ -241,7 +241,7 @@ extension Device {
         let value = try Blob.encode(manifest)
         try takeExternalChanges()
         let (c, me, head, epoch) = try writable(cid, record: record)
-        // Sign: with the context it would have if it were published now; not merged (section 6, step 3).
+        // Sign: with the context it would have if it were published now; not merged (§17.6, step 3).
         let w = try signRecord(c, me: me, record: record, field: field, op: .assign, value: value, element: nil, head: head, epoch: epoch, after: [])
         let id = try w.id()
         let final = b.staged.appendingPathComponent(id.hex)
@@ -306,7 +306,7 @@ extension Device {
         return (w, m)
     }
 
-    /// Steps 4 and 5 of section 6 for every pending write: append what the hub lacks, then commit the writes whose
+    /// Steps 4 and 5 of §17.6 for every pending write: append what the hub lacks, then commit the writes whose
     /// chunks are all on it.
     func uploadAll(_ b: BlobRuntime, _ ups: [Store.Upload]) async throws {
         try await refreshIndex(b)
@@ -360,7 +360,7 @@ extension Device {
     }
 
     /// Seals chunks again from a file holding the content and appends them a few at a time, in the hub's form. The
-    /// first escaped chunk this device appends on the hub is fetched back and compared (section 4.2).
+    /// first escaped chunk this device appends on the hub is fetched back and compared (§17.4.2).
     func appendChunks(_ b: BlobRuntime, file: URL, tag: String, _ entries: [Blob.ChunkEntry], _ offsets: [Int],
                       appended: inout [String: Bytes]) async throws {
         for start in stride(from: 0, to: entries.count, by: 4) {
@@ -393,7 +393,7 @@ extension Device {
         return true
     }
 
-    /// Merges a pending write whose chunks are all on the hub into the replica and publishes it (section 6, step 5). A
+    /// Merges a pending write whose chunks are all on the hub into the replica and publishes it (§17.6, step 5). A
     /// record deleted meanwhile drops it; a write whose epoch was replaced is signed again under the current one (§11.6).
     func commit(_ b: BlobRuntime, _ u: Store.Upload) async throws {
         try takeExternalChanges()
@@ -403,7 +403,7 @@ extension Device {
         if c.records[u.record]?.deleted == true { try dropUpload(u); flushEvents(); return }
         guard let me, let head = c.head, !c.dead, let st = c.statements[head]?.statement, !st.deleted,
               let member = st.members.first(where: { $0.uid == me.participant }), member.role != .reader
-        else { try dropUpload(u); flushEvents(); return }   // never published: its chunks are orphans (section 6)
+        else { try dropUpload(u); flushEvents(); return }   // never published: its chunks are orphans (§17.6)
         guard let (c2, me2, head2, epoch) = try? writable(u.scope, record: u.record) else { return }   // wait for a key or a rekey
         if epoch != u.epoch {
             w = try signRecord(c2, me: me2, record: u.record, field: w.field, op: .assign, value: w.value, element: nil, head: head2, epoch: epoch, after: [])
@@ -438,7 +438,7 @@ extension Device {
         catch { changed(.syncFailed("\(error)")); flushEvents() }
     }
 
-    // MARK: The index (section 4.3)
+    // MARK: The index (§17.4.3)
 
     /// Brings the chunk index up to date from the blob folder's headers.
     func refreshIndex(_ b: BlobRuntime) async throws {
@@ -458,7 +458,7 @@ extension Device {
     }
 
     /// For each address, the lowest message this device verified as carrying it, fetching unverified claims to verify
-    /// or reject them (section 4.3). Addresses without one are left out.
+    /// or reject them (§17.4.3). Addresses without one are left out.
     func settle(_ b: BlobRuntime, _ addrs: [Bytes]) async throws -> [Bytes: String] {
         var out: [Bytes: String] = [:], done: Set<Bytes> = []
         while true {
@@ -480,7 +480,7 @@ extension Device {
         }
     }
 
-    // MARK: Reading (section 8)
+    // MARK: Reading (§17.8)
 
     /// The file in a field _blob:<name> of a record, as this device sees it now.
     public func blob(list cid: Bytes, record: Bytes, name: String) -> BlobInfo? {
@@ -642,7 +642,7 @@ extension Device {
         }
     }
 
-    // MARK: Keeping files (section 8)
+    // MARK: Keeping files (§17.8)
 
     /// Whether this device fetches every file of a list unasked, up to the `unasked` size.
     public func keepFiles(list cid: Bytes, _ keep: Bool) throws {

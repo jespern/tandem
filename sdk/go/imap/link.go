@@ -725,7 +725,7 @@ func (l *link) scan(ctx context.Context, c *conn, cur *cursor) (tandem.ChangeBat
 
 // scanFolder is one page of what changed in the link's folder since cur: the new messages that
 // decode, in UID order, the IDs removed, whether more is waiting, and the next cursor. The feed
-// fetches bodies with it; the blob folder only the headers its index needs (BLOBS.md section 4.3).
+// fetches bodies with it; the blob folder only the headers its index needs (DESIGN.md §17.4.3).
 func scanFolder[T any](l *link, ctx context.Context, c *conn, cur *cursor,
 	fetch func(context.Context, *conn, string) (map[uint32]*fetchItem, error), decode func(*fetchItem, uint32) (T, bool)) (
 	added []T, removed []string, more bool, next string, err error) {

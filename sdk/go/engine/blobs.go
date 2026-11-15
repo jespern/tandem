@@ -19,7 +19,7 @@ import (
 	tandem "github.com/jespern/tandem/sdk/go"
 )
 
-// Blobs (BLOBS.md): files as immutable encrypted chunks in the hub's blob folder, pointed at by a
+// Blobs (DESIGN.md §17): files as immutable encrypted chunks in the hub's blob folder, pointed at by a
 // manifest in a record field named _blob:<name>. A file attached here is a pending write (section
 // 6): signed, kept in the upload journal and out of the replica until every chunk is on the hub,
 // then merged and published like any write. Transfers run on the blob hub's own connections, in a
@@ -29,7 +29,7 @@ import (
 // BlobPrefix starts the name of every field that holds a manifest.
 const BlobPrefix = "_blob:"
 
-// BlobState is what this device can do with a blob now (section 8).
+// BlobState is what this device can do with a blob now (§17.8).
 type BlobState uint8
 
 const (
@@ -57,9 +57,9 @@ type Blob struct {
 	Chunks, Done int
 }
 
-// BlobSettings are the per-hub settings of BLOBS.md, changeable at runtime. Zero values take the defaults.
+// BlobSettings are the per-hub settings of DESIGN.md §17, changeable at runtime. Zero values take the defaults.
 type BlobSettings struct {
-	// ChunkSize is how a file is cut, default 1 MiB, at most 4 MiB (section 12).
+	// ChunkSize is how a file is cut, default 1 MiB, at most 4 MiB (BLOBS.md has the measurements).
 	ChunkSize int
 	// Inline is the largest content kept in the manifest itself, default 16 KiB.
 	Inline int
@@ -91,7 +91,7 @@ func (s BlobSettings) withDefaults() BlobSettings {
 }
 
 var (
-	// ErrBlobUnavailable: a chunk of the blob is not on the hub (section 8); a device that holds the file restores it.
+	// ErrBlobUnavailable: a chunk of the blob is not on the hub (§17.8); a device that holds the file restores it.
 	ErrBlobUnavailable = errors.New("blob: a chunk is not on the hub")
 	// ErrBlobUnreadable: the field holds no manifest this device reads, or its chunks don't match it.
 	ErrBlobUnreadable = errors.New("blob: unreadable")
@@ -227,7 +227,7 @@ func (d *Device) SettleBlobs(ctx context.Context) error {
 }
 
 // CheckBlobs makes the next clean-up pass check that the chunks of files this device holds are still on
-// the hub, and restore those that aren't, as after a restart (section 8). An app may call it when it
+// the hub, and restore those that aren't, as after a restart (§17.8). An app may call it when it
 // comes to the foreground.
 func (d *Device) CheckBlobs() {
 	if b := d.blobState(); b != nil {
@@ -304,7 +304,7 @@ func (d *Device) blobRound(ctx context.Context, b *blobs) (bool, error) {
 	return false, d.keepFiles(ctx, b)
 }
 
-// Attaching (section 6)
+// Attaching (§17.6)
 
 // AttachFile attaches a copy of the file at path to a field of a record, as _blob:<name>. Content up
 // to the inline size is written at once; anything larger is pending until its chunks are on the hub,
@@ -401,7 +401,7 @@ func (d *Device) Attach(ctx context.Context, list, record []byte, name string, s
 	if err != nil {
 		return err
 	}
-	// Sign: with the context it would have if it were published now; not merged (section 6, step 3).
+	// Sign: with the context it would have if it were published now; not merged (§17.6, step 3).
 	w, err := d.signRecord(c, me, record, field, tandem.OpAssign, value, nil, head, epoch, nil)
 	if err != nil {
 		return err
@@ -428,7 +428,7 @@ func (d *Device) Attach(ctx context.Context, list, record []byte, name string, s
 }
 
 // dropPendingField forgets a pending write of the same field, replaced by a new one. Its chunks
-// already up are orphans; their uploader collects them (section 6) in the next clean-up pass.
+// already up are orphans; their uploader collects them (§17.6) in the next clean-up pass.
 func (d *Device) dropPendingField(list, record []byte, field string) {
 	ups, _ := d.store.Uploads()
 	for _, u := range ups {
@@ -463,7 +463,7 @@ func (d *Device) uploadOf(u Upload) (*tandem.Write, *tandem.Manifest, bool) {
 	return w, m, kind == tandem.ManifestV1 && !m.Inline()
 }
 
-// uploadAll runs steps 4 and 5 of section 6 for every pending write: append what the hub lacks,
+// uploadAll runs steps 4 and 5 of §17.6 for every pending write: append what the hub lacks,
 // then commit the writes whose chunks are all on it.
 func (d *Device) uploadAll(ctx context.Context, b *blobs, ups []Upload) error {
 	if err := d.refreshIndex(ctx, b); err != nil {
@@ -559,7 +559,7 @@ func (d *Device) channelOf(cid []byte) (string, bool) {
 
 // appendChunks seals chunks again from a file holding the content and appends them a few at a time,
 // in the hub's form. The first escaped chunk this device appends on the hub is fetched back and
-// compared (section 4.2): if the server changed it, the hub is written in base64 from then on.
+// compared (§17.4.2): if the server changed it, the hub is written in base64 from then on.
 func (d *Device) appendChunks(ctx context.Context, b *blobs, path, tag string, entries []tandem.ChunkEntry, offsets []int64,
 	appended map[string][]byte) error {
 	if len(entries) == 0 {
@@ -631,7 +631,7 @@ func (d *Device) blobForm() tandem.ChunkForm {
 }
 
 // checkForm fetches the first escaped chunk this device appends on the hub back, once, and reports
-// whether the server changed it; if so the hub is written in base64 from then on (section 4.2).
+// whether the server changed it; if so the hub is written in base64 from then on (§17.4.2).
 func (d *Device) checkForm(ctx context.Context, b *blobs, id string, sent tandem.OutgoingChunk) (bool, error) {
 	d.mu.RLock()
 	_, checked := d.store.Value("blobs.formchecked")
@@ -660,7 +660,7 @@ func (d *Device) checkForm(ctx context.Context, b *blobs, id string, sent tandem
 }
 
 // commit merges a pending write whose chunks are all on the hub into the replica and publishes it
-// (section 6, step 5). A record deleted meanwhile drops it; a write whose epoch was replaced is
+// (§17.6, step 5). A record deleted meanwhile drops it; a write whose epoch was replaced is
 // signed again under the current one, as a late write is (§11.6).
 func (d *Device) commit(ctx context.Context, b *blobs, u Upload) error {
 	defer d.begin()()
@@ -683,7 +683,7 @@ func (d *Device) commit(ctx context.Context, b *blobs, u Upload) error {
 	}
 	if st, ok := c.headStatement(); c.dead() || !ok || st.Deleted || d.me == nil || st.member(d.me.Participant) == nil ||
 		st.member(d.me.Participant).Role == Reader {
-		d.dropUpload(u) // never published: its author can't write here any more, and its chunks are orphans (section 6)
+		d.dropUpload(u) // never published: its author can't write here any more, and its chunks are orphans (§17.6)
 		return nil
 	}
 	c2, me, head, epoch, cur, err := d.writable(u.Scope, u.Record)
@@ -707,7 +707,7 @@ func (d *Device) commit(ctx context.Context, b *blobs, u Upload) error {
 	return d.keepWrites(ctx, c2, u.Record, epoch, cur.s.KeyN, []*tandem.Write{w})
 }
 
-// The index (section 4.3)
+// The index (§17.4.3)
 
 // refreshIndex brings the chunk index up to date from the blob folder's headers.
 func (d *Device) refreshIndex(ctx context.Context, b *blobs) error {
@@ -742,7 +742,7 @@ func (d *Device) refreshIndex(ctx context.Context, b *blobs) error {
 }
 
 // settle finds, for each address, the lowest message this device has verified as carrying it,
-// fetching unverified claims to verify or reject them (section 4.3). Addresses without one map to "".
+// fetching unverified claims to verify or reject them (§17.4.3). Addresses without one map to "".
 func (d *Device) settle(ctx context.Context, b *blobs, addrs [][]byte) (map[string]string, error) {
 	out := map[string]string{}
 	for {
@@ -808,7 +808,7 @@ func (d *Device) settle(ctx context.Context, b *blobs, addrs [][]byte) (map[stri
 	}
 }
 
-// Reading (section 8)
+// Reading (§17.8)
 
 // Blob is the file in a field _blob:<name> of a record, as this device sees it now.
 func (d *Device) Blob(list, record []byte, name string) (Blob, bool) {
@@ -1195,7 +1195,7 @@ func writeAtomically(path string, data []byte) error {
 	return os.Rename(tmp, path)
 }
 
-// Keeping files (section 8)
+// Keeping files (§17.8)
 
 // KeepFiles sets whether this device fetches every file of a list unasked, up to the Unasked size.
 func (d *Device) KeepFiles(list []byte, keep bool) error {

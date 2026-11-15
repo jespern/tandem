@@ -1,7 +1,7 @@
 import Foundation
 import Tandem
 
-/// The blob folder of BLOBS.md section 4.3: chunks, each one message, in a folder next to the feed's that no
+/// The blob folder of DESIGN.md §17.4.3: chunks, each one message, in a folder next to the feed's that no
 /// device idles on. It lists the chunks' claimed addresses from their headers alone, fetches and decodes chunk
 /// bodies, appends chunks and reads the quota, on transfer connections of its own that open when work arrives
 /// and close at `release()`.
@@ -16,7 +16,7 @@ public actor BlobStore: BlobHub {
         /// The blob folder's name.
         public var folder: String
         /// How many connections a transfer may use: nil decides from the server, 2 where it batches appends
-        /// (MULTIAPPEND or LITERAL+) and 4 where it doesn't (section 4.3); at most 8. Fewer when one is refused.
+        /// (MULTIAPPEND or LITERAL+) and 4 where it doesn't (§17.4.3); at most 8. Fewer when one is refused.
         public var transferConnections: Int?
         /// The message bytes of one append batch.
         public var batchBytes: Int
@@ -169,7 +169,7 @@ private final class Queue: @unchecked Sendable {
 
 extension IMAPStore {
     /// Appends chunks to the blob folder on the feed's own connection, without selecting it: for a transfer of one
-    /// batch, which takes less time than opening a transfer connection (BLOBS.md section 4.3).
+    /// batch, which takes less time than opening a transfer connection (DESIGN.md §17.4.3).
     public func appendChunks(_ chunks: [(channel: String, envelope: Bytes)], folder: String = BlobStore.folder,
                              form: ChunkForm = .escaped) async throws -> [String] {
         let built = try chunks.map { try ChunkFormat.build(channel: $0.channel, envelope: $0.envelope, form: form) }
