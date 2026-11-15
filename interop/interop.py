@@ -180,7 +180,51 @@ def copying(new, hub):
     check('Bob reads Alice', [i['values'].get('done') for i in bob('items', list=copy['list'])['items']], [b64u(b'1')])
 
 
-SCENARIOS = [sharing, pairing, key_change, copying]
+def blobs(new, hub):
+    """Files both ways (BLOBS.md): an upload on one engine is read on the other, over the real blob folder; a chunk
+    destroyed on the hub is restored by the other engine's device, which holds the file."""
+    bob = new('a', 'Bob')
+    bob('found', label='Bob’s Mac')
+    alice = new('b', 'Alice')
+    alice('join', link=bob('invite', label='Alice')['link'], label='Alice’s phone')
+    bob('sync')
+    lst = bob('createList', name='Photos')['list']
+    bob('share', list=lst, participant=alice('me')['participant'], role='writer')
+    alice('sync')
+    alice('accept', list=lst)
+    for d in (bob, alice):
+        d('useBlobs', chunkSize=65536)
+    photo, data = b64u(os.urandom(16)), os.urandom(200_000)
+    bob('attach', list=lst, record=photo, name='photo', content=b64u(data))
+    bob('settleBlobs')
+    check('Bob has it', bob('blob', list=lst, record=photo, name='photo')['state'], 'here')
+    check('four chunks, once each', bob('chunkCounts', list=lst, record=photo, name='photo')['counts'], [1, 1, 1, 1])
+    alice('sync')
+    check('Alice sees it remote', alice('blob', list=lst, record=photo, name='photo')['state'], 'remote')
+    check('Alice reads it', unb64u(alice('fetchBlob', list=lst, record=photo, name='photo')['content']), data)
+    doc, text = b64u(os.urandom(16)), os.urandom(70_000)
+    alice('attach', list=lst, record=doc, name='file', content=b64u(text))
+    alice('settleBlobs')
+    bob('sync')
+    check('Bob reads Alice\'s', unb64u(bob('fetchBlob', list=lst, record=doc, name='file')['content']), text)
+    note = b64u(os.urandom(16))
+    bob('attach', list=lst, record=note, name='note', content=b64u(b'inline, so no chunk'))
+    alice('sync')
+    check('inline', unb64u(alice('fetchBlob', list=lst, record=note, name='note')['content']), b'inline, so no chunk')
+    # A credential holder destroys a chunk; Alice, who holds the file, puts it back.
+    bob('dropChunk', list=lst, record=photo, name='photo', index=2)
+    check('gone', bob('chunkCounts', list=lst, record=photo, name='photo')['counts'][2], 0)
+    alice('checkBlobs')
+    check('restored', alice('chunkCounts', list=lst, record=photo, name='photo')['counts'], [1, 1, 1, 1])
+    # Replacing the file: the old chunks go once the new version is on the feed.
+    newer = os.urandom(140_000)
+    bob('attach', list=lst, record=photo, name='photo', content=b64u(newer))
+    bob('settleBlobs')
+    alice('sync')
+    check('Alice reads the new version', unb64u(alice('fetchBlob', list=lst, record=photo, name='photo')['content']), newer)
+
+
+SCENARIOS = [sharing, pairing, key_change, copying, blobs]
 
 
 def run(server, first, second):

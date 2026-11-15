@@ -12,6 +12,30 @@ struct Failure: Error { let message: String }
 actor Driver {
     var account: MailboxAccount?, folder = "Tandem", insecure = false
     var device: Device?, ms: Bytes?
+    var blobs: BlobStore?
+
+    func configuration() throws -> IMAPStore.Configuration {
+        guard let account else { throw Failure(message: "no hub: send {\"op\":\"hub\",…} first") }
+        return .init(host: account.host, port: account.port, username: account.user, password: account.password,
+                     security: insecure ? .tlsTrustingAnyCertificateForTesting : .tls, folder: folder)
+    }
+
+    func refs() async throws -> [BlobRef] {
+        guard let blobs else { throw Failure(message: "blobs not in use") }
+        var out: [BlobRef] = [], cursor = ""
+        while true {
+            let c = try await blobs.changes(since: cursor)
+            out += c.added
+            if !c.more { return out }
+            cursor = c.cursor
+        }
+    }
+
+    func manifest(_ list: Bytes, _ record: Bytes, _ name: String) async throws -> Blob.Manifest {
+        guard let v = try await dev().value(list: list, record: record, field: "_blob:" + name), case let .manifest(m) = Blob.parse(v)
+        else { throw Failure(message: "no manifest") }
+        return m
+    }
 
     func store() async throws -> IMAPStore {
         guard let account else { throw Failure(message: "no hub: send {\"op\":\"hub\",…} first") }
@@ -141,6 +165,38 @@ actor Driver {
             return ["list": B64u.encode(copy.list), "shared": copy.shared.map(B64u.encode), "undecided": copy.undecided.map(B64u.encode)]
         case "copyOf":
             return ["from": try await dev().copyOf(list: try b("list")).map(B64u.encode) ?? NSNull()]
+        case "useBlobs":
+            let store = BlobStore(try configuration(), options: .init(folder: folder + "-blobs"))
+            blobs = store
+            try await dev().useBlobs(store, settings: BlobSettings(chunkSize: c["chunkSize"] as? Int ?? Blob.defaultChunk))
+            return [:]
+        case "settleBlobs":
+            try await dev().settleBlobs()
+            return [:]
+        case "checkBlobs":
+            let d = try dev()
+            await d.checkBlobs()
+            await d.settleBlobs()
+            return [:]
+        case "attach":
+            try await dev().attach(list: try b("list"), record: try b("record"), name: try s("name"), content: try b("content"))
+            return [:]
+        case "blob":
+            guard let info = try await dev().blob(list: try b("list"), record: try b("record"), name: try s("name")) else { return ["state": NSNull()] }
+            let names: [BlobState: String] = [.here: "here", .remote: "remote", .downloading: "downloading", .unavailable: "unavailable",
+                                              .unreadable: "unreadable", .uploading: "uploading"]
+            return ["state": names[info.state]!, "size": info.size]
+        case "fetchBlob":
+            let url = try await dev().fetchBlob(list: try b("list"), record: try b("record"), name: try s("name"))
+            return ["content": B64u.encode(Bytes(try Data(contentsOf: url)))]
+        case "chunkCounts":
+            let m = try await manifest(try b("list"), try b("record"), try s("name")), all = try await refs()
+            return ["counts": (m.chunks ?? []).map { e in all.filter { $0.address == e.address }.count }]
+        case "dropChunk":
+            let m = try await manifest(try b("list"), try b("record"), try s("name")), all = try await refs()
+            let address = m.chunks![c["index"] as? Int ?? 0].address
+            try await blobs!.destroy(ids: all.filter { $0.address == address }.map(\.id))
+            return [:]
         default:
             throw Failure(message: "unknown op")
         }

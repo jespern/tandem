@@ -23,6 +23,117 @@ type driver struct {
 	insecure bool
 	device   *engine.Device
 	ms       []byte
+	blobs    *imap.BlobStore
+}
+
+func (d *driver) imapConfig() imap.Config {
+	security := imap.TLS
+	if d.insecure {
+		security = imap.TLSTrustingAnyCertificateForTesting
+	}
+	return imap.Config{Host: d.account.Host, Port: int(d.account.Port), Username: d.account.User,
+		Password: d.account.Password, Security: security, Folder: d.folder}
+}
+
+var blobStates = map[engine.BlobState]string{engine.BlobHere: "here", engine.BlobRemote: "remote", engine.BlobDownloading: "downloading",
+	engine.BlobUnavailable: "unavailable", engine.BlobUnreadable: "unreadable", engine.BlobUploading: "uploading"}
+
+// blobOp handles the blob commands; ok is false for any other op.
+func (d *driver) blobOp(ctx context.Context, dev *engine.Device, op string, a args) (map[string]any, bool, error) {
+	if op == "useBlobs" {
+		size, _ := a["chunkSize"].(float64)
+		b, err := imap.NewBlobStore(d.imapConfig(), imap.BlobOptions{Folder: d.folder + "-blobs"})
+		if err != nil {
+			return nil, true, err
+		}
+		d.blobs = b
+		return nil, true, dev.UseBlobs(b, engine.BlobSettings{ChunkSize: int(size)})
+	}
+	if op == "settleBlobs" {
+		return nil, true, dev.SettleBlobs(ctx)
+	}
+	if op == "checkBlobs" {
+		dev.CheckBlobs()
+		return nil, true, dev.SettleBlobs(ctx)
+	}
+	list, err1 := a.b("list")
+	record, err2 := a.b("record")
+	name, err3 := a.s("name")
+	switch op {
+	case "attach", "blob", "fetchBlob", "dropChunk", "chunkCounts":
+		if err := errors.Join(err1, err2, err3); err != nil {
+			return nil, true, err
+		}
+	default:
+		return nil, false, nil
+	}
+	switch op {
+	case "attach":
+		content, err := a.b("content")
+		if err != nil {
+			return nil, true, err
+		}
+		return nil, true, dev.AttachBytes(ctx, list, record, name, content)
+	case "blob":
+		b, ok := dev.Blob(list, record, name)
+		if !ok {
+			return map[string]any{"state": nil}, true, nil
+		}
+		return map[string]any{"state": blobStates[b.State], "size": b.Size}, true, nil
+	case "fetchBlob":
+		path, err := dev.FetchBlob(ctx, list, record, name)
+		if err != nil {
+			return nil, true, err
+		}
+		content, err := os.ReadFile(path)
+		return map[string]any{"content": tandem.B64u(content)}, true, err
+	}
+	value, ok := dev.Value(list, record, engine.BlobPrefix+name)
+	m, kind := tandem.ParseManifest(value)
+	if !ok || kind != tandem.ManifestV1 || d.blobs == nil {
+		return nil, true, errors.New("no manifest, or blobs not in use")
+	}
+	refs, err := d.allRefs(ctx)
+	if err != nil {
+		return nil, true, err
+	}
+	if op == "chunkCounts" {
+		var counts []int
+		for _, e := range m.Chunks {
+			n := 0
+			for _, r := range refs {
+				if string(r.Address) == string(e.Address) {
+					n++
+				}
+			}
+			counts = append(counts, n)
+		}
+		return map[string]any{"counts": counts}, true, nil
+	}
+	index, _ := a["index"].(float64)
+	var ids []string
+	for _, r := range refs {
+		if string(r.Address) == string(m.Chunks[int(index)].Address) {
+			ids = append(ids, r.ID)
+		}
+	}
+	return nil, true, d.blobs.Destroy(ctx, ids)
+}
+
+func (d *driver) allRefs(ctx context.Context) ([]tandem.BlobRef, error) {
+	var out []tandem.BlobRef
+	cursor := ""
+	for {
+		c, err := d.blobs.Changes(ctx, cursor)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c.Added...)
+		if !c.More {
+			return out, nil
+		}
+		cursor = c.Cursor
+	}
 }
 
 type args map[string]any
@@ -47,12 +158,7 @@ func (d *driver) store() (tandem.PushStore, error) {
 	if d.account.Host == "" {
 		return nil, errors.New(`no hub: send {"op":"hub",…} first`)
 	}
-	security := imap.TLS
-	if d.insecure {
-		security = imap.TLSTrustingAnyCertificateForTesting
-	}
-	s, err := imap.New(imap.Config{Host: d.account.Host, Port: int(d.account.Port), Username: d.account.User,
-		Password: d.account.Password, Security: security, Folder: d.folder})
+	s, err := imap.New(d.imapConfig())
 	if err != nil {
 		return nil, err
 	}
@@ -138,6 +244,9 @@ func (d *driver) handle(ctx context.Context, a args) (map[string]any, error) {
 	dev, err := d.dev()
 	if err != nil {
 		return nil, err
+	}
+	if out, ok, err := d.blobOp(ctx, dev, op, a); ok {
+		return out, err
 	}
 	list, _ := a.b("list")
 	record, _ := a.b("record")
