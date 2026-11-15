@@ -29,7 +29,13 @@ trip for each one, and providers limit how fast and how much an account may move
 volume matters more than keeping the files inside the mailbox, use something built for files.
 
 Measured on 2026-11-15 from one machine on one line, with 1 MiB chunks, in MiB of file content per
-second. Other lines and other days will differ; section 12 has every figure and how it was taken.
+second. Other lines and other days will differ, and so did runs on that day, by up to a factor of
+two; section 12 has every figure and how it was taken.
+
+These are rates on connections that were already open. They are not what a user waits. A transfer
+also pays for opening a connection, which took 1.5 to 1.7 s on Fastmail and 2.4 to 2.8 s on Gmail
+each time (TLS, login, selecting the folder), and for refreshing the chunk index, sealing the
+chunks and publishing the record, none of which was measured.
 
 | Provider | Upload, 1 connection | Upload, default connections | Upload, 8 connections | Download, 1 connection | Download, default connections | Download, 8 connections |
 |---|---|---|---|---|---|---|
@@ -38,7 +44,8 @@ second. Other lines and other days will differ; section 12 has every figure and 
 | **Stalwart 1.1.0** on the same machine | works; speed not meaningful | | | | | |
 
 What that means for a file, by arithmetic from the rates above with the default connections, not
-measured end to end:
+measured end to end. Add the two or three seconds of a new connection where one is needed (section
+4.3 says when):
 
 | File | Fastmail up | Fastmail down | Gmail up | Gmail down |
 |---|---|---|---|---|
@@ -221,8 +228,10 @@ instance of the abstract store (§10.1) with three additions and one omission:
 A device keeps a **chunk index**: for every message in the folder its ID, claimed address and tag,
 built by `changes` (headers only, paged like the feed), and two things only this device knows: when
 it first saw the message, by its own clock, and whether it has verified it. It refreshes the index
-only when it has a reason: before fetching a chunk, before publishing a manifest, and in the hygiene
-pass if it holds blob content or has chunks to collect. A device with no interest in files never
+only when it has a reason: before a download starts, before an upload starts and once more before
+its commit, and in the hygiene pass if it holds blob content or has chunks to collect. A refresh is
+incremental, the messages added and removed since the last one, and one refresh serves every
+transfer waiting at that moment. It is never made per chunk. A device with no interest in files never
 opens the folder. A `UIDVALIDITY` change rebuilds the index; first-seen times and verification start
 over with it.
 
@@ -259,6 +268,13 @@ Gmail), a hub is one account, and every connection one device holds is one anoth
 open, its feed connection included. Where the server refuses a further connection the device
 goes on with those it has. With none, or with the setting at 0, it uses its feed connection and
 transfers one chunk between returns to IDLE.
+
+Transfer connections are shared by everything that is waiting, uploads and downloads of any number
+of files, and close when nothing is. A new one costs 1.5 s on Fastmail and 2.5 s on Gmail before
+its first chunk (section 12), so one is never opened per file. For the same reason a transfer that
+fits in one batch, on a server that can batch, goes on the feed connection without opening any:
+there it takes less time than the connection would. The feed hears nothing for that second and
+catches up when IDLE starts again, as after any command.
 
 **Batching.** An implementation MUST send chunks in batches of a few MiB, by the first of these the
 server offers, in either form:
@@ -472,8 +488,16 @@ chunk. An unavailable blob is tried again at the next index refresh or when
 the app asks.
 
 **Keeping.** Whether a device fetches on demand or keeps every file of a scope is a setting per
-scope and device, with an upper size for what is fetched unasked. The blob store has a size limit;
-what is evicted becomes remote again. A staged copy is kept until its write is published.
+scope and device, with an upper size for what is fetched unasked. The blob store has a size limit.
+It evicts what was opened longest ago first, and what is evicted becomes remote again; a file
+opened often therefore stays on the device and opens without the hub. A staged copy is kept until
+its write is on the feed.
+
+**Order.** What the user asks for goes first. A fetch the app requests is served before anything
+fetched unasked, and within a file the chunk holding the offset that was asked for before the
+others. Uploads and unasked downloads wait behind it, for no longer than the batch already on its
+way. With a preview in an ordinary field of the record (section 5), a file shows at once and its
+bytes follow.
 
 **Healing** (§12.2) gains one rule. After an index refresh in the hygiene pass, for every live
 manifest (section 7) in a current channel whose whole content the device holds: each listed address
@@ -613,6 +637,11 @@ second run. Appends are one at a time on each connection.
 - **Four is the default there** (section 4.3): 2.4 to 3.4 times the upload of one connection, and it
   leaves room under Gmail's cap for the other devices of the hub (B1).
 
+Opening a connection, ready to transfer (TLS, `LOGIN`, `CAPABILITY`, `SELECT`), three times each:
+Fastmail 1.73, 1.60 and 1.51 s; Gmail 2.40, 2.76 and 2.42 s. The same short run fetched 16 chunks
+from Fastmail at 18.3 MiB per second on one connection, against 10 to 12 earlier, and appended them
+in batches at 4.4, against 7 to 10: the line or the server varies that much.
+
 Fastmail, 16 binary chunks of 1 MiB spread over several connections at once, MiB per second:
 
 | Connections | Append, one at a time | Append, batched | Fetch, one at a time | Fetch, one command each |
@@ -643,4 +672,5 @@ Fastmail, 16 binary chunks of 1 MiB spread over several connections at once, MiB
 | B8 | **Waiting for an unavailable blob.** A device could idle on the blob folder while it wants a missing chunk. Today it retries at the next refresh. |
 | B9 | **Proofs.** The clean-up rule of section 7 and the pending write of section 6 should get the treatment the mailbox clean-up proofs give §10.7. |
 | B10 | **The browser binding** (§10.2): a second Mailbox and the same message format; JMAP could fetch byte ranges. Not designed. It needs an order of message IDs that every device shares (section 4.3), which JMAP's IDs do not give by themselves. |
+| B12 | **Uploading while describing.** Section 6 describes the whole file, one pass that seals every chunk to learn its address, before the first append. The two could overlap: sealing is deterministic, so a crash repeats the description and finds the chunks already there, provided the journal entry (`r` and the staged copy) exists before the first append and the write is signed when the description ends. The cost is that the write's context is fixed later and the pending file has no manifest while it uploads. The gain is one pass over the file, which should be small next to an upload at the measured rates; sealing speed has not been measured. Left out until it has. |
 | B11 | **Scale.** The chunk index was scanned for 126 messages only. How long does a folder of tens of thousands of chunks take to scan and to select? |
