@@ -50,6 +50,9 @@ func (d *Device) collectGarbage(ctx context.Context) error {
 		if err := d.collectGone(ctx, c, me); err != nil {
 			return err
 		}
+		if err := d.trimRosters(ctx, c, me); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -176,6 +179,83 @@ func (d *Device) replacer(record []storedEntry, x storedEntry, current []byte, i
 		}
 	}
 	return false
+}
+
+// trimRosters cuts the roster in each channel a later epoch replaced down to that epoch's own
+// statements, from the one that started it to the announcement of the next (§10.7): a device that
+// was away holds the chain up to its last head, in that epoch or an earlier one, and needs no more
+// from the channel; a device that holds nothing gets the whole chain in the current channel. Done
+// by the owner's devices, in a list that is neither deleted nor dead.
+func (d *Device) trimRosters(ctx context.Context, c *collection, me *Me) error {
+	s, ok := c.headStatement()
+	if !ok || s.Deleted || c.dead() || !bytes.Equal(c.owner(), me.Participant) || !d.registry.Activity(me.Certificate).IsValid() {
+		return nil
+	}
+	head := c.head()
+	current := c.epochOf(head)
+	line := chain(c, head)
+	for _, e := range sortedKeys(c.keys) {
+		epoch := []byte(e)
+		if bytes.Equal(epoch, current) || bytes.Equal(epoch, c.genesis) || !c.counts(epoch) {
+			continue
+		}
+		// The epoch's own statements, and the one that started the next.
+		var segment []*tandem.Write
+		in := map[string]bool{}
+		for i, id := range line {
+			if bytes.Equal(c.epochOf(id), epoch) {
+				segment = append(segment, c.statements[string(id)].w)
+				in[string(id)] = true
+				if i+1 < len(line) && !bytes.Equal(c.epochOf(line[i+1]), epoch) {
+					segment = append(segment, c.statements[string(line[i+1])].w)
+					in[string(line[i+1])] = true
+				}
+			}
+		}
+		if len(segment) == 0 {
+			continue
+		}
+		tag := tandem.CollectionTag(c.keys[e], d.pin.Hub, epoch)
+		ms, err := d.store.Merged(tag)
+		if err != nil {
+			return err
+		}
+		var extra []string
+		exact := false
+		for _, m := range ms {
+			cs, err := d.store.Contents(m.ID)
+			if err != nil {
+				return err
+			}
+			if len(cs) == 0 || !bytes.Equal(cs[0].Record, rosterRecord) {
+				continue
+			}
+			inside := true
+			for _, ct := range cs {
+				inside = inside && in[string(ct.Write)]
+			}
+			if !inside {
+				extra = append(extra, m.ID)
+			} else if len(cs) == len(segment) {
+				exact = true
+			}
+		}
+		if len(extra) == 0 {
+			continue
+		}
+		if !exact {
+			if err := d.publish(ctx, c.id, epoch, rosterRecord, segment); err != nil {
+				return err
+			}
+		}
+		if err := d.hubDestroy(ctx, extra); err != nil {
+			return err
+		}
+		if err := d.store.ForgetMessages(extra); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // gone reports whether a list is deleted, or this participant was removed from it after

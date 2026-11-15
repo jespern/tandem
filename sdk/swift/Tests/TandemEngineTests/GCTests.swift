@@ -238,6 +238,57 @@ final class GCTests: XCTestCase {
         XCTAssertEqual(aliceSees, ["Milk", "Bread"])
     }
 
+    /// The statement IDs that roster messages of a list's epoch channel hold.
+    func rosterIn(_ hub: MemoryHub, _ d: Device, _ list: Bytes, _ epoch: ID) async throws -> Set<Bytes> {
+        let key = await d.collections[list]!.keys[epoch]!
+        let tag = Tandem.collectionTag(key: key, hub: d.pin.hub, epoch: epoch)
+        var out: Set<Bytes> = []
+        for m in await hub.messages where m.channel == tag {
+            let (_, p) = try Envelope.open(key: key, hub: d.pin.hub, tag: tag, envelope: m.body)
+            guard case let .record(state)? = try? Kind1.parse(p, hub: d.pin.hub, scope: list), state.record == Roster.record else { continue }
+            for var w in state.writes {
+                if w.ref == Bytes(repeating: 0, count: 32) { w.scope = Roster.zeroScope }
+                out.insert(try w.id())
+            }
+        }
+        return out
+    }
+
+    /// GC.md §4.3: a channel a later epoch replaced keeps only its epoch's statements and the announcement of the next;
+    /// a device away for several key changes still finds its way.
+    func testOldChannelsKeepTheirOwnStatements() async throws {
+        let w = try await world()
+        try await w.bob.rekey(list: w.house)                              // epoch 1
+        try await w.bob.setRole(.reader, for: w.carolID, in: w.house)     // epoch 2
+        try await w.bob.setRole(.writer, for: w.carolID, in: w.house)     // the same epoch
+        try await w.bob.rekey(list: w.house)                              // epoch 3
+        try await sync(w.bob, w.bob)
+        let c = await w.bob.collections[w.house]!
+        let line = await w.bob.chain(c, to: c.head!)
+        let current = c.epoch(of: c.head!)!
+        let epochs = Set(line.compactMap { c.epoch(of: $0) })
+        XCTAssertEqual(epochs.count, 4)
+        for epoch in epochs where epoch != current && epoch != c.genesis {
+            let held = try await rosterIn(w.hub, w.bob, w.house, epoch)
+            var want: Set<Bytes> = []
+            for (i, id) in line.enumerated() where c.epoch(of: id) == epoch {
+                want.insert(id)
+                if i + 1 < line.count { want.insert(line[i + 1]) }
+            }
+            XCTAssertEqual(held, want, "an old channel keeps exactly its epoch's statements")
+        }
+        let whole = try await rosterIn(w.hub, w.bob, w.house, current)
+        XCTAssertEqual(whole.count, line.count, "the current channel keeps the whole chain")
+        try await sync(w.alice, w.carol)
+        let roles = (await w.alice.role(list: w.house), await w.carol.role(list: w.house))
+        XCTAssertEqual(roles.0, .writer)
+        XCTAssertEqual(roles.1, .writer)
+        try await w.alice.setField(list: w.house, record: w.alice.newRecordID(), field: "title", value: Bytes("Back".utf8))
+        try await w.bob.sync()
+        let bobSees = await titles(w.bob, w.house)
+        XCTAssertEqual(bobSees, ["Milk", "Bread", "Back"])
+    }
+
     // MARK: Files
 
     struct BlobWorld { let hub: MemoryHub; let blobs: MemoryBlobHub; let bob: Device; let alice: Device; let list: Bytes }

@@ -25,6 +25,7 @@ extension Device {
         for cid in collections.keys.sorted(by: { $0.lexicographicallyPrecedes($1) }) {
             try dropPastWrites(cid, me: me)
             try await collectGone(cid, me: me)
+            try await trimRosters(cid, me: me)
         }
     }
 
@@ -91,6 +92,43 @@ extension Device {
             if try store.onFeed(y.id) { return true }
         }
         return false
+    }
+
+    /// Cuts the roster in each channel a later epoch replaced down to that epoch's own statements, from the one that
+    /// started it to the announcement of the next (§10.7): a device that was away holds the chain up to its last head,
+    /// in that epoch or an earlier one, and needs no more from the channel; a device that holds nothing gets the whole
+    /// chain in the current channel. Done by the owner's devices, in a list that is neither deleted nor dead.
+    func trimRosters(_ cid: Bytes, me: Me) async throws {
+        guard let c = collections[cid], let head = c.head, c.statements[head]?.statement.deleted == false, !c.dead,
+              c.owner == me.participant, registry.activity(me.certificate).isValid, let current = c.epoch(of: head) else { return }
+        let line = chain(c, to: head)
+        for (epoch, key) in c.keys.sorted(by: { $0.key.lexicographicallyPrecedes($1.key) })
+        where epoch != current && epoch != c.genesis && c.counts(epoch) {
+            // The epoch's own statements, and the one that started the next.
+            var segment: [Write] = [], inside: Set<Bytes> = []
+            for (i, id) in line.enumerated() where c.epoch(of: id) == epoch {
+                segment.append(c.statements[id]!.write); inside.insert(id)
+                if i + 1 < line.count, c.epoch(of: line[i + 1]) != epoch {
+                    segment.append(c.statements[line[i + 1]]!.write); inside.insert(line[i + 1])
+                }
+            }
+            guard !segment.isEmpty else { continue }
+            let tag = Tandem.collectionTag(key: key, hub: pin.hub, epoch: epoch)
+            var extra: [String] = [], exact = false
+            for (id, _) in try store.merged(channel: tag) {
+                let contents = try store.contents(message: id)
+                guard let first = contents.first, first.record == Roster.record else { continue }
+                if contents.allSatisfy({ inside.contains($0.write) }) {
+                    if contents.count == segment.count { exact = true }
+                } else {
+                    extra.append(id)
+                }
+            }
+            guard !extra.isEmpty else { continue }
+            if !exact { try await publish(cid: cid, epoch: epoch, record: Roster.record, writes: segment) }
+            try await hub.destroy(ids: extra)
+            try store.forgetMessages(extra)
+        }
     }
 
     /// Whether a gone list's replica was collected here.

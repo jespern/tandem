@@ -384,3 +384,88 @@ func TestGCDroppedWritesStillCountForCleanup(t *testing.T) {
 		}
 	}
 }
+
+// rosterIn is the statement IDs that roster messages of a list's epoch channel hold.
+func rosterIn(t *testing.T, hub *MemoryHub, d *Device, list, epoch []byte) map[string]bool {
+	t.Helper()
+	d.mu.RLock()
+	key := d.collections[string(list)].keys[string(epoch)]
+	d.mu.RUnlock()
+	tag := tandem.CollectionTag(key, d.Pin().Hub, epoch)
+	out := map[string]bool{}
+	for _, m := range hub.Messages() {
+		if m.Channel != tag {
+			continue
+		}
+		_, p := try2(tandem.Open(key, d.Pin().Hub, tag, m.Body))
+		if state, _, err := tandem.ParseKind1(p, d.Pin().Hub, list); err == nil && state != nil && bytes.Equal(state.Record, rosterRecord) {
+			for _, w := range state.Writes {
+				if bytes.Equal(w.Ref, zero32) {
+					w.Scope = zero16
+				}
+				out[string(writeID(w))] = true
+			}
+		}
+	}
+	return out
+}
+
+// GC.md §4.3: a channel a later epoch replaced keeps only its epoch's statements and the
+// announcement of the next; a device away for several key changes still finds its way.
+func TestGCOldChannelsKeepTheirOwnStatements(t *testing.T) {
+	w := newRotWorld(t)
+	must(t, w.bob.Rekey(bg, w.house))                      // epoch 1
+	must(t, w.bob.SetRole(bg, Reader, w.carolID, w.house)) // epoch 2
+	must(t, w.bob.SetRole(bg, Writer, w.carolID, w.house)) // the same epoch
+	must(t, w.bob.Rekey(bg, w.house))                      // epoch 3
+	syncAll(t, w.bob, w.bob)
+	w.bob.mu.RLock()
+	c := w.bob.collections[string(w.house)]
+	line := chain(c, c.head())
+	epochs := map[string]bool{}
+	for _, id := range line {
+		epochs[string(c.epochOf(id))] = true
+	}
+	current := c.epochOf(c.head())
+	w.bob.mu.RUnlock()
+	if len(epochs) != 4 {
+		t.Fatal("epochs", len(epochs))
+	}
+	for e := range epochs {
+		epoch := []byte(e)
+		if bytes.Equal(epoch, current) || bytes.Equal(epoch, c.genesis) {
+			continue
+		}
+		held := rosterIn(t, w.hub, w.bob, w.house, epoch)
+		want := map[string]bool{}
+		for i, id := range line {
+			if bytes.Equal(c.epochOf(id), epoch) {
+				want[string(id)] = true
+				if i+1 < len(line) {
+					want[string(line[i+1])] = true
+				}
+			}
+		}
+		if len(held) != len(want) {
+			t.Fatalf("an old channel's roster holds %d statements, its epoch has %d", len(held), len(want))
+		}
+		for id := range want {
+			if !held[id] {
+				t.Fatal("an old channel lost one of its epoch's statements")
+			}
+		}
+	}
+	if len(rosterIn(t, w.hub, w.bob, w.house, current)) != len(line) {
+		t.Fatal("the current channel keeps the whole chain")
+	}
+	// Alice was away for all of it.
+	syncAll(t, w.alice, w.carol)
+	if w.alice.Role(w.house) != Writer || w.carol.Role(w.house) != Writer {
+		t.Fatal("roles", w.alice.Role(w.house), w.carol.Role(w.house))
+	}
+	must(t, w.alice.SetField(bg, w.house, NewRecordID(), "title", []byte("Back")))
+	syncAll(t, w.bob)
+	if got := titles(w.bob, w.house); !sameSet(got, set("Milk", "Bread", "Back")) {
+		t.Fatal("Bob sees", got)
+	}
+}
