@@ -1,5 +1,7 @@
 import Mathlib.Data.Finset.Card
 import Mathlib.Data.Finset.Max
+import Mathlib.Data.Finset.Union
+import TandemProofs.Kept
 
 /-!
 # Collecting and healing file chunks (DESIGN.md §17.7, §17.8; open question B9)
@@ -145,5 +147,77 @@ theorem heal_appends_only_listed {es : List (Entry K P A)} :
   · simp at henv
 
 end Healing
+
+/-! ## Pending writes and the feed rule (§17.6, §17.7)
+
+Which manifests a device protects is computed from writes: the manifests kept among the writes of
+its replica, and among those of them that are on the feed, together with its held and pending
+writes. Supersession is any strict partial order (`Kept`). A pending write is never in the replica
+(§17.6). -/
+
+section Pending
+
+variable {W A C : Type*} [DecidableEq W] [DecidableEq A] [DecidableEq C]
+variable (r : W → W → Prop) [DecidableRel r] (addrs : W → Finset A)
+
+/-- The addresses of the manifests a set of writes keeps (§17.7, "live"). -/
+def liveAddrs (S : Finset W) : Finset A := (kept r S).biUnion addrs
+
+/-- What a device protects (§17.7): what its replica `R` keeps live, what the writes of it that
+are on the feed `F` keep live, and its held `H` and pending `P` writes. -/
+def protectOf (R F P H : Finset W) : Finset A :=
+  liveAddrs r addrs R ∪ liveAddrs r addrs F ∪ P.biUnion addrs ∪ H.biUnion addrs
+
+variable {r addrs}
+
+/-- **Only what is on the feed takes protection away**: a device protects everything a device
+holding just the writes on the feed would show, whatever its replica holds beyond them. -/
+theorem feed_rule (R F P H : Finset W) : liveAddrs r addrs F ⊆ protectOf r addrs R F P H :=
+  fun _ ha => Finset.mem_union_left _ (Finset.mem_union_left _ (Finset.mem_union_right _ ha))
+
+/-- **A pending write is protected**, and so is what the replica keeps while it is pending. -/
+theorem pending_protected (R F P H : Finset W) {p : W} (hp : p ∈ P) :
+    addrs p ⊆ protectOf r addrs R F P H ∧ liveAddrs r addrs R ⊆ protectOf r addrs R F P H := by
+  refine ⟨fun a ha => ?_, fun a ha => ?_⟩
+  · exact Finset.mem_union_left _ (Finset.mem_union_right _ (Finset.mem_biUnion.2 ⟨p, hp, ha⟩))
+  · exact Finset.mem_union_left _ (Finset.mem_union_left _ (Finset.mem_union_left _ ha))
+
+/-- Two writes: `1` replaces `0`; `0`'s manifest lists address `0`, `1`'s address `1`. -/
+def two : ℕ → ℕ → Prop := fun y x => y = 1 ∧ x = 0
+
+/-- **Why the feed rule is needed**: a device whose replica already holds an unpublished
+replacement keeps the old version live in neither its replica nor anywhere else, while every other
+device, which sees only the feed, still shows it. Without the feed clause its address would go
+unprotected. -/
+theorem without_feed_rule_loses :
+    (0 : ℕ) ∈ liveAddrs two (fun w => ({w} : Finset ℕ)) ({0} : Finset ℕ) ∧
+      (0 : ℕ) ∉ liveAddrs two (fun w => ({w} : Finset ℕ)) ({0, 1} : Finset ℕ) := by
+  refine ⟨?_, ?_⟩
+  · simp [liveAddrs, kept, two]
+  · simp [liveAddrs, kept, two]
+
+/-- **A committed manifest's chunks stay on the hub.** The device commits only once every address
+it lists has a verified message (§17.6). From then on, if every destroy is either of a copy,
+justified by a verified lower copy (stale views allowed), or a clean-up by a device that protects
+this manifest, each of its addresses keeps a verified message. -/
+theorem committed_chunks_stay (caddr : C → A) (cid : C → ℕ) (verified : C → Prop)
+    {ever : Finset C} {p : W}
+    (hcommit : ∀ a ∈ addrs p, ∃ c ∈ ever, verified c ∧ caddr c = a)
+    (destroyed : C → Prop)
+    (hd : ∀ v, destroyed v → (∃ j ∈ ever, justified caddr cid verified v j) ∨ caddr v ∉ addrs p) :
+    ∀ a ∈ addrs p, ∃ c ∈ ever, verified c ∧ caddr c = a ∧ ¬ destroyed c := by
+  intro a ha
+  let cands := ever.filter (fun c => verified c ∧ caddr c = a)
+  have hne : cands.Nonempty := by
+    obtain ⟨c, hc, hv, hca⟩ := hcommit a ha
+    exact ⟨c, Finset.mem_filter.2 ⟨hc, hv, hca⟩⟩
+  obtain ⟨c, hc, hmin⟩ := cands.exists_min_image cid hne
+  obtain ⟨hce, hcv, hca⟩ := Finset.mem_filter.1 hc
+  refine ⟨c, hce, hcv, hca, fun hdc => ?_⟩
+  rcases hd c hdc with ⟨j, hj, hjv, hja, hjlt⟩ | hout
+  · exact absurd (hmin j (Finset.mem_filter.2 ⟨hj, hjv, hja.trans hca⟩)) (not_le.2 hjlt)
+  · exact hout (hca ▸ ha)
+
+end Pending
 
 end Tandem.Files
