@@ -16,17 +16,16 @@ that cannot know what a chunk is needed for collects nothing. A third found thre
 a good local file, and a refused binary append falls back to text. A fourth found that the guard for
 unknown manifest versions missed manifests protected only by the feed rule (section 7).
 
-## What this is for, and how slow it is
+## What this is for, and what it costs
 
-**This is a slow link for a narrow purpose.** Use it when files should be shared among the devices
-of a hub and never leave that hub's mailbox: a device appends encrypted chunks to the mail server
-over IMAP on TLS, and the other devices fetch them the same way. Nothing is ever mailed. No SMTP,
-no second mail server and no other service sees the bytes, and the one server that stores them
-holds only ciphertext. That is the whole reason to do it this way.
+**Blobs let Tandem share encrypted files through the hub's existing mailbox and credentials.**
+They suit documents, photos and occasional attachments, without requiring another storage service.
+The trade-off is provider-dependent speed, storage overhead and transfer limits. Large libraries
+and frequent large-file updates can become impractical.
 
-It is not a file service. A mailbox is built for messages of a few megabytes, it charges a round
-trip for each one, and providers limit how fast and how much an account may move. If speed or
-volume matters more than keeping the files inside the mailbox, use something built for files.
+The mailbox is the files' only remote storage. Devices append encrypted chunks over IMAP on TLS
+and fetch them the same way; they decrypt the content locally. Nothing is mailed through SMTP,
+and the mail provider stores only ciphertext.
 
 Measured on 2026-11-15 from one machine on one line, with 1 MiB chunks, in MiB of file content per
 second. Other lines and other days will differ, and so did runs on that day, by up to a factor of
