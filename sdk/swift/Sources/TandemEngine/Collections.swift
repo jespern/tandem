@@ -82,6 +82,9 @@ struct CollectionState: Sendable {
 
 extension Device {
     static let meta = Tandem.namedID(Bytes("_meta".utf8))
+    /// A list's `_meta` record (§7.3): its name and the app's list properties. Only the owner writes it, with
+    /// `write(list:record:_:)`; anyone reads it with `item(list:id:)`.
+    public static var metaRecord: Bytes { meta }
 
     // MARK: Creating a list (§7.1)
 
@@ -106,11 +109,14 @@ extension Device {
             try store.putWrite(id: gid, scope: cid, record: Roster.record, epoch: gid, payload: try recordPayload(record: Roster.record, writes: [genesis]))
         }
         // The key goes into home first: that's how this participant's other devices find the list (§6.2).
+        // Offline, everything stays saved and the next sync's healing publishes it (§12.2): the list exists
+        // from here on, so failing now would leave an orphan the caller can't name.
         let membership = "membership:" + B64u.encode(cid)
-        try await setHome(membership, field: "owner", value: me.participant)
-        try await setHome(membership, field: "role", value: Bytes("owner".utf8))
-        try await addHome(membership, field: "keys", element: Self.keyElement(epoch: gid, key: key))
-        try await publish(cid: cid, epoch: gid, record: Roster.record, writes: [genesis])
+        try await writeHome(membership, field: "owner", op: .assign, value: me.participant, tolerateOffline: true)
+        try await writeHome(membership, field: "role", op: .assign, value: Bytes("owner".utf8), tolerateOffline: true)
+        try await writeHome(membership, field: "keys", op: .add, element: Self.keyElement(epoch: gid, key: key), tolerateOffline: true)
+        do { try await publish(cid: cid, epoch: gid, record: Roster.record, writes: [genesis]) }
+        catch { changed(.syncFailed("\(error)")); flushEvents() }
         try await setField(list: cid, record: Self.meta, field: "name", value: Bytes(name.utf8))
         return cid
     }
@@ -124,6 +130,23 @@ extension Device {
 
     /// A new random record ID (§7.3).
     public nonisolated func newRecordID() -> Bytes { Self.random(16) }
+
+    /// Several changes to one record, signed in one call and published as one message (§10.7): what an app
+    /// writes when it saves an item with several fields. Offline, they stay saved and the next sync sends them.
+    public func write(list cid: Bytes, record: Bytes, _ changes: [ItemWriter.Change]) async throws {
+        guard !changes.isEmpty else { return }
+        if changes.contains(where: { if case .delete = $0 { true } else { false } }) {
+            guard record != Self.meta, record != Roster.record else { throw TandemError.invalid("device: a named record is never deleted") }
+        }
+        try await writeRecord(cid, record: record, changes.map { change in
+            switch change {
+            case let .set(f, v): (Bytes(f.utf8), .assign, v, nil)
+            case let .add(f, e): (Bytes(f.utf8), .add, [], e)
+            case let .remove(f, e): (Bytes(f.utf8), .remove, [], e)
+            case .delete: ([], .delete, [], nil)
+            }
+        })
+    }
 
     /// Set a field of a record in a list, as this device, in the list's current epoch.
     public func setField(list cid: Bytes, record: Bytes, field: String, value: Bytes) async throws {

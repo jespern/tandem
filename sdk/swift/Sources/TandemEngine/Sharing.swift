@@ -187,11 +187,15 @@ extension Device {
         guard let me, let o = validOffers(cid, me: me).first(where: { answer(to: $0) == nil }), let c = collections[cid], let owner = c.owner,
               case let .id(at)? = o.grant.fields["at"], let member = c.statements[at]?.statement.members.first(where: { $0.uid == me.participant })
         else { throw TandemError.invalid("accept: no valid offer for that list") }
+        // All four go into home even if the hub can't be reached: an answer recorded without the owner and key would
+        // close the offer and never follow the list. Healing publishes them later (§12.2).
         let membership = "membership:" + B64u.encode(cid)
-        try await addHome(membership, field: "answers", element: o.admission + [UInt8(ascii: "a")])
-        try await setHome(membership, field: "owner", value: owner)
-        try await setHome(membership, field: "role", value: Bytes(member.role.rawValue.utf8))
-        try await addHome(membership, field: "keys", element: Self.keyElement(epoch: o.epoch, key: o.key))
-        try await sendAnswer(cid, admission: o.admission, answer: UInt8(ascii: "a"), me: me)
+        try await writeHome(membership, field: "answers", op: .add, element: o.admission + [UInt8(ascii: "a")], tolerateOffline: true)
+        try await writeHome(membership, field: "owner", op: .assign, value: owner, tolerateOffline: true)
+        try await writeHome(membership, field: "role", op: .assign, value: Bytes(member.role.rawValue.utf8), tolerateOffline: true)
+        try await writeHome(membership, field: "keys", op: .add, element: Self.keyElement(epoch: o.epoch, key: o.key), tolerateOffline: true)
+        // A lost answer only leaves the owner seeing "pending"; the list works either way.
+        do { try await sendAnswer(cid, admission: o.admission, answer: UInt8(ascii: "a"), me: me) }
+        catch { changed(.syncFailed("\(error)")); flushEvents() }
     }
 }

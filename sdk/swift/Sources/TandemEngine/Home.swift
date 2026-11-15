@@ -299,7 +299,10 @@ extension Device {
     }
 
     /// Sign one home write on `name` and publish it in the current home epoch.
-    func writeHome(_ name: String, field: String, op: Op, value: Bytes = [], element: Bytes? = nil) async throws {
+    /// `tolerateOffline`: a publish that fails is reported as `.syncFailed` and left to the next sync's healing
+    /// (§12.2) instead of thrown, for callers that must not stop halfway (creating a list, accepting one).
+    func writeHome(_ name: String, field: String, op: Op, value: Bytes = [], element: Bytes? = nil,
+                   tolerateOffline: Bool = false) async throws {
         try takeExternalChanges()
         // A revocation not yet reflected in home: rekey before writing, so nothing new goes into the exposed epoch.
         if let me, homeNeedsRotation(me), registry.activity(me.certificate).isValid { try await rotateHome() }
@@ -317,7 +320,13 @@ extension Device {
         changed(.home)
         if name.hasPrefix("membership:") { changed(.lists) }
         flushEvents()
-        try await publishHome(record, epoch: epoch, writes: home[record]?.kept.map(\.write) ?? writes)
+        let kept = home[record]?.kept.map(\.write) ?? writes
+        if tolerateOffline {
+            do { try await publishHome(record, epoch: epoch, writes: kept) }
+            catch { changed(.syncFailed("\(error)")); flushEvents() }
+        } else {
+            try await publishHome(record, epoch: epoch, writes: kept)
+        }
     }
 
     /// One home record's state, in a home epoch's channel (§10.7).
