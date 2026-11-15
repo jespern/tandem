@@ -5,6 +5,7 @@
     probes/blob_probe.py --fastmail
     probes/blob_probe.py imap.fastmail.com alice@fastmail.com --keychain tandem-probe
     probes/blob_probe.py imap.gmail.com alice@gmail.com --keychain tandem-probe
+    probes/blob_probe.py --fastmail --parallel
 
 For chunks of 256 KiB, 1 MiB and 4 MiB it appends and fetches them back in the
 text form (base64, DESIGN.md §10.4) and, where the server advertises BINARY
@@ -13,6 +14,11 @@ allows, and in one MULTIAPPEND where offered. Every chunk is compared byte for
 byte with what was sent. It also reads the quota before and after, scans the
 headers a chunk index needs, and times a small append reaching an idling
 connection while chunks are being uploaded on another.
+
+--parallel runs a different measurement instead: 1 MiB chunks spread over 1, 2,
+4 and 8 connections at once (or the numbers given), appended one at a time and
+in batches where the server can batch, then fetched the same two ways. It
+uploads about 130 MB, or about 90 MB where the server cannot batch (Gmail).
 
 --stalwart starts the disposable Stalwart the tests use (needs Docker) and
 removes it afterwards. --fastmail reads the app password from
@@ -263,6 +269,98 @@ def cell(c, folder, run, counter, size, count, binary, mode):
     return out, uids
 
 
+def append_batch(c, prefix, messages, binary):
+    """Append a batch the best way the server offers (BLOBS.md section 4.3). Returns the UIDs."""
+    if 'MULTIAPPEND' in c.caps:
+        parts = [prefix]
+        for i, m in enumerate(messages):
+            parts += [b' (\\Seen) '] * (i > 0) + [(m, binary)]
+        return appended_uids(c.cmd(parts, nonsync='LITERAL+' in c.caps)[0])
+    if 'LITERAL+' in c.caps:
+        return [u for status, _ in c.pipeline([[prefix, (m, binary)] for m in messages]) for u in appended_uids(status)]
+    return [u for m in messages for u in appended_uids(c.cmd([prefix, (m, binary)])[0])]
+
+
+def parallel(connect_raw, folder, run, counter, binary, counts, total=16, size=1024 * KIB, batch=4):
+    """`total` chunks spread over k connections at once, for each k: appended one at a
+    time and in batches of `batch`, then fetched one at a time and one command a connection."""
+    item = b'BINARY.PEEK[1]' if binary else b'BODY.PEEK[TEXT]'
+    prefix = b'APPEND ' + astring(folder) + b' (\\Seen) '
+    out = []
+    for k in counts:
+        conns, errors = [], []
+        try:
+            for _ in range(k):
+                conns.append(connect_raw())
+                conns[-1].cmd([b'SELECT ' + astring(folder)])
+        except Exception as e:
+            out.append({'connections': k, 'error': f'{len(conns)} opened, then ' + type(e).__name__ + ': ' + str(e)[:160]})
+            for c in conns:
+                c.close()
+            break
+        shares = [list(range(i, total, k)) for i in range(k)]
+
+        def run_all(work):
+            """Start work(connection, share) on every connection at the same moment; seconds until all are done."""
+            gate = threading.Barrier(k + 1)
+
+            def one(c, share):
+                gate.wait()
+                try:
+                    work(c, share)
+                except Exception as e:
+                    errors.append(type(e).__name__ + ': ' + str(e)[:160])
+            threads = [threading.Thread(target=one, args=(c, share)) for c, share in zip(conns, shares)]
+            for t in threads:
+                t.start()
+            gate.wait()
+            start = time.monotonic()
+            for t in threads:
+                t.join()
+            return time.monotonic() - start
+
+        # Batching needs MULTIAPPEND or LITERAL+; without them it would repeat the first mode.
+        for mode in ('one at a time',) + ('batched',) * bool({'MULTIAPPEND', 'LITERAL+'} & conns[0].caps):
+            envelopes = [chunk(size) for _ in range(total)]
+            messages = [message(run, next(counter), e, binary) for e in envelopes]
+            uids, got = [None] * total, {}
+
+            def up(c, share):
+                if mode == 'one at a time':
+                    for i in share:
+                        uids[i] = appended_uids(c.cmd([prefix, (messages[i], binary)])[0])[0]
+                else:
+                    for j in range(0, len(share), batch):
+                        group = share[j:j + batch]
+                        for i, uid in zip(group, append_batch(c, prefix, [messages[i] for i in group], binary)):
+                            uids[i] = uid
+
+            def down(c, share):
+                c.cmd([b'NOOP'])    # learn of the others' appends
+                if mode == 'one at a time':
+                    for i in share:
+                        got.update(literals(c.cmd([b'UID FETCH %d (' % uids[i] + item + b')'])[1]))
+                else:
+                    got.update(literals(c.cmd([b'UID FETCH ' + b','.join(b'%d' % uids[i] for i in share) + b' (' + item + b')'])[1]))
+
+            mib = total * size / 2**20
+            row = {'connections': k, 'mode': mode, 'form': 'binary' if binary else 'text', 'chunk': size, 'count': total}
+            seconds = run_all(up)
+            row['append_seconds'], row['append_mib_per_second'] = round(seconds, 3), round(mib / max(seconds, 1e-6), 2)
+            if not errors and all(uids):
+                seconds = run_all(down)
+                row['fetch_seconds'], row['fetch_mib_per_second'] = round(seconds, 3), round(mib / max(seconds, 1e-6), 2)
+                row['intact'] = all(decoded(got.get(uid, b''), binary) == e for uid, e in zip(uids, envelopes))
+            if errors:
+                row['errors'], errors = errors[:4], []
+            out.append(row)
+            log(f"{k} connections, {mode:13}: " + (str(row['errors']) if 'errors' in row else
+                f"append {row['append_mib_per_second']:6.2f} MiB/s, fetch {row['fetch_mib_per_second']:6.2f} MiB/s, intact {row['intact']}"))
+        for c in conns:
+            c.close()
+    return out
+
+
 def other_fetches(c, folder, uid, envelope, binary):
     """What the server hands back for one chunk through each way of asking."""
     c.cmd([b'SELECT ' + astring(folder)])
@@ -341,7 +439,7 @@ def push_during_upload(connect_raw, connect_lib, feed, blobs, run, counter, samp
     return out
 
 
-def probe(host, port, user, password, verify=True, name=None, samples=3, wait=60):
+def probe(host, port, user, password, verify=True, name=None, samples=3, wait=60, counts=None):
     run = os.urandom(4).hex()
     feed, blobs = f'Tandem-probe-{run}', f'Tandem-probe-{run}-blobs'
     r = {'host': name or host, 'date': time.strftime('%Y-%m-%d'), 'run': run, 'probe': 'blobs'}
@@ -370,6 +468,11 @@ def probe(host, port, user, password, verify=True, name=None, samples=3, wait=60
     r['cells'], r['quota'] = [], {'start': quota(c, blobs)}
     modes = ['one at a time'] + ['pipelined'] * ('LITERAL+' in c.caps) + ['MULTIAPPEND'] * ('MULTIAPPEND' in c.caps)
     try:
+        if counts:
+            r['probe'] = 'blobs-parallel'
+            del r['cells'], r['quota']
+            r['parallel'] = parallel(connect_raw, blobs, run, counter, 'BINARY' in c.caps, counts)
+            return r
         for binary in (False, True):
             if binary and 'BINARY' not in c.caps:
                 continue
@@ -430,6 +533,8 @@ def main():
     p.add_argument('--stalwart', action='store_true', help='run against a disposable Stalwart in Docker')
     p.add_argument('--fastmail', action='store_true', help='run against Fastmail with ~/.config/tandem credentials')
     p.add_argument('--samples', type=int, default=3, help='appends timed for live updates (default 3)')
+    p.add_argument('--parallel', nargs='?', const='1,2,4,8', metavar='COUNTS', type=lambda v: [int(x) for x in v.split(',')],
+                   help='measure these numbers of connections at once instead (default 1,2,4,8)')
     p.add_argument('--out', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results'))
     args = p.parse_args()
     if not hasattr(imaplib.IMAP4, 'idle'):
@@ -439,7 +544,7 @@ def main():
         from stalwart import IMAGE, Stalwart
         with Stalwart() as server:
             report = probe('127.0.0.1', server.ports[993], server.username, server.password, verify=False,
-                           name='stalwart-' + IMAGE.split(':')[1].split('@')[0])
+                           name='stalwart-' + IMAGE.split(':')[1].split('@')[0], counts=args.parallel)
     elif args.fastmail:
         config = os.path.expanduser('~/.config/tandem')
         token = open(os.path.join(config, 'fastmail.json')).read().strip()
@@ -447,7 +552,7 @@ def main():
         request = urllib.request.Request('https://api.fastmail.com/jmap/session', headers={'Authorization': 'Bearer ' + token})
         with urllib.request.urlopen(request, timeout=30) as answer:
             user = json.load(answer)['username']
-        report = probe('imap.fastmail.com', 993, user, password, samples=args.samples)
+        report = probe('imap.fastmail.com', 993, user, password, samples=args.samples, counts=args.parallel)
     else:
         if not (args.host and args.user):
             p.error('give a host and a user, --stalwart or --fastmail')
@@ -459,9 +564,9 @@ def main():
             password = found.stdout.rstrip('\n')
         else:
             password = getpass.getpass(f'Password for {args.user} at {args.host}: ')
-        report = probe(args.host, args.port, args.user, password, samples=args.samples)
+        report = probe(args.host, args.port, args.user, password, samples=args.samples, counts=args.parallel)
     os.makedirs(args.out, exist_ok=True)
-    path = os.path.join(args.out, f"{report['host']}-blobs-{report['date']}-{report['run']}.json")
+    path = os.path.join(args.out, f"{report['host']}-{report['probe']}-{report['date']}-{report['run']}.json")
     with open(path, 'w') as f:
         json.dump(report, f, indent=2, sort_keys=True)
         f.write('\n')
