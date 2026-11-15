@@ -2,10 +2,10 @@
 
 `@tandem/protocol/browser` runs without Node built-ins or a Tandem backend. It
 talks directly to a JMAP mail server. This is the primitive layer: Liszto's UI
-still needs to be built on it. The browser controller supports pairing in both directions, hub invitations,
+is built separately in Liszto's `Web/` directory. The browser controller supports founding a hub, pairing in both directions, hub invitations,
 verified home/collection reads, durable field/set edits, owner sharing, key
 rotation and administration. Key-envelope and record healing survive reloads.
-Browser-first hub founding/join/recovery and Liszto’s UI remain acceptance gates.
+Browser invitation acceptance and creator recovery remain acceptance gates.
 
 ## Runtime and storage
 
@@ -113,6 +113,36 @@ only canonical bytes matching the signed commitment. Defaults: 4,096 parts,
 `inventoryPayloads` uses the native engine's 48 KiB fragment size by default.
 
 ## Device operations
+
+`BrowserDevice.found(mailbox, label, password, journal, keychain, options)` creates
+the signed root, first admission, snapshot, private home, recovery box and password
+capsule. `mailbox` is a credential-free locator; browser creation requires only
+JMAP authentication. The management seed is used to seal/sign the capsule and is
+not retained in enrollment. Password stretching retains the fixed 1 GiB profile.
+Prepared exact envelopes are wrapped in a separate keychain setup slot **before**
+any outbox commit/export. `resumeFounding` recovers that preparation even if the
+app never saved the returned `hub` ID. `setupID` distinguishes selected folders.
+Retries reuse the authority and exact persisted MIME, rather than generating a
+second root. Publication is a durable, mailbox-confirmed `founding` action.
+
+Founding is an explicit operation; a successful empty-folder check never grants
+permission to replace another root. JMAP's `hasMessages` supports the app's one-off
+setup check, and `mailboxDescriptor` exposes credential-free session identity.
+The app refuses an occupied folder for fresh setup, while interrupted setup
+resumes its existing root. Concurrent independent authorities in other browser
+profiles cannot be prevented by a check against an untrusted mail server.
+
+`ensureList(name, {record, field})` atomically creates a collection and an element
+in its private home reference set. Concurrent callers use the lowest existing
+16-byte reference. Liszto uses this to create Inbox/Later without orphan collections
+or duplicates when a page closes between list creation and saving its reference.
+
+The optional third argument to `startPairing(label, validForMs, mail)` supplies
+the native device's IMAP connection details for that one link. It does not change
+the browser's JMAP connection. Liszto asks for the IMAP app password **when adding
+a native device**, not when creating the hub. Existing paired browsers can reuse
+their link's native details. Native IMAP remains the default; no JMAP token is
+substituted into a legacy IMAP pairing link.
 
 `BrowserDevice.pair(link, label, journal, keychain)` remembers enrollment and
 journals the exact claim before export. `resume(hub, journal, keychain)` restores
@@ -248,7 +278,7 @@ home-key confirmation. It additionally verifies native/browser edits both ways,
 controller enrollment/reload, offline edit recovery and revocation between replay
 and commit. Native clients also read browser-created lists and acceptance answers;
 reader edits are refused, and browser writer edits survive native list rekeys.
-All 19 browser scenarios passed locally, including native collection rotation,
+The browser scenarios include native collection rotation,
 member removal, home cutoff, a late edit across an interrupted rotation, key
 envelope repair after reload, and browser administration accepted by Swift. Only that fixture accepts self-signed TLS;
 production SDK checks stay enabled.
@@ -256,13 +286,17 @@ It explicitly enables browser CORS and publishes real loopback URLs, with no pro
 
 ## Remaining acceptance gates
 
-1. Browser-first hub founding, joining an invitation and creator recovery still
-   need controller entry points. The current onboarding path pairs with an
-   existing device; browsers can then stage further pairings and invitations.
+1. Joining an invitation and creator recovery still need controller entry points.
+   Browsers can now create a hub or pair with an existing device, then stage
+   further pairings and invitations.
    Explicit owner-note finish/discard, broader restore/rescue UI and the full
-   native crash corpus remain parity work. No browser workspace is shipped here.
-2. Shared Liszto field-value vectors against its native adapter, then the browser
-   store/operations layer and workspace with the same completion and keyboard rules.
+   native crash corpus remain parity work. The Liszto browser workspace is in its
+   own repository; it is not shipped as part of this protocol SDK.
+2. Broader native/browser Liszto feature parity. Its Web tests compare actual Swift
+   ordering/field encodings, and verify UI edits and device setup both ways against
+   the native engine. Hub founding tests inject a journal failure before commit;
+   Liszto's UI test loses an accepted append response, reloads the creator, then
+   pairs/approves a native device over IMAP and opens the browser's capsule in Swift.
 3. Fastmail passes direct Chromium CORS/push/replay/deletion and byte-exact IMAP
    interchange. A live run measured 265 ms browser push, 587 ms IMAP→browser and
    **60.6 s JMAP→IMAP IDLE**. Jesper accepted this delay for mixed mode and kept native IMAP as the default. A browser using JMAP does not make Fastmail’s IMAP push immediate.

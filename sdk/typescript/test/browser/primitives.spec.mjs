@@ -6,6 +6,31 @@ import {createServer} from 'node:http';
 import {readFile, writeFile, readdir} from 'node:fs/promises';
 import * as node from '../../dist/index.js';
 
+test('browser founder survives a crash before journal commit, keeps exact setup and creates named lists atomically',async({page})=>{
+  test.setTimeout(120_000);
+  const result=await page.evaluate(async()=>{
+    const t=window.t,mailbox={host:'imap.fastmail.com',port:993,user:'founder@example.org'},password='A browser founding password';
+    const keys=await t.BrowserKeychain.open('founder-crash-keys'),journal=await t.BrowserJournal.open('founder-crash-journal'),original=journal.commit.bind(journal);
+    journal.commit=async()=>{throw Error('simulated crash before journal commit');};
+    let failed=false;try{await t.BrowserDevice.found(mailbox,'Browser creator',password,journal,keys,{setupID:'Test'});}catch(error){if(!error.message.includes('simulated crash'))throw error;failed=true;}
+    if(!failed)throw Error('crash injection did not fire');journal.commit=original;
+    const slot='founding:'+t.b64u(t.sha(new TextEncoder().encode(JSON.stringify([mailbox.host,mailbox.port,mailbox.user,'Test'])))),saved=await keys.get(slot),prepared=JSON.parse(new TextDecoder().decode(saved));
+    if(!saved||prepared.managementSeed||prepared.password||new TextDecoder().decode(saved).includes(password))throw Error('founding secrets persisted incorrectly');
+    let device=await t.BrowserDevice.resumeFounding(mailbox,journal,keys,{setupID:'Test'});if(!device?.state?.homeReady)throw Error('founder did not resume');
+    const hub=t.b64u(device.hub),initial=await journal.allPending(hub),ids=new Set(initial.map(m=>m.id));
+    for(const message of prepared.founding.messages)if(!ids.has(t.b64u(t.sha(t.unb64u(message.body)))))throw Error('prepared envelope changed');
+    const [first,second]=await Promise.all([device.ensureList('Inbox',{record:'settings:liszto',field:'inbox'}),device.ensureList('Inbox',{record:'settings:liszto',field:'inbox'})]);
+    if(t.b64u(first)!==t.b64u(second)||device.state.lists().length!==1)throw Error('duplicate default collection');
+    const seed=await device.unlock(password);seed.fill(0);
+    const pending=await journal.allPending(hub),wires=pending.map(m=>[m.id,t.b64u(m.wire)]).sort();await device.close();
+    device=await t.BrowserDevice.found(mailbox,'Different retry label','not used after preparation',journal,keys,{setupID:'Test'});
+    const retried=(await journal.allPending(hub)).map(m=>[m.id,t.b64u(m.wire)]).sort();
+    if(t.b64u(device.hub)!==hub||JSON.stringify(wires)!==JSON.stringify(retried))throw Error('retry replaced authority or exact MIME');
+    await device.close();keys.close();journal.close();return{failed,hub,lists:1};
+  });
+  expect(result.failed).toBe(true);expect(result.lists).toBe(1);
+});
+
 let server, origin;
 test.beforeAll(async () => {
   server = createServer(async (req, res) => {

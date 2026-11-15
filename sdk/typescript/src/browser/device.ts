@@ -1,13 +1,14 @@
 import {Buffer} from 'buffer';
-import {b64u,unb64u,bytes,sha} from '../crypto.js';
+import {b64u,unb64u,bytes,sha,randomBytes,directoryTag,directoryKey,namedID,seal} from '../crypto.js';
 import {parseJSON} from '../json.js';
-import {objectID} from '../control.js';
+import {objectID,directoryScope,type Mailbox} from '../control.js';
+import {prepareFounding,foundingCapsule} from '../founding.js';
 import {DeviceState,DeviceHoldingLimit,type DeviceStateOptions,type FieldEdit} from '../device-state.js';
 import {type PairingLink,type PairingProposal,type PairingKeys,parsePairingLink,pairingLinkJSON,pairingRegistry,proposePairing,releasePairing,pendingPairingJSON,parsePendingPairing} from '../pairing.js';
 import type {Registry} from '../registry.js';
 import type {Message} from '../session.js';
 import {BrowserJournal,type LocalPlan,type LocalTransaction} from './journal.js';
-import type {Dot} from '../core.js';
+import {signWrite,recordPayload,type Dot} from '../core.js';
 import {deliveryKey,type OutgoingMessage,type PreparedOperation,type MailboxPresence} from '../operation.js';
 import {newAction,sealAction,openAction,messageID,type DeviceAction,type ActionPhase} from './actions.js';
 import {BrowserKeychain} from './keychain.js';
@@ -15,7 +16,8 @@ import {BrowserReplica,type PreparedStore,untilAbort} from './replica.js';
 import {Invalidation} from './events.js';
 import {openCapsule,sealCapsule,type CapsuleOptions} from './capsule.js';
 
-interface Enrollment {link:PairingLink;label:string;proposal?:PairingProposal;complete?:{epoch:Uint8Array;key:Uint8Array;certificate:Uint8Array}}
+interface Enrollment {link:PairingLink;label:string;proposal?:PairingProposal;complete?:{epoch:Uint8Array;key:Uint8Array;certificate:Uint8Array};founding?:{auth:Uint8Array;messages:OutgoingMessage[]}}
+export interface BrowserFoundingOptions extends CapsuleOptions {setupID?:string;device?:DeviceStateOptions}
 export type BrowserDeviceStatus='material'|'approval'|'home'|'ready'|'revoked';
 export interface BrowserDeviceUpdate {status:BrowserDeviceStatus;revision:number}
 export class StaleDeviceState extends Error {constructor(){super('new durable events arrived; replay them before signing');}}
@@ -24,7 +26,8 @@ const raw=(value:unknown,n?:number)=>{if(typeof value!=='string')throw new Error
 function saveEnrollment(record:Enrollment):Uint8Array {
   return encode({v:1,link:parseJSON(pairingLinkJSON(record.link)),label:record.label,
     ...(record.proposal?{proposal:{pending:parseJSON(pendingPairingJSON(record.proposal.pending)),messages:record.proposal.messages.map(m=>({channel:m.channel,body:b64u(m.body)}))}}:{}),
-    ...(record.complete?{complete:{epoch:b64u(record.complete.epoch),key:b64u(record.complete.key),certificate:b64u(record.complete.certificate)}}:{})});
+    ...(record.complete?{complete:{epoch:b64u(record.complete.epoch),key:b64u(record.complete.key),certificate:b64u(record.complete.certificate)}}:{}),
+    ...(record.founding?{founding:{auth:b64u(record.founding.auth),messages:record.founding.messages.map(m=>({...m,body:b64u(m.body)}))}}:{})});
 }
 function loadEnrollment(data:Uint8Array):Enrollment {
   const j=parseJSON(data) as Record<string,any>;if(j.v!==1||typeof j.label!=='string')throw new Error('invalid browser enrollment');
@@ -32,14 +35,19 @@ function loadEnrollment(data:Uint8Array):Enrollment {
   if(j.proposal){const pending=parsePendingPairing(encode(j.proposal.pending));if(!Array.isArray(j.proposal.messages))throw new Error('invalid pending messages');
     record.proposal={pending,messages:j.proposal.messages.map((m:Record<string,unknown>)=>{if(typeof m.channel!=='string')throw new Error('invalid pending channel');const body=raw(m.body);return{id:b64u(sha(body)),channel:m.channel,body};})};}
   if(j.complete)record.complete={epoch:raw(j.complete.epoch,32),key:raw(j.complete.key,32),certificate:raw(j.complete.certificate,32)};
+  if(j.founding){if(!record.complete||!Array.isArray(j.founding.messages)||!j.founding.messages.length)throw new Error('invalid founding enrollment');record.founding={auth:raw(j.founding.auth,32),messages:j.founding.messages.map((m:Record<string,any>)=>{if(typeof m.channel!=='string')throw new Error('invalid founding channel');return{channel:m.channel,body:raw(m.body),...(m.guard?{guard:m.guard}:{})};})};}
   return record;
 }
-interface DeviceLocalState {v:2;pairingRequest?:string;processed:string[];unshared:Record<string,string>}
+interface DeviceLocalState {v:2;pairingRequest?:string;founding?:string;processed:string[];unshared:Record<string,string>}
 function localState(data:Uint8Array|undefined):DeviceLocalState{
   if(!data)return{v:2,processed:[],unshared:{}};
   const text=Buffer.from(data).toString();if(!text.startsWith('{'))return{v:2,pairingRequest:text,processed:[],unshared:{}};
   const j=parseJSON(data) as Record<string,any>;if(j.v!==2||!Array.isArray(j.processed)||j.processed.some((id:unknown)=>typeof id!=='string')||!j.unshared||typeof j.unshared!=='object'||Object.values(j.unshared).some(value=>typeof value!=='string'))throw new Error('invalid device local state');
-  return{v:2,...(typeof j.pairingRequest==='string'?{pairingRequest:j.pairingRequest}:{}),processed:j.processed,unshared:{...j.unshared}};
+  return{v:2,...(typeof j.pairingRequest==='string'?{pairingRequest:j.pairingRequest}:{}),...(typeof j.founding==='string'?{founding:j.founding}:{}),processed:j.processed,unshared:{...j.unshared}};
+}
+function foundingSlot(mailbox:Mailbox,setupID='default'):string{
+  // Never include a token/password. The selected folder belongs in setupID.
+  return `founding:${b64u(sha(encode([mailbox.host,mailbox.port,mailbox.user,setupID])))}`;
 }
 /** Browser device operations over the durable push pump. Enrollment secrets are
  * wrapped in the separate keychain; exact claims and edits commit before export.
@@ -55,6 +63,37 @@ export class BrowserDevice {
     this.#journal=journal;this.#keychain=keychain;this.#keys=keys;this.#enrollment=enrollment;this.#options=options;this.#hub=b64u(enrollment.link.hub);this.#slot=`device:${this.#hub}`;
     this.#lock=`tandem:device:${JSON.stringify([journal.name,this.#hub])}`;this.#replica=new BrowserReplica(journal,this.#hub);
   }
+  /** Explicitly create a new authority. The caller chooses/checks its mailbox;
+   * an empty or unreachable mailbox is never an invitation to replace a root.
+   * Durable preparation precedes all export. Retrying the same setup reuses it. */
+  static async found(mailbox:Mailbox,label:string,password:string,journal:BrowserJournal,keychain:BrowserKeychain,options:BrowserFoundingOptions={}):Promise<BrowserDevice>{
+    const slot=foundingSlot(mailbox,options.setupID),keys=await keychain.deviceKeys();
+    const saved=await navigator.locks.request(`tandem:${slot}`,{...(options.signal?{signal:options.signal}:{})},async()=>{
+      const existing=await keychain.get(slot);if(existing)return existing;
+      options.signal?.throwIfAborted();const f=prepareFounding(mailbox,keys,label);
+      try{
+        const sealed=await sealCapsule(password,f.pin.hub,f.managementSeed,options);options.signal?.throwIfAborted();
+        const record:Enrollment={label,link:{hub:f.pin.hub,genesis:f.pin.genesis,directoryKey:f.directoryKey,participant:f.participant,
+          secret:randomBytes(32),token:randomBytes(16),mail:{...mailbox,pass:''}},
+          complete:{epoch:objectID(f.homeEpoch.kind,f.homeEpoch.fields),key:f.homeKey,certificate:objectID(f.certificate.kind,f.certificate.fields)},
+          founding:{auth:objectID(f.snapshot.kind,f.snapshot.fields),messages:[...f.messages,foundingCapsule(f,sealed)]}};
+        const encoded=saveEnrollment(record);await keychain.save(slot,encoded);return encoded;
+      }finally{f.managementSeed.fill(0);}
+    });
+    return this.#resumeFounding(saved,journal,keychain,options.device??{});
+  }
+  /** Recover after preparation, including a crash before the app saved the hub ID.
+   * No hub password or management seed is retained in this local setup record. */
+  static async resumeFounding(mailbox:Mailbox,journal:BrowserJournal,keychain:BrowserKeychain,options:Pick<BrowserFoundingOptions,'setupID'|'device'>={}):Promise<BrowserDevice|undefined>{
+    const saved=await keychain.get(foundingSlot(mailbox,options.setupID));return saved?this.#resumeFounding(saved,journal,keychain,options.device??{}):undefined;
+  }
+  static async #resumeFounding(saved:Uint8Array,journal:BrowserJournal,keychain:BrowserKeychain,options:DeviceStateOptions):Promise<BrowserDevice>{
+    const record=loadEnrollment(saved);if(!record.founding)throw new Error('not a founding enrollment');
+    const hub=b64u(record.link.hub),slot=`device:${hub}`,lock=`tandem:device:${JSON.stringify([journal.name,hub])}`;
+    await navigator.locks.request(lock,async()=>{if(!await keychain.get(slot))await keychain.save(slot,saved);});
+    return this.resume(record.link.hub,journal,keychain,options);
+  }
+  get hub():Uint8Array{return bytes(this.#enrollment.link.hub);}
   static async pair(input:PairingLink|string|Uint8Array,label:string,journal:BrowserJournal,keychain:BrowserKeychain,options:DeviceStateOptions={}):Promise<BrowserDevice>{
     const link=typeof input==='string'||input instanceof Uint8Array?parsePairingLink(input):parsePairingLink(pairingLinkJSON(input));
     const keys=await keychain.deviceKeys(),hub=b64u(link.hub),slot=`device:${hub}`,lock=`tandem:device:${JSON.stringify([journal.name,hub])}`;
@@ -75,6 +114,19 @@ export class BrowserDevice {
   async #refresh():Promise<void>{
     if(this.#closed)throw new Error('browser device closed');
     const saved=await this.#keychain.get(this.#slot);if(saved)this.#enrollment=loadEnrollment(saved);
+    const founding=this.#enrollment.founding;
+    if(founding){
+      const installation=await this.#journal.installation();
+      await this.#journal.commit(this.#hub,installation,Date.now(),tx=>{
+        const local=localState(tx.state);if(local.founding===this.#hub)return{messages:[]};
+        const {link,label,complete}=this.#enrollment,scope=directoryScope(link.hub),name=`profile:${b64u(link.participant)}`,profile=namedID(name);
+        const writes=[['_name',name],['name',label]].map(([field,value])=>signWrite({hub:link.hub,scope,record:profile,field:field!,op:1,author:link.participant,
+          certificate:complete!.certificate,authorization:founding.auth,dot:tx.nextDot(),value:Buffer.from(value!),element:null,ref:link.genesis,context:[],base:[],signature:new Uint8Array(64)},this.#keys.signing));
+        const tag=directoryTag(link.directoryKey,link.hub),messages=[...founding.messages,{channel:tag,body:seal(directoryKey(link.directoryKey,link.hub),link.hub,tag,recordPayload(profile,writes)),guard:{type:'control' as const}}];
+        const action=newAction('founding',[{name:'publish-hub',messages}]);local.founding=this.#hub;
+        return{messages,state:encode(local),actions:[{id:action.id,sealed:sealAction(action,this.#actionKey,link.hub)}]};
+      });
+    }
     let rows;do{rows=await this.#journal.readEvents(this.#hub,this.#sequence);const messages=rows.filter(row=>row.kind!=='removed'&&!(row.kind==='queued'&&row.deferred));
       for(const row of rows){if(row.kind==='queued'&&row.guard?.type==='recipient')this.#kept.set(row.id,{channel:row.channel,body:row.body,guard:row.guard});if(!row.remoteId)continue;const key=JSON.stringify([row.channel,row.id]);
         if(row.kind==='received'){const ids=this.#present.get(key)??new Set<string>();ids.add(row.remoteId);this.#present.set(key,ids);this.#remote.set(row.remoteId,key);}
@@ -230,7 +282,10 @@ export class BrowserDevice {
   async #startOperation(prepare:(state:DeviceState,reserve:()=>Dot)=>PreparedOperation):Promise<string>{
     let id='';await this.#commitPlan((state,reserve,tx)=>{const plan=this.#operationPlan(prepare(state,reserve),tx);id=plan.actions![0]!.id;return plan;});return id;
   }
-  async startPairing(label:string,validForMs=24*3600*1000):Promise<PairingLink>{let link:PairingLink|undefined;await this.#startOperation(state=>{const prepared=state.preparePairing(label,this.#enrollment.link.mail,validForMs);link=prepared.link;return prepared.operation;});return link!;}
+  async startPairing(label:string,validForMs=24*3600*1000,mail?:PairingLink['mail']):Promise<PairingLink>{
+    const captured=mail?parsePairingLink(pairingLinkJSON({...this.#enrollment.link,mail})).mail:this.#enrollment.link.mail;
+    let link:PairingLink|undefined;await this.#startOperation(state=>{const prepared=state.preparePairing(label,captured,validForMs);link=prepared.link;return prepared.operation;});return link!;
+  }
   async invite(label:string,seed:Uint8Array,validForMs=7*24*3600*1000):Promise<string>{let link='';await this.#admin(seed,(state,key)=>{const prepared=state.prepareInvitation(label,this.#enrollment.link.mail,key,validForMs);link=b64u(prepared.link);return prepared.operation;});return link;}
   async cancelPairing(token:Uint8Array):Promise<void>{const captured=bytes(token,16);await this.#commitPlan((state,reserve,tx)=>{const actions:{id:string;sealed:null}[]=[],cancel:string[]=[];let delegation:Uint8Array|undefined;
     for(const [id,sealed]of tx.actions){const action=openAction(id,sealed,this.#actionKey,this.#enrollment.link.hub);if(action.kind==='pairing-start'&&action.details.token===b64u(captured)){delegation=unb64u(action.details.delegation!);actions.push({id,sealed:null});for(const phase of action.phases)cancel.push(...phase.messages.map(messageID));}}
@@ -251,6 +306,12 @@ export class BrowserDevice {
   async writeHome(name:string,edits:readonly FieldEdit[]):Promise<void>{const captured=structuredClone(edits);await this.#edit((state,reserve)=>state.prepareHome(name,captured,reserve));}
   async writeFields(collection:Uint8Array,record:Uint8Array,edits:readonly FieldEdit[]):Promise<void>{const cid=bytes(collection,16),id=bytes(record,16),captured=structuredClone(edits);await this.#edit((state,reserve)=>state.prepareField(cid,id,captured,reserve));}
   async createList(name:string):Promise<Uint8Array>{let collection:Uint8Array|undefined;await this.#edit((state,reserve)=>{const prepared=state.prepareCreateList(name,reserve);collection=prepared.collection;return prepared.messages;});return collection!;}
+  /** Create a collection and its private home reference in one durable commit.
+   * Concurrent callers reuse the lowest existing reference instead of duplicating it. */
+  async ensureList(name:string,home:{record:string;field:string}):Promise<Uint8Array>{let collection:Uint8Array|undefined;await this.#edit((state,reserve)=>{
+    const existing=state.homeRecord(home.record)?.elements(home.field).filter(id=>id.length===16).sort(Buffer.compare)[0];if(existing){collection=existing;return[];}
+    const prepared=state.prepareCreateList(name,reserve);collection=prepared.collection;return[...prepared.messages,...state.prepareHome(home.record,[{field:home.field,op:2,element:collection}],reserve)];
+  });return collection!;}
   async accept(collection:Uint8Array):Promise<void>{const cid=bytes(collection,16);await this.#edit((state,reserve)=>state.prepareAccept(cid,reserve));}
   async close():Promise<void>{if(this.#closed)return;this.#closed=true;this.#abort?.abort();this.#changes.end();await this.#running?.catch(()=>{});}
 }

@@ -35,8 +35,9 @@ bounded buffers and cancellation. They contain no polling loop.
 The four implementations share vectors and check every sender/receiver pairing.
 Swift and Go include durable device engines and IMAP adapters. All four offer
 [optional JMAP push](sdk/JMAP.md), and the [browser controller](sdk/typescript/BROWSER.md)
-adds durable pairing, editing, sharing, key rotation and healing. These remain
-development SDKs; browser-first founding/recovery and Liszto’s UI remain open.
+adds durable hub creation, pairing, editing, sharing, key rotation and healing.
+These remain development SDKs; browser invitation acceptance and creator recovery
+remain open. Liszto's browser workspace lives in its own repository.
 
 ## Not `sorry`
 

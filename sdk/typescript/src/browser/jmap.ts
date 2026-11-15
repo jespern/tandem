@@ -36,7 +36,7 @@ export class JMAPStore implements PushStore {
   readonly #cfg: Required<Pick<JMAPConfig, 'pageSize' | 'maxResponseBytes' | 'maxKnownMessages' | 'maxEventBytes' | 'commandTimeout' | 'retryMin' | 'retryMax'>> & JMAPConfig;
   readonly #origins: Set<string>; readonly #abort = new AbortController(); readonly #wakes = new Invalidation();
   #deleteSize=128;
-  #api = ''; #upload = ''; #events = ''; #account = ''; #folder = ''; #watching = false; #running: Promise<void> | undefined;
+  #api = ''; #upload = ''; #events = ''; #account = ''; #folder = ''; #username=''; #watching = false; #running: Promise<void> | undefined;
   #streamAbort: AbortController | undefined;
   private constructor(cfg: JMAPConfig) {
     this.#cfg = {...cfg, pageSize: cfg.pageSize ?? 128, maxResponseBytes: cfg.maxResponseBytes ?? 16 * 1024 * 1024,
@@ -51,6 +51,15 @@ export class JMAPStore implements PushStore {
   static async open(cfg: JMAPConfig, signal: AbortSignal = new AbortController().signal): Promise<JMAPStore> {
     const store = new JMAPStore(cfg);
     try { await store.#connect(signal); return store; } catch (error) { await store.close(); throw error; }
+  }
+  /** Credential-free identity of the selected JMAP mailbox for a hub's genesis. */
+  get mailboxDescriptor():import('../control.js').Mailbox {
+    if(!this.#username)throw new JMAPError('session has no username');
+    const url=new URL(this.#api);return{host:url.hostname.toLowerCase(),port:Number(url.port||443),user:this.#username};
+  }
+  /** One explicit setup check; never called by the change-feed loop. */
+  async hasMessages(signal:AbortSignal=new AbortController().signal):Promise<boolean>{
+    const result=await this.#call('Email/query',{filter:{inMailbox:this.#folder},limit:1},signal);return strings(result.ids).length>0;
   }
   #url(value: string): string {
     const url = new URL(value);
@@ -87,6 +96,7 @@ export class JMAPStore implements PushStore {
   }
   async #connect(signal: AbortSignal): Promise<void> {
     const session = await this.#json(await this.#fetch(this.#cfg.sessionUrl, {}, signal, false, true));
+    this.#username=typeof session.username==='string'?session.username:'';
     if (!object(session.capabilities)[MAIL]) throw new JMAPError('mail capability missing');
     this.#account = this.#cfg.accountId ?? state(object(session.primaryAccounts)[MAIL]);
     if (!object(object(session.accounts)[this.#account]).accountCapabilities?.[MAIL]) throw new JMAPError('account cannot store mail');
