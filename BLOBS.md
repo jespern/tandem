@@ -11,7 +11,9 @@ published file (section 6), a false header could suppress healing (section 4.3),
 destroy each other's copy (section 7), binary reads were decoded twice (section 4.2) and the orphan
 grace trusted a time a client can set (section 7). A second review found six more, fixed in sections
 4.3, 5, 7, 8 and 9: clean-up and healing now share one definition of a live manifest, and a device
-that cannot know what a chunk is needed for collects nothing.
+that cannot know what a chunk is needed for collects nothing. A third found three, fixed in sections
+4.2, 7 and 8: a version stays protected until its replacement is on the feed, healing never discards
+a good local file, and a refused binary append falls back to text.
 
 ## 1. Summary
 
@@ -133,6 +135,13 @@ wrapped at 76 characters, fetched as §10.3 says.
 **Writing.** A writer uses the binary form if the server advertises `BINARY` and the hub's setting
 allows it (on by default), otherwise the text form. Every device on a hub talks to the same server,
 so they agree without negotiating.
+
+A server that advertises `BINARY` may still refuse to store binary content in a mailbox, and
+answers such an `APPEND` with `NO [UNKNOWN-CTE]` (RFC 3516 §4.4). The device then changes that hub
+to the text form, says so, and goes on with the upload: the refused chunk, or the whole refused
+`MULTIAPPEND` batch, is sent again as text. Chunks already stored in the binary form stay, since a
+chunk's address does not depend on its form. The hub stays on the text form until the user turns
+the binary form on again.
 
 **Reading.** A reader accepts both forms, whatever it would write. There are two ways to fetch, and
 the transfer encoding is undone exactly once, by the server or by the reader:
@@ -281,7 +290,8 @@ of them again.
 5. **Commit.** It refreshes the index once more and checks that every address is on the hub, each
    through a message it has verified. Only then does it merge the write into its replica, and from
    there the write is published like any other (§10.7). **A manifest on the feed means its blob was
-   complete on the hub.**
+   complete on the hub.** The version it replaces stays protected until the new write is on the
+   feed (section 7).
 
 **A pending write does not exist yet.** Until step 5 the device acts, for every purpose of the
 protocol, as if the write had not been made. Its replica still holds what the field held before, and
@@ -311,9 +321,19 @@ or one would restore what the other destroys. A manifest is **live** on a device
 value of a kept write (§9.3) of a record that is not deleted, in a scope that is not deleted
 (§11.9). A manifest that stayed kept under a record's tombstone, because it was written without
 having seen the delete (§9.2), is not live. A manifest is **protected** when it is live, or the
-value of a held write (§8.3), or of a pending write in the device's own upload journal. Healing
-restores the chunks of live manifests (section 8); clean-up leaves alone the chunks of protected
-ones.
+value of a held write (§8.3), or of a pending write in the device's own upload journal, or when the
+next paragraph says so. Healing restores the chunks of live manifests (section 8); clean-up leaves
+alone the chunks of protected ones.
+
+**Only what is on the feed takes protection away.** A device's replica can be ahead of the hub: it
+may hold a write of its own that no message on the hub holds yet, because the publish failed, is
+waiting for the network, or was cut short by a crash. That may be the replacement the device just
+committed (section 6), any other assignment to the field, or a delete of the record. A write is **on
+the feed** for a device when a message that holds it is in the feed folder: the server answered the
+device's append of it, or the device has seen the message there in a sync. A manifest that would be
+live if the replica held only writes that are on the feed is protected. So the device does not
+collect a version's chunks while every other device still shows that version. The device already
+records which message holds which write, in its store, so this holds across a restart.
 
 Chunks are never dominated the way record messages are (§10.7). In the hygiene pass that follows a
 full sync of a scope, a device MAY destroy a chunk message when all of this holds:
@@ -403,8 +423,12 @@ what is evicted becomes remote again. A staged copy is kept until its write is p
 **Healing** (§12.2) gains one rule. After an index refresh in the hygiene pass, for every live
 manifest (section 7) in a current channel whose whole content the device holds: each listed address
 that is not on the hub (section 4.3: an unverified claim is fetched and settled first) is sealed
-again with the listed key and appended. The envelope must hash to the address; if it does not, the
-local copy is damaged and is dropped. Only live manifests are healed: a manifest under a tombstone
+again with the listed key and appended. The envelope must hash to the address. If it does not, the
+device does not yet know which of the two is wrong, and hashes its local copy. If that hash differs
+from the manifest's `hash`, the copy is damaged and is dropped. If it matches, the copy is good and
+the manifest is inconsistent: an entry's key or address does not belong to the content its hash
+names. The device keeps the file, which another manifest with the same hash may need, marks this
+manifest unreadable (section 5) and appends nothing for it. Only live manifests are healed: a manifest under a tombstone
 or in a deleted or dead collection is left alone, so healing never restores what clean-up may
 destroy. A device that holds no content does nothing, which is the durability cost named in section
 2.
