@@ -9,7 +9,9 @@ still open is in section 13.
 Revised the same day after a review found five faults: a pending replacement could destroy the
 published file (section 6), a false header could suppress healing (section 4.3), two healers could
 destroy each other's copy (section 7), binary reads were decoded twice (section 4.2) and the orphan
-grace trusted a time a client can set (section 7).
+grace trusted a time a client can set (section 7). A second review found six more, fixed in sections
+4.3, 5, 7, 8 and 9: clean-up and healing now share one definition of a live manifest, and a device
+that cannot know what a chunk is needed for collects nothing.
 
 ## 1. Summary
 
@@ -196,11 +198,18 @@ the server refuses a second connection (§10.3 lists the caps), the device uses 
 and transfers one chunk between returns to IDLE. That is a per-hub setting with the automatic
 choice as default.
 
-**Batching.** Appends are sent without waiting for each answer where `LITERAL+` allows it, and in
-one `MULTIAPPEND` where only that is offered; several chunks are fetched with one command. An
-implementation MUST do this: on Fastmail an append answered alone costs half a second whatever its
-size, which matters more than the chunk size (section 12). A batch is a few MiB, so memory stays bounded
-and a lost connection costs little.
+**Batching.** An implementation MUST send chunks in batches of a few MiB, by the first of these the
+server offers, in either form:
+
+1. one `MULTIAPPEND` per batch (with `LITERAL+` its literals are sent without waiting);
+2. with `LITERAL+` alone, the batch's `APPEND` commands sent without waiting for each answer;
+3. otherwise one `APPEND` at a time.
+
+Several chunks are fetched with one command. On Fastmail an append answered alone costs half a
+second whatever its size, which matters more than the chunk size, and `MULTIAPPEND` was the steady
+one: text chunks of 1 MiB went up at 3.3 to 5.7 MiB per second in a `MULTIAPPEND` and at 0.7 to 1.6
+pipelined (section 12). A `MULTIAPPEND` stores all of its messages or none, so a lost connection
+costs one batch, which the next attempt sends again.
 
 ## 5. Manifests
 
@@ -217,7 +226,8 @@ reading, integers only, canonical `b64u`), in one of two forms:
 - `size` is the content length in bytes, at most 2^53.
 - `chunks` decodes to `n ≥ 1` entries of 68 bytes each: `address (32) || ck (32) || u32(length)`, in
   content order. Every length is between 1 and 4,194,304 and the lengths add up to `size`.
-- `data` is the content itself, for small blobs. Its length is `size`. A writer uses it for content
+- `data` is the content itself, for small blobs. Its length is `size`; a value where it is not is
+  no manifest. A writer uses it for content
   of at most 16 KiB by default (configurable); a reader accepts whatever fits a message. An empty
   file is `"size": 0` with empty `data`.
 - Exactly one of `chunks` and `data` is present. Unknown keys are ignored.
@@ -225,13 +235,21 @@ reading, integers only, canonical `b64u`), in one of two forms:
 **Validity.** The write is an ordinary write: whether it is valid never depends on its value
 (§9.3), so clients of different versions cannot diverge over it. A value that is not a manifest by
 the rules above, or has a `blob` version the client does not know, makes the field **unreadable** on
-that client and nothing more. `add` and `remove` on a `_blob:` field have no meaning to this layer.
+that client. A manifest of an unknown version, a JSON object whose `blob` is an integer other than
+1, has one more effect: it stops that client's clean-up in the scope (section 7). Every later
+version of the manifest therefore stays a JSON object with an integer `blob`. `add` and `remove` on
+a `_blob:` field have no meaning to this layer.
 
 **What the manifest pins.** It is signed like any write (§5.5), and it names every chunk by the hash
-of its ciphertext. A device accepts a chunk only if its envelope hashes to the listed address and
-opens under the listed key, so every device sees the bytes the author signed or nothing. A device
-that has assembled the whole content also checks `hash` and treats the blob as unreadable if it
-differs. `hash` lets an app see that two versions are the same file without downloading either.
+of its ciphertext. A device accepts a chunk only if its envelope hashes to the listed address,
+opens under the listed key and holds exactly as many bytes of plaintext as its entry says. The last
+check is its own: a manifest whose lengths are wrong for its chunks can pass authentication, and
+even the whole-file hash for a reader that writes chunks one after another, while a reader that
+places each chunk at the offset the lengths give would produce other bytes. If a chunk's length
+differs from its entry, the blob is unreadable, and no byte of that chunk is written or shown. So
+every device sees the bytes the author signed or nothing. A device that has assembled the whole
+content also checks `hash` and treats the blob as unreadable if it differs. `hash` lets an app see
+that two versions are the same file without downloading either.
 
 **What is not in it.** A file's name, media type and thumbnail are ordinary fields of the same
 record. A rename then merges with a concurrent replacement of the content, and a thumbnail of a few
@@ -288,18 +306,51 @@ a clear state the app can show. The journal entry stays, and the upload resumes 
 
 ## 7. Collecting chunks
 
+**Live and protected.** Clean-up and healing must agree on which manifests still need their chunks,
+or one would restore what the other destroys. A manifest is **live** on a device when it is the
+value of a kept write (§9.3) of a record that is not deleted, in a scope that is not deleted
+(§11.9). A manifest that stayed kept under a record's tombstone, because it was written without
+having seen the delete (§9.2), is not live. A manifest is **protected** when it is live, or the
+value of a held write (§8.3), or of a pending write in the device's own upload journal. Healing
+restores the chunks of live manifests (section 8); clean-up leaves alone the chunks of protected
+ones.
+
 Chunks are never dominated the way record messages are (§10.7). In the hygiene pass that follows a
 full sync of a scope, a device MAY destroy a chunk message when all of this holds:
 
 1. its `Tandem-Channel` is the tag of a channel of that scope which the device knows (any epoch);
 2. the device holds a valid write in that scope whose manifest lists its address, so the device can
    account for the chunk;
-3. no manifest lists its address among the scope's kept writes of records that are not deleted, its
-   held writes (§8.3) and the pending writes in the device's own upload journal.
+3. no protected manifest of the scope lists its address.
 
 Condition 1 keeps one scope's clean-up from touching another's chunks, whatever a manifest claims.
 Condition 2 means a device never destroys what it cannot explain, as with messages it has not
-merged. A pending replacement changes nothing here: the version it will replace is still kept (section 6).
+merged. A pending replacement changes nothing here: the version it will replace is still kept
+(section 6).
+
+**When a device cannot know.** Every rule of this section decides from the manifests a device can
+read, so a device that knows it cannot read them all holds back:
+
+- It collects nothing in a scope, by any rule here, while a kept or held `_blob:` write of that
+  scope has a manifest of a version it does not know: a JSON object whose `blob` is an integer other
+  than 1. Such a manifest may list chunks, among them chunks an older, superseded manifest also
+  lists, and the device cannot tell which. A value that is no manifest at all lists nothing and
+  blocks nothing.
+- It collects no orphans in a scope while the current epoch's inventory is not assembled, or lists a
+  write the device neither holds nor has seen replaced (§8.3). Such a write may be a manifest that
+  devices holding it will publish again (§12.2), and until then its chunks look like orphans.
+
+The second rule stops at orphans on purpose. A device that joined an epoch late can never resolve
+the entries of writes that were replaced before it came; if they blocked every rule, it would never
+collect at all. What that leaves open is in "What can go wrong" below.
+
+**Deleted collections.** When a collection's roster ends in a statement with `deleted` set (§11.9),
+its manifests stop being live, so nothing heals its chunks, but its records carry no tombstones and
+the rules above would never release them. They don't apply: no device collects in a deleted
+collection. Its chunks are part of its data on the hub and go the way §11.9 sends that data: after
+the retention period, a device of the owner destroys every chunk message whose `Tandem-Channel` is
+the tag of one of the collection's channels, when it destroys the collection's other messages.
+Until then the chunks stay, so that the collection can still be copied (§11.8).
 
 **Copies.** Several messages can carry one address: an append repeated after a lost answer, or two
 devices healing the same chunk, which gives identical envelopes. Nobody owns such a message, so the
@@ -320,37 +371,43 @@ guarantee is therefore local: an honest device collects no orphan it has known f
 grace, and nothing a participant writes to the hub shortens that. A device whose own clock jumps
 forward may collect early; that costs an upload in progress some chunks, which its commit check
 appends again (section 6). This is a safety net for a device that died mid-upload, not a mechanism anything
-waits on. A device that holds a `_blob:` write it cannot read in a scope collects no orphans there:
-the chunks may belong to a manifest version it does not know.
+waits on. The limits of "When a device cannot know" apply.
 
-**What can go wrong, and what repairs it.** Clean-up decides from what one device has seen. Two
-rare histories leave a kept manifest with a destroyed chunk: a device reuses or re-assigns a blob at
-the moment another collects it, or an old write becomes current again in a new epoch (§9.3) after
-its chunks were collected. In both the record is intact and the file reads as unavailable until a
-device that holds it restores it (section 8). The commit check of section 6 covers the uploader's own case.
+**What can go wrong, and what repairs it.** Clean-up decides from what one device has seen. Three
+rare histories leave a live manifest with a destroyed chunk: a device reuses or re-assigns a blob at
+the moment another collects it; an old write becomes current again in a new epoch (§9.3) after its
+chunks were collected; or a write the inventory lists, which the collecting device never held, lists
+a chunk again that a superseded manifest listed. In each the record is intact and the file reads as
+unavailable until a device that holds it restores it (section 8). The commit check of section 6
+covers the uploader's own case.
 
 ## 8. Reading, keeping and healing
 
 **States.** For each manifest a device reports one of: **here** (inline, or downloaded and
 verified), **remote** (not fetched), **downloading** with progress, **unavailable** (at the last
-index refresh a listed address had no message, or only rejected ones) and **unreadable** (section 5). Unavailable is not an error
-of the record and is distinct from remote.
+index refresh a listed address had no message, or only rejected ones) and **unreadable** (section
+5). Unavailable is not an error of the record and is distinct from remote.
 
 **Fetching.** The device refreshes the chunk index, finds a message claiming each address, fetches
-it, checks the hash, opens it and writes the plaintext at its offset. The check verifies or rejects
-that message (section 4.3); after a rejection another message claiming the same address is tried. Download resumes, and content can be read from
-any offset, chunk by chunk. An unavailable blob is tried again at the next index refresh or when
+it and checks the hash. That check verifies or rejects the message (section 4.3); after a rejection
+another message claiming the same address is tried. The device then opens the chunk and compares
+the plaintext's length with the entry's (section 5) before it writes the plaintext at the entry's
+offset or shows any of it. Download resumes, and content can be read from any offset, chunk by
+chunk. An unavailable blob is tried again at the next index refresh or when
 the app asks.
 
 **Keeping.** Whether a device fetches on demand or keeps every file of a scope is a setting per
 scope and device, with an upper size for what is fetched unasked. The blob store has a size limit;
 what is evicted becomes remote again. A staged copy is kept until its write is published.
 
-**Healing** (§12.2) gains one rule. After an index refresh in the hygiene pass, for every kept
-manifest in a current channel whose whole content the device holds: each listed address that is not
-on the hub (section 4.3: an unverified claim is fetched and settled first) is sealed again with the listed key and appended. The envelope must hash to the
-address; if it does not, the local copy is damaged and is dropped. A device that holds no content
-does nothing, which is the durability cost named in section 2.
+**Healing** (§12.2) gains one rule. After an index refresh in the hygiene pass, for every live
+manifest (section 7) in a current channel whose whole content the device holds: each listed address
+that is not on the hub (section 4.3: an unverified claim is fetched and settled first) is sealed
+again with the listed key and appended. The envelope must hash to the address; if it does not, the
+local copy is damaged and is dropped. Only live manifests are healed: a manifest under a tombstone
+or in a deleted or dead collection is left alone, so healing never restores what clean-up may
+destroy. A device that holds no content does nothing, which is the durability cost named in section
+2.
 
 ## 9. Keys, membership and removal
 
@@ -362,8 +419,10 @@ does nothing, which is the durability cost named in section 2.
   they cannot read.
 - **A reader** can fetch and open blobs and cannot write manifests. Like anyone with the hub
   credential they can still append junk and destroy messages (§3.1).
-- **Deleting a record or a collection** makes its chunks collectable by section 7. A dead collection
-  (§9.4) stops collecting and keeps its blobs readable.
+- **Deleting a record** makes its chunks collectable by section 7, by any device of the scope.
+- **Deleting a collection** leaves its chunks on the hub for the retention period of §11.9; a
+  device of the owner then destroys them with the collection's other data (section 7).
+- **A dead collection** (§9.4) stops collecting and healing and keeps its blobs readable.
 - **Moving or copying to another scope** uploads the blob again under new keys. A blob belongs to
   one scope.
 - **Quota.** Where the server offers `QUOTA` (RFC 9208), the binding reports used and total storage;
@@ -378,7 +437,8 @@ uploading the chunk again. To leave that open, a reader MUST already accept from
 
 - chunks of any mix of lengths within the limits of section 4.1;
 - the same address more than once in a manifest;
-- an address listed by several manifests of one scope (section 7 condition 3 already counts them all).
+- an address listed by several manifests of one scope (section 7 condition 3 already counts them
+  all).
 
 A writer may reuse an entry only from a kept manifest of the same scope.
 
@@ -431,7 +491,8 @@ What follows from it:
 - **The binary form is worth having on Fastmail for speed only**: about twice as fast both ways when
   batched, and no saving in storage (B2).
 - **Text appends sent pipelined were slow and uneven** (0.7 to 4.6); in one `MULTIAPPEND` they were
-  steady. Not explained. A hub on the text form should prefer `MULTIAPPEND`.
+  steady, and binary ones were as fast as pipelined. Not explained. Section 4.3 therefore puts
+  `MULTIAPPEND` first for both forms.
 - **The feed stays live during an upload, at half speed.** A small append to the feed folder reached
   an idling connection in 0.53 s with nothing else going on, and in 1.0 to 1.2 s while another
   connection uploaded 1 MiB chunks.
