@@ -185,6 +185,53 @@ try await admin.approve(claim: claim.id, ms: ms)   // or reject(claim:ms:)
 
 `changePassword(to:ms:)`; `Device.recoverCreator(...)` brings back the hub's creator, with the hub password, after every device and the keychain are gone (nobody else can be recovered: a member who loses everything joins again as a new person and has lists shared again).
 
+## Files
+
+**A slow link for a narrow purpose.** A file attached to a record stays among the hub's devices and never leaves the
+hub's mailbox: chunks go to the mail server over IMAP on TLS and come back the same way, and nothing is mailed, so no
+SMTP, no second mail server and no other service sees them, and the one server that stores them holds only ciphertext.
+It is not a file service: if speed or volume matters more than keeping files inside the mailbox, use something built
+for files. Measured on 2026-11-15 from one machine, in MiB of file per second on open connections, with the default
+transfer connections (`BLOBS.md` has every figure and how it was taken):
+
+| Provider | Upload | Download | Storage per byte of file | Largest message |
+|---|---|---|---|---|
+| Fastmail | about 12 (two connections) | about 19 (two) | 1.02 | 200 MB |
+| Gmail | about 0.8 (four) | about 2.8 (four) | 1.02 | 35 MB |
+
+Storage per byte is the size sent and returned; neither provider's quota charge for it was read.
+
+Opening a connection costs 1.5 s on Fastmail and 2.5 s on Gmail before the first chunk. Gmail also limits an account to
+about 500 MB of IMAP upload a day, and a hub is one account.
+
+```swift
+try await device.useBlobs(BlobStore(imapConfiguration))          // once, after opening the device
+try await device.attach(list: list, record: id, name: "photo", content: bytes)   // or attachFile(list:record:name:path:)
+if let info = await device.blob(list: list, record: id, name: "photo") {         // .uploading, .remote, .here, …
+    let url = try await device.fetchBlob(list: list, record: id, name: "photo")
+}
+```
+
+- **Attaching.** A file is a field named `_blob:<name>` of a record. Up to 16 KiB is written at once, inside the record.
+  Anything larger shows as `.uploading` at once (its `path` is a copy the SDK keeps), goes up in the background on the
+  blob folder's own connections, and reaches other devices only when every chunk is on the hub. It works offline. The
+  rest of the record (a title, a thumbnail as an ordinary field) goes out at once, as always.
+- **Reading.** `blob(list:record:name:)` says `.here` (with `path`), `.remote`, `.downloading` (`done` of `chunks`),
+  `.unavailable` (a chunk is missing from the hub; a device that holds the file puts it back) or `.unreadable`.
+  `fetchBlob` downloads, resumes after an interruption, checks everything, and returns the file's URL. Keep the URL's
+  file as the SDK's: copy it if the app needs its own.
+- **Events.** `.blobs(list:records:)` when an upload or download starts, moves or ends; `.items` when a committed file
+  arrives with its record.
+- **Replacing, removing.** Attach again under the same name, or delete the field's record; `cancelAttach` drops a
+  pending upload. Two devices attaching to one field at once give two versions, shown like any conflict (`values`).
+- **Settings,** per hub at runtime: `setBlobSettings(BlobSettings(chunkSize:inline:orphanGrace:storeLimit:unasked:))`.
+  The SDK keeps up to `storeLimit` of files (2 GiB), dropping what was opened longest ago; `keepFiles(list:_:)` fetches
+  a list's files unasked, up to `unasked` (25 MiB) each.
+- **Housekeeping** runs after each sync: chunks of replaced and deleted files are removed from the hub, and chunks of
+  files this device holds are put back if they went missing. `checkBlobs()` asks for that check now, for instance when
+  the app comes to the foreground. `blobQuota()` is `.unknown` where the server says nothing, never zero.
+- **Testing.** `MemoryBlobHub` is an in-memory blob folder: `try await device.useBlobs(MemoryBlobHub())`.
+
 ## App extensions
 
 Extensions (share sheet, quick add, Shortcuts, widgets, Control Center) write with `ItemWriter`, not a full `Device`: it loads only the one list's roster, its current key, this participant's role and the one record, which keeps it inside an extension's memory limit.
@@ -224,6 +271,7 @@ For Liszto the first channel is CloudKit, which it already uses: a record type i
 
 - **Account events.** There is no account to sign out of. A revoked device (`.revoked`) is the closest: keep the replica read-only and offer to pair again.
 - **Quotas.** The hub is a mailbox: the SDK keeps about one message per record (old ones are collected), but a deleted record keeps a small tombstone for good.
+- **Assets.** CKAsset uploads are fast and counted against iCloud; Tandem's files are slow, counted against the mailbox, and never leave it (see Files).
 
 ## Testing your app
 

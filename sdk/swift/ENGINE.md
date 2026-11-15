@@ -40,6 +40,25 @@ Built by the Liszto session at Jesper's request, from its handover; tests in `Ap
 
 `ChangeBatch.more` (Go `More`, as the TypeScript binding already had): a store may return one page of what's new, and the caller asks again with the new cursor at once. Both engines' sync takes a page at a time, saving each with its cursor in one transaction and applying it before the next, so a first sync of a big hub holds one page in memory and keeps what it took if it stops; `followUp` runs once at the end. A page that says there's more without moving the cursor is an error, not a loop. IMAP: `pageSize` (Go `PageSize`), default 500; new UIDs lie below UIDNEXT, so when the gap is smaller than a page it fetches `n:*` as before, else it searches the new UIDs and fetches the first page. JMAP (Swift, Go, Python): as the browser binding, a full scan lists IDs into the cursor's `pending` and each call delivers a page of them; `Email/changes` is one call per page, `hasMoreChanges` is `more`. This replaces the hard "batch byte limit exceeded" on a big first scan. `MemoryHub` has a page size for tests (`PagingTests`, Go `TestAppSyncsAPageAtATime`).
 
+## Files (BLOBS.md, 2026-11-15)
+
+`Blobs.swift` and `BlobGC.swift`, the same as the Go engine's `blobs.go` and `blobgc.go`. A file attached to a record field
+`_blob:<name>` is inline up to 16 KiB; larger content is described off the actor (one pass, sealing each chunk to learn
+its address), signed as a **pending write** kept in the store's `uploads` table and out of the replica, uploaded by a
+worker on the `BlobHub`'s own connections, and merged and published only once every chunk is verified on the hub. The
+store's `chunks` table is the blob folder's index (claim, tag, first seen by this device's clock, verified or rejected);
+content lives in files in `Store.blobDirectory`, never in SQLite. After each sync the worker collects what nothing protects
+(live, held, pending, or the version still on the feed while its replacement isn't), keeps the lowest verified copy,
+collects orphans after a grace on this device's clock, and heals chunks of live manifests it holds. It refreshes the
+index for that only when the local index shows something to collect, when it should check content it holds (once after
+`useBlobs`, or on `checkBlobs()`), or when what it lists or protects changed; so a chunk orphaned by another device's
+dead upload is found the next time something changes. The worker, downloads and quota count as users of the blob hub; the
+last to finish lets the connections go (found by interop: a download broke when the worker released under it).
+`BlobTests` (18 scenarios, one per review finding among them) and `BlobReleaseTests`; `interop/interop.py`'s `blobs`
+scenario runs both engines on Stalwart. Not done: a one-batch transfer on the feed connection (`IMAPStore.appendChunks`
+exists, the engine doesn't use it yet); requested downloads ahead of unasked ones; pipelined appends for a server with
+`LITERAL+` but no `MULTIAPPEND`.
+
 ## Several processes on one store (Liszto, 2026-11-13)
 
 The Liszto session asked for two things, decided with Jesper, now done (`SharedStore.swift`, `SharedStoreTests`): the running `Device` takes in another process's writes, checking `PRAGMA data_version` at the start of every sync, write and read and on `refresh()`, reloading the changed records and announcing them; and `ItemWriter`, a light writer for extensions that loads one list and one record, signs several changes in one call, appends once with a timeout and leaves the rest to the app. Its tests fail without the data-version check.

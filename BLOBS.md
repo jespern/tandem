@@ -1,7 +1,9 @@
 # Proposal: blobs (files in the mailbox)
 
-Status: **proposal**, 2026-11-15. Nothing here is implemented. How chunks travel was measured on
-Fastmail, Gmail and Stalwart (section 12). It extends `DESIGN.md` (v2) and removes its
+Status: **implemented**, 2026-11-15, in all four SDK cores (chunks, manifests, the escaped form,
+with `vectors/v2/blobs.json`), the Go and Swift IMAP bindings and both device engines; the two
+engines exchange files on Stalwart in `interop/interop.py`. What the implementation left out is at
+the end of section 13. How chunks travel was measured on Fastmail, Gmail and Stalwart (section 12). It extends `DESIGN.md` (v2) and removes its
 non-goal "Large binary attachments" (§1.2). References with § are to `DESIGN.md`; this document's
 own parts are called sections. Decisions Jesper made on 2026-11-15 are marked **Decided**; what is
 still open is in section 13.
@@ -254,7 +256,11 @@ A device keeps a **chunk index**: for every message in the folder its ID, claime
 built by `changes` (headers only, paged like the feed), and two things only this device knows: when
 it first saw the message, by its own clock, and whether it has verified it. It refreshes the index
 only when it has a reason: before a download starts, before an upload starts and once more before
-its commit, and in the hygiene pass if it holds blob content or has chunks to collect. A refresh is
+its commit, and in the hygiene pass when the index already shows something to collect, when it
+should check content it holds against the hub (once after it starts, or when the app asks), or when
+what it lists or protects changed since it last looked. A chunk orphaned by another device's dead
+upload is therefore found the next time one of those happens, not at the next sync: the price of
+not opening the blob folder after every sync. A refresh is
 incremental, the messages added and removed since the last one, and one refresh serves every
 transfer waiting at that moment. It is never made per chunk. A device with no interest in files never
 opens the folder. A `UIDVALIDITY` change rebuilds the index; first-seen times and verification start
@@ -769,3 +775,14 @@ Fastmail, 16 binary chunks of 1 MiB spread over several connections at once, MiB
 | B13 | **Compressing a file before sealing it.** For text, documents and other content that shrinks, fewer bytes is the only thing left that would speed Gmail up, by the factor the content shrinks; photos and video gain nothing. It would need a flag in the manifest and a rule for chunk lengths, it would let the hub see how well a file compresses, and deflate is in every platform's standard library. Not designed. |
 | B12 | **Uploading while describing.** Section 6 describes the whole file, one pass that seals every chunk to learn its address, before the first append. The two could overlap: sealing is deterministic, so a crash repeats the description and finds the chunks already there, provided the journal entry (`r` and the staged copy) exists before the first append and the write is signed when the description ends. The cost is that the write's context is fixed later and the pending file has no manifest while it uploads. The gain is one pass over the file, which should be small next to an upload at the measured rates; sealing speed has not been measured. Left out until it has. |
 | B11 | **Scale.** The chunk index was scanned for 126 messages only. How long does a folder of tens of thousands of chunks take to scan and to select? |
+
+**Left out of the first implementation**, on 2026-11-15:
+
+- A transfer of one batch on the feed connection (section 4.3). Both bindings can append chunks
+  on the feed's connection (`AppendChunks`, `appendChunks`); the engines open a transfer
+  connection for every transfer.
+- Requested downloads ahead of unasked ones (section 8). They run side by side.
+- Pipelined `APPEND`s for a server with `LITERAL+` but no `MULTIAPPEND` (section 4.3). Such a
+  server gets one `APPEND` at a time.
+- A deleted collection's chunks stay on the hub with its other data: the engines don't yet destroy
+  a deleted collection's data after the retention of §11.9.
