@@ -276,3 +276,65 @@ func TestAppTheOwnerWritesListPropertiesInMeta(t *testing.T) {
 		t.Fatal("a writer changed _meta")
 	}
 }
+
+// pagesThenFail serves Changes from conn, and fails from the call numbered failAt on.
+type pagesThenFail struct {
+	*MemoryConn
+	calls, failAt *atomic.Int32
+}
+
+func (p pagesThenFail) Changes(ctx context.Context, cursor string) (tandem.ChangeBatch, error) {
+	if p.calls.Add(1) >= p.failAt.Load() {
+		return tandem.ChangeBatch{}, errors.New("connection lost")
+	}
+	return p.MemoryConn.Changes(ctx, cursor)
+}
+
+// A hub that answers a page at a time: a new device syncs everything, page after page.
+func TestAppSyncsAPageAtATime(t *testing.T) {
+	hub, f, keys, bob := found(t, "Bob’s Mac", nil)
+	defer bob.Close()
+	list := try(bob.CreateList(bg, "Groceries"))
+	for _, title := range []string{"Milk", "Eggs", "Bread", "Oats", "Tea"} {
+		must(t, bob.SetField(bg, list, NewRecordID(), "title", []byte(title)))
+	}
+	hub.PageSize = 3
+	calls, failAt := &atomic.Int32{}, &atomic.Int32{}
+	failAt.Store(1 << 30)
+	laptop := open(t, f, keys, nil, pagesThenFail{hub.Connect(), calls, failAt})
+	defer laptop.Close()
+	syncAll(t, laptop)
+	if got := titles(laptop, list); !sameSet(got, set("Milk", "Eggs", "Bread", "Oats", "Tea")) {
+		t.Fatal(got)
+	}
+	if n := len(hub.Messages()); calls.Load() < int32(n/3) {
+		t.Fatal("not paged:", calls.Load(), "calls for", n, "messages")
+	}
+}
+
+// A sync that stops partway keeps the pages it took: the next one goes on from there.
+func TestAppAStoppedSyncKeepsItsPages(t *testing.T) {
+	hub, f, keys, bob := found(t, "Bob’s Mac", nil)
+	defer bob.Close()
+	list := try(bob.CreateList(bg, "Groceries"))
+	for _, title := range []string{"Milk", "Eggs", "Bread", "Oats", "Tea"} {
+		must(t, bob.SetField(bg, list, NewRecordID(), "title", []byte(title)))
+	}
+	hub.PageSize = 3
+	calls, failAt := &atomic.Int32{}, &atomic.Int32{}
+	failAt.Store(3)
+	store := MemoryStore()
+	laptop := open(t, f, keys, store, pagesThenFail{hub.Connect(), calls, failAt})
+	defer laptop.Close()
+	if _, err := laptop.Sync(bg); err == nil {
+		t.Fatal("expected the lost connection")
+	}
+	if c, _ := store.Value("cursor"); string(c) != "6" {
+		t.Fatal("the two pages taken aren't kept:", string(c))
+	}
+	failAt.Store(1 << 30)
+	syncAll(t, laptop)
+	if got := titles(laptop, list); !sameSet(got, set("Milk", "Eggs", "Bread", "Oats", "Tea")) {
+		t.Fatal(got)
+	}
+}

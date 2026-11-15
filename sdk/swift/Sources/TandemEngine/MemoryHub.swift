@@ -15,8 +15,12 @@ public actor MemoryHub {
     private var watchers: [Int: AsyncThrowingStream<Void, any Error>.Continuation] = [:]
     private var watcherSerial = 0
     private var hidden: [Int: Set<String>] = [:]
+    /// If set, `changes(since:)` returns at most this many events per call, with `more`.
+    public var pageSize: Int?
 
     public init() {}
+
+    public func setPageSize(_ size: Int?) { pageSize = size }
 
     /// A connection for one device.
     public func connect() -> Connection { watcherSerial += 1; return Connection(hub: self, number: watcherSerial) }
@@ -56,7 +60,9 @@ public actor MemoryHub {
         }
         var added: [Message] = [], removed: [String] = []
         let hide = hidden[number] ?? []
-        for e in events[start...] {
+        var end = events.count, more = false
+        if let pageSize, end - start > pageSize { end = start + pageSize; more = true }
+        for e in events[start..<end] {
             switch e {
             case let .added(x) where live[x.id] != nil && !hide.contains(x.channel):
                 added.append(Message(id: x.id, channel: x.channel, body: x.body))
@@ -64,7 +70,7 @@ public actor MemoryHub {
             default: continue
             }
         }
-        return ChangeBatch(added: added, removed: removed, cursor: String(events.count))
+        return ChangeBatch(added: added, removed: removed, cursor: String(end), more: more)
     }
 
     func append(channel: String, body: Bytes) -> String {

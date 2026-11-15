@@ -6,7 +6,7 @@ import ssl
 import unittest
 import uuid
 
-from tandem import JMAPConfig, JMAPStore, collection_tag, sha, seal
+from tandem import ChangeBatch, JMAPConfig, JMAPStore, collection_tag, sha, seal
 
 
 class JMAPTests(unittest.IsolatedAsyncioTestCase):
@@ -50,7 +50,17 @@ class JMAPTests(unittest.IsolatedAsyncioTestCase):
         try:
             events = await reader.watch()
             pushed = asyncio.create_task(anext(events))
-            initial = await reader.changes('')
+
+            async def drain(cursor):
+                """Changes until a batch has no more, as a session does: one page each."""
+                added, removed, pages = [], [], 0
+                while True:
+                    page = await reader.changes(cursor)
+                    added, removed, cursor, pages = added + list(page.added), removed + list(page.removed), page.cursor, pages + 1
+                    if not page.more:
+                        return ChangeBatch(tuple(added), tuple(removed), cursor), pages
+
+            initial, _ = await drain('')
             key, hub, epoch = (sha(value) for value in [b'key', b'hub', b'epoch'])
             tag, ids, bodies = collection_tag(key, hub, epoch), [], []
             for i in range(5):
@@ -58,10 +68,13 @@ class JMAPTests(unittest.IsolatedAsyncioTestCase):
                 ids.append(await writer.append(tag, body))
                 bodies.append(body)
             await asyncio.wait_for(pushed, 10)
-            batch = await reader.changes(initial.cursor)
+            batch, pages = await drain(initial.cursor)
             self.assertEqual(len(batch.added), 5)
-            self.assertEqual(await reader.changes(initial.cursor), batch)
-            self.assertEqual(len((await reader.changes('')).added), 5)
+            self.assertGreaterEqual(pages, 3)
+            self.assertEqual((await drain(initial.cursor))[0], batch)
+            full, pages = await drain('')
+            self.assertEqual(len(full.added), 5)
+            self.assertGreaterEqual(pages, 3)
             fetched = {message.id: message.body for message in await reader.fetch(ids)}
             self.assertEqual(fetched, dict(zip(ids, bodies)))
             other = await JMAPStore.open(JMAPConfig(fixture['sessionUrl'], fixture['authorization'], folder_name=cfg.folder_name + '-other', tls_context=cfg.tls_context))
@@ -71,7 +84,7 @@ class JMAPTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await other.close()
             await writer.destroy(ids)
-            self.assertEqual(set((await reader.changes(batch.cursor)).removed), set(ids))
+            self.assertEqual(set((await drain(batch.cursor))[0].removed), set(ids))
             await events.aclose()
         finally:
             await reader.close()

@@ -506,15 +506,40 @@ func (d *Device) sync(ctx context.Context) (int, error) {
 	if err := d.finishJournals(ctx); err != nil {
 		return 0, err
 	}
-	cursor := ""
-	if c, ok := d.store.Value("cursor"); ok {
-		cursor = string(c)
+	count := 0
+	// A page at a time (ChangeBatch.More): each is saved with its cursor and applied before the
+	// next, so a big first sync keeps what it has if it stops, and holds one page in memory.
+	for more := true; more; {
+		cursor := ""
+		if c, ok := d.store.Value("cursor"); ok {
+			cursor = string(c)
+		}
+		batch, err := d.hubChanges(ctx, cursor)
+		if err != nil {
+			return count, err
+		}
+		if batch.More && batch.Cursor == cursor {
+			return count, fail("hub: a page of changes made no progress")
+		}
+		if err := d.takeBatch(batch); err != nil {
+			return count, err
+		}
+		n, err := d.applyHeld()
+		count += n
+		if err != nil {
+			return count, err
+		}
+		more = batch.More
 	}
-	batch, err := d.hubChanges(ctx, cursor)
-	if err != nil {
-		return 0, err
+	if err := d.repairClaim(ctx); err != nil {
+		return count, err
 	}
-	err = d.store.Transaction(func() error {
+	return count, d.followUp(ctx)
+}
+
+// takeBatch saves one batch of changes and its cursor, in one transaction.
+func (d *Device) takeBatch(batch tandem.ChangeBatch) error {
+	return d.store.Transaction(func() error {
 		for _, m := range batch.Added {
 			if err := d.store.NoteMessage(m.ID, m.Channel, tandem.H(m.Body)); err != nil {
 				return err
@@ -533,9 +558,10 @@ func (d *Device) sync(ctx context.Context) (int, error) {
 		}
 		return d.store.SetValue("cursor", []byte(batch.Cursor))
 	})
-	if err != nil {
-		return 0, err
-	}
+}
+
+// applyHeld applies held messages until none makes progress, and returns how many it applied.
+func (d *Device) applyHeld() (int, error) {
 	count := 0
 	for progress := true; progress; {
 		progress = false
@@ -575,10 +601,7 @@ func (d *Device) sync(ctx context.Context) (int, error) {
 			}
 		}
 	}
-	if err := d.repairClaim(ctx); err != nil {
-		return count, err
-	}
-	return count, d.followUp(ctx)
+	return count, nil
 }
 
 // discoverIdentity: a keychain that syncs already holds an admitted keypair (§6.3): find its

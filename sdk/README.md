@@ -81,6 +81,8 @@ envelopes and cursor reconciliation. It calls `changes` only for:
 2. A mailbox push notification.
 3. A completed reconnect, reported by the transport as a notification.
 4. A local submission that was appended successfully.
+5. The next page, at once, when a batch says there is more (`more`): the same
+   scan continued, never a timer.
 
 There is no periodic fetch, search, sleep loop or timer-triggered reconciliation.
 Network failures are surfaced; the session does not hide them behind polling.

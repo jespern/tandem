@@ -83,13 +83,13 @@ final class StalwartTests: XCTestCase {
     }
 
     func config(_ folder: String, qresync: Bool = true, watch: IMAPStore.WatchConnection = .shared,
-                security: Security = .tlsTrustingAnyCertificateForTesting, password: String? = nil) -> IMAPStore.Configuration {
+                security: Security = .tlsTrustingAnyCertificateForTesting, password: String? = nil, pageSize: Int = 500) -> IMAPStore.Configuration {
         let s = Self.server!
         var trace: (@Sendable (String) -> Void)?
         if ProcessInfo.processInfo.environment["TANDEM_IMAP_TRACE"] != nil { trace = { line in print("[\(folder)] \(line)") } }
         return IMAPStore.Configuration(host: "127.0.0.1", port: s.imapPort, username: s.username, password: password ?? s.password,
                                        security: security, folder: folder, watchConnection: watch, qresync: qresync,
-                                       reconnectDelay: .milliseconds(250) ... .seconds(2),
+                                       pageSize: pageSize, reconnectDelay: .milliseconds(250) ... .seconds(2),
                                        trace: trace)
     }
     func folder() -> String { "Tandem-" + UUID().uuidString.prefix(8) }
@@ -105,6 +105,34 @@ final class StalwartTests: XCTestCase {
         do { try await verified.ensureFolder(); XCTFail("self-signed certificate accepted") }
         catch IMAPError.connection {} catch { XCTFail("\(error)") }
         await verified.close()
+    }
+
+    /// Changes come a page at a time (`ChangeBatch.more`), with and without QRESYNC: every message once, in order, the
+    /// last page without `more`.
+    func testChangesComeAPageAtATime() async throws {
+        let name = folder()
+        let a = IMAPStore(config(name, pageSize: 3)), b = IMAPStore(config(name, qresync: false, pageSize: 3))
+        defer { Task { await a.close(); await b.close() } }
+        try await a.ensureFolder()
+        let ids = try await a.append((0..<8).map { (channel: "chan-a", body: envelope($0)) })
+        try await a.destroy(ids: [ids[4]])   // a gap in the UIDs
+        var want = ids; want.remove(at: 4)
+        for s in [a, b] {
+            var got: [String] = [], pages: [Bool] = [], cursor = ""
+            while true {
+                let batch = try await s.changes(since: cursor)
+                got += batch.added.map(\.id); pages.append(batch.more); cursor = batch.cursor
+                if !batch.more { break }
+            }
+            XCTAssertEqual(got, want)
+            XCTAssertEqual(pages, [true, true, false])
+            // Fewer new messages than a page: one call, no search.
+            let two = try await a.append([(channel: "chan-a", body: envelope(20)), (channel: "chan-a", body: envelope(21))])
+            let next = try await s.changes(since: cursor)
+            XCTAssertEqual(next.added.map(\.id), two)
+            XCTAssertFalse(next.more)
+            want += two
+        }
     }
 
     func testFolderAppendChangesFetchDestroy() async throws {

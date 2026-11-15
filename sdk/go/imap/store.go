@@ -63,6 +63,9 @@ type Config struct {
 	DisableQRESYNC bool
 	// MaxMessageSize ignores larger messages (RFC822.SIZE); default 2 MiB. §10.6 caps a message at 1 MiB of envelope.
 	MaxMessageSize int
+	// PageSize is the most new messages one Changes call fetches; default 500. More come in the
+	// next call (ChangeBatch.More), so a first sync of a big hub holds one page in memory.
+	PageSize int
 	// ReconnectMin and ReconnectMax bound the reconnect backoff; defaults 1 s and 60 s.
 	ReconnectMin, ReconnectMax time.Duration
 	// ConnectTimeout bounds connecting, the TLS handshake, the greeting, login and selecting
@@ -107,6 +110,9 @@ func New(cfg Config) (*Store, error) {
 	if cfg.MaxMessageSize == 0 {
 		cfg.MaxMessageSize = 2 << 20
 	}
+	if cfg.PageSize == 0 {
+		cfg.PageSize = 500
+	}
 	if cfg.ReconnectMin == 0 {
 		cfg.ReconnectMin = time.Second
 	}
@@ -116,7 +122,7 @@ func New(cfg Config) (*Store, error) {
 	if cfg.ConnectTimeout == 0 {
 		cfg.ConnectTimeout = 30 * time.Second
 	}
-	if cfg.Port < 1 || cfg.Port > 65535 || cfg.MaxMessageSize < 0 || cfg.ReconnectMin < 0 || cfg.ReconnectMax < cfg.ReconnectMin || cfg.ConnectTimeout < 0 {
+	if cfg.Port < 1 || cfg.Port > 65535 || cfg.MaxMessageSize < 0 || cfg.PageSize < 0 || cfg.ReconnectMin < 0 || cfg.ReconnectMax < cfg.ReconnectMin || cfg.ConnectTimeout < 0 {
 		return nil, errors.New("imap: invalid configuration")
 	}
 	s := &Store{cfg: cfg, sink: newSink()}

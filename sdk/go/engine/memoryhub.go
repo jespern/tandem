@@ -15,6 +15,9 @@ import (
 // every change the way IDLE does (§10.3). The hub can also misbehave on purpose, as §3.1
 // allows a hub to: hide messages from one connection, or drop them for everyone.
 type MemoryHub struct {
+	// PageSize, if set, makes Changes return at most this many events per call, with More.
+	PageSize int
+
 	mu       sync.Mutex
 	events   []hubEvent
 	live     map[string]tandem.Message
@@ -144,7 +147,11 @@ func (c *MemoryConn) Changes(_ context.Context, cursor string) (tandem.ChangeBat
 	}
 	var batch tandem.ChangeBatch
 	hide := h.hidden[c.number]
-	for _, e := range h.events[start:] {
+	end := len(h.events)
+	if h.PageSize > 0 && end-start > h.PageSize {
+		end, batch.More = start+h.PageSize, true
+	}
+	for _, e := range h.events[start:end] {
 		if e.added != nil {
 			if _, ok := h.live[e.added.ID]; ok && !hide[e.added.Channel] {
 				batch.Added = append(batch.Added, copyMessage(*e.added))
@@ -153,7 +160,7 @@ func (c *MemoryConn) Changes(_ context.Context, cursor string) (tandem.ChangeBat
 			batch.Removed = append(batch.Removed, e.removed)
 		}
 	}
-	batch.Cursor = strconv.Itoa(len(h.events))
+	batch.Cursor = strconv.Itoa(end)
 	return batch, nil
 }
 

@@ -23,7 +23,7 @@ final class Sink: Sendable {
 /// watching reports one change once IDLE runs again, since anything may have
 /// happened while it was down.
 actor Link {
-    struct Selection { var validity: UInt32; var modseq: UInt64; var vanished: UIDSet }
+    struct Selection { var validity: UInt32; var uidNext: UInt32 = 0; var modseq: UInt64; var vanished: UIDSet }   // uidNext 0: not said
 
     private let config: IMAPStore.Configuration
     private let idles: Bool
@@ -246,6 +246,7 @@ actor Link {
             case .status(let status):
                 if case .uidValidity(let v)? = status.code { s.validity = v }
                 if case .highestModSeq(let m)? = status.code { s.modseq = m }
+                if case .uidNext(let n)? = status.code { s.uidNext = n }
             case .vanished(earlier: true, let set): s.vanished = UIDSet(ranges: s.vanished.ranges + set.ranges)
             default: break
             }
@@ -354,10 +355,19 @@ actor Link {
             removed = cursor.known.uids.map { MessageID.make(cursor.validity, $0) }   // UIDVALIDITY changed: full resync
         }
         var added: [Message] = []
-        var top = last
+        var top = last, more = false
         if last < .max {
             // n:* always returns the last message, so a UID below the range is ignored.
-            let items = try await fetchItems(c, "\(last + 1):*")
+            var set = "\(last + 1):*"
+            // A page at a time: new UIDs lie below UIDNEXT, so only a wider gap than a page can hold more than one.
+            // Then the new UIDs are searched, and the first page of them fetched.
+            if s.uidNext == 0 || Int64(s.uidNext) - 1 - Int64(last) > Int64(config.pageSize) {
+                var uids = try await search(c, "UID " + set).uids.filter { $0 > last }
+                if uids.count > config.pageSize { uids = Array(uids.prefix(config.pageSize)); more = true }
+                if let end = uids.last { top = end }   // past the page even if its last messages went meanwhile
+                set = UIDSet(uids).description
+            }
+            let items = set.isEmpty ? [:] : try await fetchItems(c, set)
             for uid in items.keys.sorted() where uid > last {
                 top = max(top, uid)
                 guard let message = decode(items[uid]!, uid) else { continue }
@@ -366,16 +376,19 @@ actor Link {
             }
         }
         return ChangeBatch(added: added, removed: removed,
-                           cursor: Cursor(validity: validity, modseq: qresync ? modseq : 0, last: top, known: known).text)
+                           cursor: Cursor(validity: validity, modseq: qresync ? modseq : 0, last: top, known: known).text, more: more)
     }
 
-    private func searchAll(_ c: Connection) async throws -> UIDSet {
+    private func searchAll(_ c: Connection) async throws -> UIDSet { try await search(c, "ALL") }
+
+    /// UID SEARCH for a criterion: ALL, or UID and a set such as "n:*".
+    private func search(_ c: Connection, _ criterion: String) async throws -> UIDSet {
         if caps.contains("ESEARCH") || caps.contains("IMAP4REV2") {
-            let r = try await c.execute([.text("UID SEARCH RETURN (ALL) ALL")])
+            let r = try await c.execute([.text("UID SEARCH RETURN (ALL) \(criterion)")])
             for case .esearch(_, _, let all) in r.untagged { return all }
             return UIDSet()
         }
-        let r = try await c.execute([.text("UID SEARCH ALL")])
+        let r = try await c.execute([.text("UID SEARCH \(criterion)")])
         var out: [UInt32] = []
         for case .search(let uids) in r.untagged { out += uids }
         return UIDSet(out)

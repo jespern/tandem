@@ -781,7 +781,7 @@ The core needs six operations:
 |---|---|
 | `ensureFolder()` | Make sure the single folder `Tandem` exists. |
 | `append(channelTag, body) → id` | Store a new message. |
-| `changes(since cursor) → (added ids with channel tags, removed ids, cursor)` | Everything that changed in the folder. A message moved into the folder counts as added, and one moved out of it as removed. |
+| `changes(since cursor) → (added ids with channel tags, removed ids, cursor, more)` | Everything that changed in the folder. A message moved into the folder counts as added, and one moved out of it as removed. A binding may return a page: `more` says to call again with the new cursor at once, which continues the scan and is not polling. A client saves each page with its cursor, so a long first sync keeps what it has if it stops. |
 | `fetch(ids) → bodies` | Download message bodies. |
 | `destroy(ids)` | Remove messages permanently. |
 | `watch(onChange)` | Push notification while connected. |

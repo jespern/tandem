@@ -229,14 +229,29 @@ public actor Device {
     func syncOnce() async throws -> Int {
         try takeExternalChanges()
         try await finishJournals()
-        let cursor = try store.value("cursor").map { String(decoding: $0, as: UTF8.self) } ?? ""
-        let batch = try await hub.changes(since: cursor)
-        try store.transaction {
-            for m in batch.added { try store.noteMessage(id: m.id, channel: m.channel, hash: H(m.body)); try store.hold(m) }
-            try store.forgetMessages(batch.removed)
-            for id in batch.removed { try store.release(id) }
-            try store.setValue("cursor", Bytes(batch.cursor.utf8))
+        // A page at a time (`ChangeBatch.more`): each is saved with its cursor and applied before the next, so a big
+        // first sync keeps what it has if it stops, and holds one page in memory.
+        var applied = 0, more = true
+        while more {
+            let cursor = try store.value("cursor").map { String(decoding: $0, as: UTF8.self) } ?? ""
+            let batch = try await hub.changes(since: cursor)
+            if batch.more && batch.cursor == cursor { throw TandemError.invalid("hub: a page of changes made no progress") }
+            try store.transaction {
+                for m in batch.added { try store.noteMessage(id: m.id, channel: m.channel, hash: H(m.body)); try store.hold(m) }
+                try store.forgetMessages(batch.removed)
+                for id in batch.removed { try store.release(id) }
+                try store.setValue("cursor", Bytes(batch.cursor.utf8))
+            }
+            applied += try applyHeld()
+            more = batch.more
         }
+        try await repairClaim()
+        try await followUp()
+        return applied
+    }
+
+    /// Apply held messages until none makes progress; how many it applied.
+    func applyHeld() throws -> Int {
         var applied = 0, progress = true
         while progress {
             progress = false
@@ -250,8 +265,6 @@ public actor Device {
                 }
             }
         }
-        try await repairClaim()
-        try await followUp()
         return applied
     }
 

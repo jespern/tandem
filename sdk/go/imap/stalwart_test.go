@@ -291,13 +291,14 @@ func needStalwart(t *testing.T) {
 type stalwartOptions struct {
 	noQRESYNC, separate, verify bool
 	password                    string
+	pageSize                    int
 }
 
 func stalwartStore(t *testing.T, folder string, o stalwartOptions) *Store {
 	t.Helper()
 	cfg := Config{Host: "127.0.0.1", Port: stalwart.imapPort, Username: stalwart.username, Password: stalwart.password,
 		Security: TLSTrustingAnyCertificateForTesting, Folder: folder, SeparateWatchConnection: o.separate,
-		DisableQRESYNC: o.noQRESYNC, ReconnectMin: 250 * time.Millisecond, ReconnectMax: 2 * time.Second}
+		DisableQRESYNC: o.noQRESYNC, ReconnectMin: 250 * time.Millisecond, ReconnectMax: 2 * time.Second, PageSize: o.pageSize}
 	if o.verify {
 		cfg.Security = TLS
 	}
@@ -473,6 +474,48 @@ func TestStalwartFolderAppendChangesFetchDestroy(t *testing.T) {
 	back := must(a.Changes(ctx, moved.Cursor))(t)
 	if !reflect.DeepEqual(bodies(back.Added), [][]byte{envelope(2)}) || back.Added[0].ID == ids[1] {
 		t.Fatal(back)
+	}
+}
+
+// Changes returns a page at a time (ChangeBatch.More), with and without QRESYNC: every message
+// once, in order, the last page without More.
+func TestStalwartChangesComeAPageAtATime(t *testing.T) {
+	needStalwart(t)
+	ctx := testContext(t)
+	name := folderName()
+	a := stalwartStore(t, name, stalwartOptions{pageSize: 3})
+	b := stalwartStore(t, name, stalwartOptions{pageSize: 3, noQRESYNC: true})
+	noErr(t, a.EnsureFolder(ctx))
+	var out []Outgoing
+	for i := range 8 {
+		out = append(out, Outgoing{"chan-a", envelope(i)})
+	}
+	ids := must(a.AppendBatch(ctx, out))(t)
+	noErr(t, a.Destroy(ctx, []string{ids[4]})) // a gap in the UIDs
+	want := slices.Delete(slices.Clone(ids), 4, 5)
+	for _, s := range []*Store{a, b} {
+		var got []string
+		var pages []bool
+		cursor := ""
+		for {
+			batch := must(s.Changes(ctx, cursor))(t)
+			got = append(got, messageIDs(batch.Added)...)
+			pages = append(pages, batch.More)
+			cursor = batch.Cursor
+			if !batch.More {
+				break
+			}
+		}
+		if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(pages, []bool{true, true, false}) {
+			t.Fatal(got, pages)
+		}
+		// Fewer new messages than a page: one call, no search.
+		two := must(a.AppendBatch(ctx, []Outgoing{{"chan-a", envelope(20)}, {"chan-a", envelope(21)}}))(t)
+		next := must(s.Changes(ctx, cursor))(t)
+		if !reflect.DeepEqual(messageIDs(next.Added), two) || next.More {
+			t.Fatal(next)
+		}
+		want = append(want, two...)
 	}
 }
 
