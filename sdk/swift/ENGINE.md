@@ -72,7 +72,7 @@ partial files no record names go after each sync, with their markers. `GCTests` 
 `collecting` scenario runs it across engines. Interop found two bugs on the way, both fixed in both engines: the owner's
 device refused the writes it carried into a new channel because they arrived before its statement was announced (now
 held, `testOwnCarriedWritesAreMerged`), and a member's device carried writes back into a deleted list after the owner
-purged it. What the spec leaves open (writes replaced within an epoch, tombstones, the roster) is in `GC.md`.
+purged it. Since then (`GC.md`, all implemented): a write of the current epoch goes once a held eligible write on the feed replaced it (an own one only for a later own one) and no message holds it; the owner's devices pack single tombstone messages past `setPackThreshold` (50), and cut old channels' rosters to their epoch's statements; at a key change a deleted record becomes a deletion mark in the inventory, which carries no tombstone, takes no write and is carried forward. A record with no write in the current epoch isn't in `collections` any more (it showed as an empty item before). Signing again follows §11.6 as amended: a later own write, or a write of the new state (listed, or written in the new epoch) whose claim isn't forged, keeps a late write from being signed again; nothing else does.
 
 ## Several processes on one store (Liszto, 2026-11-13)
 

@@ -205,6 +205,7 @@ extension Device {
               member.role != .reader, record != Self.meta || member.role == .owner
         else { throw TandemError.invalid("device: this participant may not write here") }
         guard exposure(cid).isEmpty else { throw TandemError.invalid("device: waiting for the list's owner to change its key") }
+        guard inventory(epoch)?.marks(record) != true else { throw TandemError.invalid("device: the record was deleted") }
         var writes: [Write] = []
         if record == Self.meta, c.records[record]?.value(Bytes("_name".utf8)) == nil {
             writes.append(try signRecord(c, me: me, record: record, field: Bytes("_name".utf8), op: .assign,
@@ -318,7 +319,9 @@ extension Device {
     static func loadCollection(store: Store, hub: Bytes, cid: Bytes, membership r: Record, inventories: [ID: Inventory]) throws -> CollectionState {
         var c = try loadRoster(store: store, hub: hub, cid: cid, membership: r)
         for record in try store.records(scope: cid) where record != Roster.record {
-            c.records[record] = try loadData(store: store, hub: hub, c: c, record: record, inventories: inventories)
+            // A record with no write in the current epoch, unlisted or marked deleted, isn't there.
+            let r = try loadData(store: store, hub: hub, c: c, record: record, inventories: inventories)
+            if !r.kept.isEmpty { c.records[record] = r }
         }
         return c
     }
@@ -365,12 +368,15 @@ extension Device {
     func moveCollection(_ cid: Bytes) throws {
         guard let c = collections[cid], let head = c.head, let current = c.epoch(of: head),
               current == c.genesis || inventory(current) != nil else { return }
-        var moved = c
+        var moved = c, touched: [Bytes] = []
         for record in try store.records(scope: cid) where record != Roster.record {
-            moved.records[record] = try Self.loadData(store: store, hub: pin.hub, c: c, record: record, inventories: inventories)
+            // A record with no write in the current epoch, unlisted or marked deleted, isn't there.
+            let r = try Self.loadData(store: store, hub: pin.hub, c: c, record: record, inventories: inventories)
+            moved.records[record] = r.kept.isEmpty ? nil : r
+            touched.append(record)
         }
         collections[cid] = moved
-        changed(.items(list: cid, records: Array(moved.records.keys)))
+        changed(.items(list: cid, records: touched))
     }
 
     // MARK: Collection channels
@@ -537,6 +543,12 @@ extension Device {
         guard c.counts(w.ref), c.counts(source) else { return .pending([source]) }
         guard let member = s.statement.members.first(where: { $0.uid == w.author }), member.role != .reader,
               w.record != Self.meta || member.role == .owner else { return .invalid("not a writer here") }
+        // A record the epoch's inventory marks deleted has no valid write in it (§8.3); without the inventory that can't
+        // be told yet.
+        if epoch != c.genesis {
+            guard let inv = inventory(epoch) else { return .pending([epoch]) }
+            if inv.marks(w.record) { return .invalid("the record is deleted in this epoch") }
+        }
         var checks = [registry.authorizes(snapshot: w.authorization, certificate: w.certificate),
                       registry.extends(w.authorization, floor: member.floor)]
         if source == epoch {

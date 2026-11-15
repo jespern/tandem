@@ -298,4 +298,35 @@ final class RotationTests: XCTestCase {
         let bobSees = await w.bob.value(list: w.house, record: shelf, field: "title")
         XCTAssertEqual(bobSees, Bytes("Alice's".utf8), "Alice's write is signed again")
     }
+
+    /// §11.6: a late write that a write of the new epoch replaced, by a member who saw it, isn't signed again (it would
+    /// come back as a conflict); the app is told of it as possibly unshared.
+    func testLateWriteReplacedInTheNewEpochIsNotSignedAgain() async throws {
+        let w = try await world()
+        let shelf = w.alice.newRecordID()
+        try await w.alice.setField(list: w.house, record: shelf, field: "title", value: Bytes("Before".utf8))
+        try await w.bob.sync()
+        try await w.bob.rekey(list: w.house)
+        try await w.alice.setField(list: w.house, record: shelf, field: "title", value: Bytes("Late".utf8))
+        let aliceStore = await w.alice.store
+        var late: Write?
+        for row in try aliceStore.writes(scope: w.house, record: shelf) {
+            if case let .record(state) = try Kind1.parse(row.payload, hub: w.founding.pin.hub, scope: w.house),
+               let x = state.writes.first, x.value == Bytes("Late".utf8) { late = x }
+        }
+        // Bob heard of Alice's late edit and replaces it in the new epoch.
+        let c = await w.bob.collections[w.house]!
+        let head = c.head!, epoch = c.epoch(of: head)!
+        let me = await w.bob.me!
+        var repl = try await w.bob.signRecord(c, me: me, record: shelf, field: Bytes("title".utf8), op: .assign,
+                                              value: Bytes("Bob's".utf8), element: nil, head: head, epoch: epoch, after: [])
+        repl.base = join(repl.base, [late!.dot])
+        try repl.sign(with: me.keys.signing)
+        try await w.bob.publish(cid: w.house, epoch: epoch, record: shelf, writes: [repl])
+        try await w.alice.sync(); try await w.bob.sync()
+        let values = await w.bob.item(list: w.house, id: shelf)?.values("title").map { String(decoding: $0.value, as: UTF8.self) }
+        XCTAssertEqual(values, ["Bob's"], "the late write doesn't come back")
+        let unshared = try await w.alice.unshared(list: w.house)
+        XCTAssertEqual(unshared.count, 1, "the app is told of the replaced late write")
+    }
 }

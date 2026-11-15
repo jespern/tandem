@@ -47,9 +47,15 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(expected, d)
         inv = bytes.fromhex(self.v["inventory"])
         self.assertEqual(t.inventory_bytes(t.parse_inventory(inv)), inv)
-        for bad in (inv + b"x", inv[:-1], inv[:20] + bytes(4)):
+        for bad in (inv + b"x", inv[:-1], inv[:20] + bytes(3)):
             with self.assertRaises(ValueError):
                 t.parse_inventory(bad)
+        # A deletion mark (§8.3): an entry with a zero count.
+        marked = bytes.fromhex(self.v["inventory_marked"])
+        entries = t.parse_inventory(marked)
+        self.assertEqual(sorted(len(ws) for ws in entries.values()), [0, 1])
+        self.assertEqual(t.inventory_bytes(entries), marked)
+        self.assertEqual(t.parse_inventory(inv[:20] + bytes(4)), {inv[4:20]: ()})
 
     def test_packs(self):
         """Packs (§10.5): several records' states in one message; the vectors' bad forms are refused."""

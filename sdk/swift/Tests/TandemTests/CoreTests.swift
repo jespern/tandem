@@ -27,6 +27,11 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(got, expected)
         let inv = hex(v["inventory"])
         XCTAssertEqual(try Inventory.parse(inv).bytes(), inv)
+        // A deletion mark (§8.3): an entry with a zero count.
+        let marked = hex(v["inventory_marked"]), parsed = try Inventory.parse(marked)
+        XCTAssertEqual(parsed.entries.values.map(\.count).sorted(), [0, 1])
+        XCTAssertEqual(parsed.entries.keys.filter { parsed.marks($0) }.count, 1)
+        XCTAssertEqual(try parsed.bytes(), marked)
         XCTAssertThrowsError(try Inventory.parse(inv + [0]))
         XCTAssertThrowsError(try Inventory.parse(Array(inv.dropLast())))
     }

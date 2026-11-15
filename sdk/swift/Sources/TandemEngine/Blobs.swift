@@ -279,6 +279,7 @@ extension Device {
               member.role != .reader, record != Self.meta || member.role == .owner
         else { throw TandemError.invalid("device: this participant may not write here") }
         guard exposure(cid).isEmpty else { throw TandemError.invalid("device: waiting for the list's owner to change its key") }
+        guard inventory(epoch)?.marks(record) != true else { throw TandemError.invalid("device: the record was deleted") }
         return (c, me, head, epoch)
     }
 

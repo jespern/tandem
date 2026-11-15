@@ -87,7 +87,9 @@ def generate():
                                                      dict(recs={}), dict(recs=[]))])
     return dict(description="Public Tandem v2 core vectors; control formats awaiting Q28 are absent.",
                 material=plain(m), derived=plain(d), writes=rows, plaintext=plaintext.hex(), symmetric=symmetric.hex(),
-                inbox=inbox.hex(), inventory=t.inventory_bytes(inv).hex(), merges=expected, packs=packs)
+                inbox=inbox.hex(), inventory=t.inventory_bytes(inv).hex(), merges=expected, packs=packs,
+                # A deletion mark (§8.3): an entry with no writes, beside an ordinary one.
+                inventory_marked=t.inventory_bytes({m["record"]: (writes[0].id,), other.record: ()}).hex())
 
 
 if __name__ == "__main__":

@@ -183,3 +183,19 @@ test('a pack of tombstones deletes its records on a device that never saw them o
   const without=fresh();without.ingest(rest);assert.equal(without.records(f.cid).length,2);
   const withPack=fresh();withPack.ingest([...rest,pack]);assert.deepEqual(withPack.records(f.cid),[]);
 });
+test('at a key change a deleted record becomes a mark: not carried, not writable, and carried forward (§8.3)',()=>{
+  const f=fixture(),shelf=t.randomBytes(16),lamp=t.randomBytes(16);
+  for(const r of [shelf,lamp])f.apply(f.state.prepareField(f.cid,r,[{field:'title',op:1,value:Buffer.from('x')}],f.reserve));
+  f.apply(f.state.prepareField(f.cid,shelf,[{field:'',op:4}],f.reserve));
+  const rotate=()=>{const rotation=f.state.prepareCollectionRotation(f.cid,f.reserve);for(const phase of rotation.phases.slice(0,3))f.apply(phase.messages);for(const phase of rotation.phases.slice(3)){if(phase.intent)phase.messages=f.state.prepareIntent(phase.intent,f.reserve,{deliveries:f.messages}).messages;f.apply(phase.messages);}return rotation;};
+  const first=rotate(),epoch=t.unb64u(first.details.epoch),key=t.unb64u(first.details.key),tag=t.collectionTag(key,f.pin.hub,epoch);
+  const inNew=f.messages.filter(m=>m.channel===tag).map(m=>t.openEnvelope(key,f.pin.hub,tag,m.body)).filter(o=>o.kind===1).map(o=>t.parseKind1States(o.plaintext,f.pin.hub,f.cid)).filter(Array.isArray).flat();
+  assert.equal(inNew.some(s=>Buffer.from(s.record).equals(shelf)),false,'no tombstone carried');
+  assert.ok(inNew.some(s=>Buffer.from(s.record).equals(lamp)));
+  assert.deepEqual(f.state.records(f.cid).map(r=>Buffer.from(r).toString('hex')),[lamp.toString('hex')]);
+  assert.throws(()=>f.state.prepareField(f.cid,shelf,[{field:'title',op:1,value:Buffer.from('again')}],f.reserve));
+  const second=rotate(),epoch2=t.unb64u(second.details.epoch),key2=t.unb64u(second.details.key),tag2=t.collectionTag(key2,f.pin.hub,epoch2);
+  const fragments=f.messages.filter(m=>m.channel===tag2).map(m=>t.openEnvelope(key2,f.pin.hub,tag2,m.body)).filter(o=>o.kind===1).map(o=>t.parseKind1States(o.plaintext,f.pin.hub,f.cid)).filter(p=>!Array.isArray(p));
+  const assembled=Buffer.concat(fragments.sort((a,b)=>a.part-b.part).map(p=>p.bytes)),inventory=t.parseInventory(assembled);
+  assert.deepEqual(inventory.get(shelf.toString('hex')),[],'the mark is carried forward');
+});

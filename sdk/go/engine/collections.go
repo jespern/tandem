@@ -436,6 +436,9 @@ func (d *Device) writable(cid, record []byte) (c *collection, me *Me, head, epoc
 	if len(d.exposure(cid)) > 0 {
 		return nil, nil, nil, nil, stmt{}, fail("device: waiting for the list's owner to change its key")
 	}
+	if d.inventories[string(epoch)].Marks(record) {
+		return nil, nil, nil, nil, stmt{}, fail("device: the record was deleted")
+	}
 	return c, me, head, epoch, cur, nil
 }
 
@@ -664,8 +667,13 @@ func loadCollection(store *Store, hub, cid []byte, membership *tandem.Record, in
 		if bytes.Equal(record, rosterRecord) {
 			continue
 		}
-		if c.records[string(record)], err = loadData(store, hub, c, record, inventories); err != nil {
+		r, err := loadData(store, hub, c, record, inventories)
+		if err != nil {
 			return nil, err
+		}
+		// A record with no write in the current epoch, unlisted or marked deleted, isn't there.
+		if len(r.Entries()) > 0 {
+			c.records[string(record)] = r
 		}
 	}
 	return c, nil
@@ -773,10 +781,13 @@ func (d *Device) moveCollection(cid []byte) error {
 		if err != nil {
 			return err
 		}
-		c.records[string(record)] = r
-	}
-	for _, k := range sortedKeys(c.records) {
-		changed = append(changed, []byte(k))
+		changed = append(changed, record)
+		// A record with no write in the current epoch, unlisted or marked deleted, isn't there.
+		if len(r.Entries()) > 0 {
+			c.records[string(record)] = r
+		} else {
+			delete(c.records, string(record))
+		}
 	}
 	d.changedItems(cid, changed...)
 	return nil
@@ -1083,6 +1094,17 @@ func (d *Device) dataWriteValidity(w *tandem.Write, cid, epoch []byte) Validity 
 	member := s.s.member(w.Author)
 	if member == nil || member.Role == Reader || (bytes.Equal(w.Record, metaRecord) && member.Role != Owner) {
 		return invalid("not a writer here")
+	}
+	// A record the epoch's inventory marks deleted has no valid write in it (§8.3); without the
+	// inventory that can't be told yet.
+	if !bytes.Equal(epoch, c.genesis) {
+		inv, ok := d.inventories[string(epoch)]
+		if !ok {
+			return pending(epoch)
+		}
+		if inv.Marks(w.Record) {
+			return invalid("the record is deleted in this epoch")
+		}
 	}
 	checks := []Validity{d.registry.Authorizes(w.Authorization, w.Certificate), d.registry.Extends(w.Authorization, member.Floor)}
 	if bytes.Equal(source, epoch) {

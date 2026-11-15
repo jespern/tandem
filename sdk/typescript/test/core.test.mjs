@@ -25,6 +25,10 @@ test('v2 key derivations and inventories', () => {
   const inventory = hex(v.inventory); assert.deepEqual(t.inventoryBytes(t.parseInventory(inventory)), inventory);
   assert.throws(() => t.parseInventory(Buffer.concat([inventory, Buffer.from([0])])));
   assert.throws(() => t.parseInventory(inventory.subarray(0, -1)));
+  // A deletion mark (§8.3): an entry with a zero count.
+  const marked = hex(v.inventory_marked), entries = t.parseInventory(marked);
+  assert.deepEqual([...entries.values()].map(ws => ws.length).sort(), [0, 1]);
+  assert.deepEqual(t.inventoryBytes(entries), marked);
 });
 
 test('writes, public construction, signatures, payloads and all authority bindings', () => {

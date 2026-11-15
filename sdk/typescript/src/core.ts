@@ -102,7 +102,7 @@ export function inventoryBytes(entries: ReadonlyMap<string, readonly Uint8Array[
   const out: Uint8Array[] = [u32(entries.size)];
   for (const [hex, ws] of [...entries].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
     if (!/^[0-9a-f]{32}$/.test(hex)) throw new Error('invalid inventory record ID');
-    const sorted = ws.map(w => bytes(w, 32)).sort(cmp); if (!sorted.length || sorted.some((w, i) => i > 0 && eq(w, sorted[i - 1]!))) throw new Error('empty or duplicate inventory entry');
+    const sorted = ws.map(w => bytes(w, 32)).sort(cmp); if (sorted.some((w, i) => i > 0 && eq(w, sorted[i - 1]!))) throw new Error('duplicate inventory entry'); // none: a deletion mark (§8.3)
     out.push(Buffer.from(hex, 'hex'), u32(sorted.length), ...sorted);
   } return Buffer.concat(out);
 }
@@ -110,7 +110,7 @@ export function parseInventory(data: Uint8Array): Map<string, Buffer[]> {
   const b = Buffer.from(data); let i = 0; const take = (n: number): Buffer => { if (n < 0 || n > b.length - i) throw new Error('short inventory'); const out = b.subarray(i, i + n); i += n; return Buffer.from(out); };
   const count = () => take(4).readUInt32BE(); const n = count(), out = new Map<string, Buffer[]>(); let previous: Buffer | null = null;
   for (let r = 0; r < n; r++) { const rec = take(16); if (previous && cmp(previous, rec) >= 0) throw new Error('records not sorted and unique'); previous = rec;
-    const size = count(); if (!size || size > Math.floor((b.length - i) / 32)) throw new Error('invalid inventory write count'); const ws: Buffer[] = [];
+    const size = count(); if (size > Math.floor((b.length - i) / 32)) throw new Error('invalid inventory write count'); /* zero: a deletion mark (§8.3) */ const ws: Buffer[] = [];
     for (let k = 0; k < size; k++) { const w = take(32); if (ws.length && cmp(ws[ws.length - 1]!, w) >= 0) throw new Error('writes not sorted and unique'); ws.push(w); } out.set(rec.toString('hex'), ws); }
   if (i !== b.length) throw new Error('trailing inventory bytes'); return out;
 }

@@ -27,7 +27,7 @@ extension Device {
             for record in try store.records(scope: cid) where record != Roster.record {
                 let fresh = try Self.loadData(store: store, hub: pin.hub, c: c, record: record, inventories: inventories)
                 guard Set(fresh.kept.map(\.id)) != Set(c.records[record]?.kept.map(\.id) ?? []) else { continue }
-                updated.records[record] = fresh
+                updated.records[record] = fresh.kept.isEmpty ? nil : fresh
                 changed(.items(list: cid, records: [record]))
                 any = true
             }
@@ -123,6 +123,7 @@ public struct ItemWriter: Sendable {
     @discardableResult
     public func write(record: Bytes, _ changes: [Change], hub: (any PushStore)?, timeout: Duration = .seconds(5)) async throws -> Bool {
         guard record != Roster.record, record != Device.meta || role == .owner else { throw Refusal.cannotWrite }
+        guard inventories[epoch]?.marks(record) != true else { throw Refusal.cannotWrite }   // deleted at a key change (§8.3)
         guard let head = list.head else { throw Refusal.closed }
         var r = try Device.loadData(store: store, hub: pin.hub, c: list, record: record, inventories: inventories)
         var writes: [Write] = []

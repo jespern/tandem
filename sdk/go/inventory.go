@@ -8,6 +8,13 @@ import (
 
 type Inventory map[string][][]byte // key: string(recordID)
 
+// Marks reports whether the inventory marks a record deleted in its epoch: an entry with no
+// writes (§8.3).
+func (inv Inventory) Marks(record []byte) bool {
+	ws, ok := inv[string(record)]
+	return ok && len(ws) == 0
+}
+
 // Bytes is the canonical inventory encoding: u32(recordCount), then entries
 // sorted by record ID, each recordID || u32(writeCount) || sorted write IDs.
 func (inv Inventory) Bytes() ([]byte, error) {
@@ -21,10 +28,7 @@ func (inv Inventory) Bytes() ([]byte, error) {
 	slices.Sort(recs)
 	b := u32(nil, uint32(len(recs)))
 	for _, r := range recs {
-		ws := slices.Clone(inv[r])
-		if len(ws) == 0 {
-			return nil, errors.New("tandem: an inventory entry lists at least one write")
-		}
+		ws := slices.Clone(inv[r]) // none: a deletion mark (§8.3)
 		slices.SortFunc(ws, bytes.Compare)
 		for i, w := range ws {
 			if len(w) != 32 {
@@ -68,10 +72,7 @@ func ParseInventory(b []byte) (Inventory, error) {
 			return nil, bad
 		}
 		prev = r
-		if be32(c) == 0 {
-			return nil, bad // every entry lists at least one write
-		}
-		var ws [][]byte
+		ws := [][]byte{} // none: a deletion mark (§8.3)
 		for range be32(c) {
 			w, ok := take(32)
 			if !ok || len(ws) > 0 && bytes.Compare(ws[len(ws)-1], w) >= 0 {

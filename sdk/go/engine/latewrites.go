@@ -171,6 +171,13 @@ func (d *Device) resign(ctx context.Context, cid []byte, me *Me) error {
 			}
 			continue
 		}
+		// A record the new inventory marks deleted takes no write (§8.3): nothing to sign again.
+		if inv.Marks(x.record) {
+			if err := d.store.SetValue(done, []byte{1}); err != nil {
+				return err
+			}
+			continue
+		}
 		// Decided once every listed write of the record is here: one of them may replace it.
 		waiting := false
 		for _, id := range inv[string(x.record)] {
@@ -180,9 +187,9 @@ func (d *Device) resign(ctx context.Context, cid []byte, me *Me) error {
 			continue
 		}
 		// Not signed again when a later write of this installation replaced it, which carries the
-		// change, or a listed write did, unless only through a claim about this installation beyond
-		// any dot it issued, which is forged (§11.6). A write the inventory doesn't list replaces
-		// nothing in the new epoch, whoever wrote it.
+		// change, or a write of the new state did, listed or written in the new epoch, unless only
+		// through a claim about this installation beyond any dot it issued, which is forged (§11.6).
+		// A write of the replaced epoch the inventory doesn't list replaces nothing, whoever wrote it.
 		ownLater, genuine := false, false
 		for _, o := range all {
 			if !bytes.Equal(o.record, x.record) || !tandem.Supersedes(o.entry, x.entry) {
@@ -190,7 +197,7 @@ func (d *Device) resign(ctx context.Context, cid []byte, me *Me) error {
 			}
 			if o.entry.W.Dot.Device == me.Installation && dotLess(x.entry.W.Dot, o.entry.W.Dot) {
 				ownLater = true
-			} else if containsID(inv[string(x.record)], o.entry.ID) && !d.forged(o.entry.W, me) {
+			} else if (o.entry.Epoch == string(current) || containsID(inv[string(x.record)], o.entry.ID)) && !d.forged(o.entry.W, me) {
 				genuine = true
 			}
 		}

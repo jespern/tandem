@@ -382,3 +382,42 @@ func TestRotationOwnWriteReplacedOnlyByAnUnlistedWriteIsSignedAgain(t *testing.T
 		t.Fatalf("Alice's write is signed again; Bob sees %q", v)
 	}
 }
+
+// §11.6: a late write that a write of the new epoch replaced, by a member who saw it, isn't signed
+// again (it would come back as a conflict); the app is told of it as possibly unshared.
+func TestRotationLateWriteReplacedInTheNewEpochIsNotSignedAgain(t *testing.T) {
+	w := newRotWorld(t)
+	shelf := NewRecordID()
+	must(t, w.alice.SetField(bg, w.house, shelf, "title", []byte("Before")))
+	syncAll(t, w.bob)
+	must(t, w.bob.Rekey(bg, w.house))
+	must(t, w.alice.SetField(bg, w.house, shelf, "title", []byte("Late")))
+	var late *tandem.Write
+	for _, row := range try(w.alice.store.Writes(w.house, shelf)) {
+		if wr := storedWrite(row.Payload, w.f.Pin.Hub, w.house); wr != nil && string(wr.Value) == "Late" {
+			late = wr
+		}
+	}
+	// Bob heard of Alice's late edit and replaces it in the new epoch.
+	release := w.bob.begin()
+	c := w.bob.collections[string(w.house)]
+	head := c.head()
+	epoch := c.epochOf(head)
+	repl, err := w.bob.signRecord(c, w.bob.me, shelf, "title", tandem.OpAssign, []byte("Bob's"), nil, head, epoch, nil)
+	must(t, err)
+	repl.Base = tandem.Join(repl.Base, tandem.VV{late.Dot})
+	must(t, repl.Sign(w.bob.me.Keys.Signing))
+	must(t, w.bob.publish(bg, w.house, epoch, shelf, []*tandem.Write{repl}))
+	release()
+	syncAll(t, w.alice, w.bob)
+	it, ok := w.bob.Item(w.house, shelf)
+	if !ok {
+		t.Fatal("no shelf")
+	}
+	if vs := it.Values("title"); len(vs) != 1 || string(vs[0].Value) != "Bob's" {
+		t.Fatal("the late write came back", vs)
+	}
+	if len(w.alice.Unshared(w.house)) != 1 {
+		t.Fatal("the app is told of the replaced late write")
+	}
+}

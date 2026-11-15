@@ -212,17 +212,21 @@ extension Device {
         else { throw TandemError.invalid("rotate: not a list this participant owns, or it can't sync any more") }
         if let note = flightNote(cid) { throw ChangeError.pending(note) }
 
-        // Step 1: the state to carry over, tombstones included, and what the current inventory lists unseen (§8.3).
-        var entries: [Bytes: Set<Bytes>] = [:]
+        // Step 1: the state to carry over, and what the current inventory lists unseen (§8.3). A deleted record is not
+        // carried: it is marked, and every mark of the current inventory is carried forward.
+        var entries: [Bytes: Set<Bytes>] = [:], marks = Set<Bytes>()
         var carried: [Bytes: [Write]] = [:]
         for (rid, r) in c.records where !r.kept.isEmpty {
+            if r.deleted { marks.insert(rid); continue }
             entries[rid, default: []].formUnion(r.kept.map(\.id))
             carried[rid] = r.kept.map(\.write)
         }
         for (rid, ids) in inventory(epoch)?.entries ?? [:] {
+            if ids.isEmpty { marks.insert(rid) }
             for id in ids where try !store.hasWrite(id) { entries[rid, default: []].insert(id) }
         }
-        let inventory = Inventory(entries.mapValues { Array($0) })
+        var inventory = Inventory(entries.mapValues { Array($0) })
+        for rid in marks { inventory.entries[rid] = [] }
         try crash("1:chosen")
 
         // Step 2: the new key, floors afresh, the statement and inventory; journal, then the note.

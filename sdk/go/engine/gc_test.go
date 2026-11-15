@@ -536,3 +536,67 @@ func TestGCTombstonesArePacked(t *testing.T) {
 		}
 	}
 }
+
+// §8.3, §12.3: at a key change a deleted record becomes a mark, its tombstone isn't carried, a late
+// edit of it isn't signed again, writing to it is refused, the mark is carried forward, and a new
+// device never sees the record.
+func TestGCDeletedRecordsBecomeMarks(t *testing.T) {
+	w := newRotWorld(t)
+	shelf := NewRecordID()
+	must(t, w.alice.SetField(bg, w.house, shelf, "title", []byte("Shelf")))
+	syncAll(t, w.carol)
+	must(t, w.alice.DeleteRecord(bg, w.house, shelf))
+	syncAll(t, w.bob)
+	must(t, w.bob.Rekey(bg, w.house))
+	// Carol, not yet aware of the delete or the key change, edits the shelf.
+	must(t, w.carol.SetField(bg, w.house, shelf, "title", []byte("Late")))
+	syncAll(t, w.alice, w.carol, w.bob, w.carol)
+	epoch, _ := epochKey(w.bob, w.house)
+	for _, d := range []*Device{w.alice, w.bob, w.carol} {
+		d.mu.RLock()
+		marked := d.inventories[string(epoch)].Marks(shelf)
+		d.mu.RUnlock()
+		if !marked {
+			t.Fatal("the new inventory marks the deleted record")
+		}
+		if _, ok := d.Item(w.house, shelf); ok {
+			t.Fatal("a marked record is gone")
+		}
+		if n := len(try(d.store.Writes(w.house, shelf))); n != 0 {
+			t.Fatalf("%d writes of a marked record kept", n)
+		}
+	}
+	if n := messagesOf(t, w.hub, w.bob, w.house, shelf); n != 0 {
+		t.Fatalf("%d messages of the marked record in the new channel: no tombstone carried, no late edit signed again", n)
+	}
+	if err := w.alice.SetField(bg, w.house, shelf, "title", []byte("Again")); err == nil {
+		t.Fatal("writing to a marked record is refused")
+	}
+	// A write to it that another device signed anyway, as an older client would, isn't valid.
+	w.bob.mu.Lock()
+	c := w.bob.collections[string(w.house)]
+	head := c.head()
+	forged, err := w.bob.signRecord(c, w.bob.me, shelf, "title", tandem.OpAssign, []byte("Forged"), nil, head, c.epochOf(head), nil)
+	w.bob.mu.Unlock()
+	must(t, err)
+	w.alice.mu.RLock()
+	v := w.alice.dataWriteValidity(forged, w.house, epoch)
+	w.alice.mu.RUnlock()
+	if v.State != Invalid {
+		t.Fatal("a write to a marked record is invalid", v)
+	}
+	must(t, w.bob.Rekey(bg, w.house))
+	syncAll(t, w.alice, w.carol, w.bob)
+	epoch, _ = epochKey(w.bob, w.house)
+	w.bob.mu.RLock()
+	carried := w.bob.inventories[string(epoch)].Marks(shelf)
+	w.bob.mu.RUnlock()
+	if !carried {
+		t.Fatal("the mark is carried forward")
+	}
+	laptop := open(t, w.f, w.alice.keys, MemoryStore(), w.hub.Connect())
+	syncAll(t, laptop, laptop)
+	if got := titles(laptop, w.house); !sameSet(got, set("Milk", "Bread")) {
+		t.Fatal("a new device", got)
+	}
+}

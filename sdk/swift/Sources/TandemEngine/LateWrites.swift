@@ -85,17 +85,20 @@ extension Device {
             guard try store.value(done) == nil else { continue }
             // Decided without signing: marked now. A write signed again is marked when it is stored, below.
             if inv.entries[record]?.contains(x.id) == true { try store.setValue(done, [1]); continue }   // carried over
+            // A record the new inventory marks deleted takes no write (§8.3): nothing to sign again.
+            if inv.marks(record) { try store.setValue(done, [1]); continue }
             // Decided once every listed write of the record is here: one of them may replace it.
             if try (inv.entries[record] ?? []).contains(where: { try !store.hasWrite($0) }) { continue }
-            // Not signed again when a later write of this installation replaced it, which carries the change, or a
-            // listed write did, unless only through a claim about this installation beyond any dot it issued, which
-            // is forged (§11.6). A write the inventory doesn't list replaces nothing in the new epoch, whoever wrote it.
+            // Not signed again when a later write of this installation replaced it, which carries the change, or a write of
+            // the new state did, listed or written in the new epoch, unless only through a claim about this installation
+            // beyond any dot it issued, which is forged (§11.6). A write of the replaced epoch the inventory doesn't list
+            // replaces nothing, whoever wrote it.
             var ownLater = false, genuine = false
             for (r, o) in all where r == record && supersedes(o, x) {
                 if o.write.dot.device == me.installation
                     && (o.write.dot.millis, o.write.dot.counter) > (x.write.dot.millis, x.write.dot.counter) {
                     ownLater = true
-                } else if inv.entries[record]?.contains(o.id) == true, try !forged(o.write, me: me) {
+                } else if o.epoch == current || inv.entries[record]?.contains(o.id) == true, try !forged(o.write, me: me) {
                     genuine = true
                 }
             }

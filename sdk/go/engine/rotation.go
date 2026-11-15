@@ -372,8 +372,10 @@ func (d *Device) change(ctx context.Context, cid []byte, what string, edit func(
 		return &PendingError{*note}
 	}
 
-	// Step 1: the state to carry over, tombstones included, and what the current inventory lists unseen (§8.3).
+	// Step 1: the state to carry over, and what the current inventory lists unseen (§8.3). A deleted
+	// record is not carried: it is marked, and every mark of the current inventory is carried forward.
 	entries := map[string]map[string]bool{}
+	marks := map[string]bool{}
 	add := func(r string, id []byte) {
 		if entries[r] == nil {
 			entries[r] = map[string]bool{}
@@ -386,12 +388,19 @@ func (d *Device) change(ctx context.Context, cid []byte, what string, edit func(
 		if len(es) == 0 {
 			continue
 		}
+		if r.Deleted() {
+			marks[rid] = true
+			continue
+		}
 		for _, e := range es {
 			add(rid, e.ID)
 		}
 		carried[rid] = keptWrites(r)
 	}
 	for rid, ids := range d.inventories[string(epoch)] {
+		if len(ids) == 0 {
+			marks[rid] = true
+		}
 		for _, id := range ids {
 			if !d.store.HasWrite(id) {
 				add(rid, id)
@@ -399,6 +408,9 @@ func (d *Device) change(ctx context.Context, cid []byte, what string, edit func(
 		}
 	}
 	inv := inventoryOf(entries)
+	for rid := range marks {
+		inv[rid] = [][]byte{}
+	}
 	if err := d.crash("1:chosen"); err != nil {
 		return err
 	}

@@ -25,6 +25,7 @@ type coreVectors struct {
 		ID      string
 	} `json:"writes"`
 	Plaintext, Symmetric, Inbox, Inventory string
+	Marked                                 string `json:"inventory_marked"`
 	Merges                                 []struct {
 		Indexes []int
 		Kept    []string
@@ -219,6 +220,20 @@ func TestEnvelopeInteroperability(t *testing.T) {
 	}
 	if _, e = ParseInventory(append(unhex(v.Inventory), 0)); e == nil {
 		t.Fatal("accepted trailing inventory data")
+	}
+	// A deletion mark (§8.3): an entry with a zero count.
+	marked, e := ParseInventory(unhex(v.Marked))
+	if e != nil || len(marked) != 2 {
+		t.Fatal("marked inventory", e)
+	}
+	marks := 0
+	for r := range marked {
+		if marked.Marks([]byte(r)) {
+			marks++
+		}
+	}
+	if again, e := marked.Bytes(); marks != 1 || e != nil || !bytes.Equal(again, unhex(v.Marked)) {
+		t.Fatal("marks", marks, e)
 	}
 	if dir := os.Getenv("TANDEM_INTEROP_DIR"); dir != "" {
 		signature := ed25519.Sign(ed25519.NewKeyFromSeed(m("signing_seed")), pt)

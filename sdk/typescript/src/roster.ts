@@ -115,6 +115,8 @@ export class CollectionPolicy {
   writes(at:Uint8Array):Write[]{return this.chain(at).map(id=>{const w=this.#rows.get(b64u(id))!.write,parsed=parseKind1(recordPayload(w.record,[w]),w.hub,w.scope);if(!('writes'in parsed))throw new Error('roster is not a write');return parsed.writes[0]!;});}
   isAnnounced(epoch:Uint8Array):boolean{return !!this.genesis&&(eq(epoch,this.genesis)||this.#announced.has(b64u(epoch)));}
   listed(epoch:Uint8Array,w:Write):boolean{return this.#inventories.get(b64u(epoch))?.get(Buffer.from(w.record).toString('hex'))?.some(id=>eq(id,writeID(w)))??false;}
+  /** Whether the epoch's inventory marks a record deleted: an entry with no writes (§8.3). */
+  marks(epoch:Uint8Array,record:Uint8Array):boolean{return this.#inventories.get(b64u(epoch))?.get(Buffer.from(record).toString('hex'))?.length===0;}
   #precedes(ancestor:Uint8Array,descendant:Uint8Array):boolean{let row=this.#rows.get(b64u(descendant));const seen=new Set<string>();while(row){if(eq(row.write.ref,ancestor))return true;const key=b64u(row.id);if(seen.has(key))break;seen.add(key);row=this.#rows.get(b64u(row.write.ref));}return false;}
   sourceValidity(w:Write):Validity{
     const row=this.#rows.get(b64u(w.ref));if(!row)return hold(w.ref);const source=this.epoch(row.id);
@@ -132,6 +134,8 @@ export class CollectionPolicy {
     if(!this.#counts(row)||!this.#counts(this.#rows.get(b64u(source))!))return hold(source);
     const member=row.statement.members.find(m=>eq(m.uid,w.author));if(!member||member.role==='reader'||eq(w.record,META_RECORD)&&member.role!=='owner')return bad('not a writer here');
     if(w.op===4&&(eq(w.record,META_RECORD)||eq(w.record,ROSTER_RECORD)))return bad('named records cannot be deleted');
+    // A record the epoch's inventory marks deleted has no valid write in it (§8.3); without the inventory that can't be told yet.
+    if(!eq(channel,this.genesis!)){if(!this.#inventories.has(b64u(channel)))return hold(channel);if(this.marks(channel,w.record))return bad('the record is deleted in this epoch');}
     const checks=[this.#registry.authorizes(w.authorization,w.certificate),this.#registry.extendsFloor(w.authorization,member.floor)];
     if(eq(source,channel)){
       const successors=[...this.#rows.values()].filter(child=>this.#starts(child)&&this.#announced.has(b64u(child.id))&&this.epoch(child.write.ref)&&eq(this.epoch(child.write.ref)!,source));

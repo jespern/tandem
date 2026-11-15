@@ -232,8 +232,8 @@ def inventory_bytes(entries: dict[bytes, tuple[bytes, ...]]) -> bytes:
     out = struct.pack(">I", len(entries))
     for rec, writes in sorted(entries.items()):
         _bytes(rec, 16)
-        if not writes or len(set(writes)) != len(writes):
-            raise ValueError("empty or duplicate inventory entry")
+        if len(set(writes)) != len(writes):  # no writes: a deletion mark (§8.3)
+            raise ValueError("duplicate inventory entry")
         out += rec + struct.pack(">I", len(writes))
         out += b"".join(_bytes(w, 32) for w in sorted(writes))
     return out
@@ -256,7 +256,7 @@ def parse_inventory(data: bytes) -> dict[bytes, tuple[bytes, ...]]:
         if rec <= previous:
             raise ValueError("records not sorted and unique")
         n = count()
-        if n == 0 or n > (len(data) - i) // 32:
+        if n > (len(data) - i) // 32:  # zero: a deletion mark (§8.3)
             raise ValueError("invalid inventory write count")
         ws = tuple(take(32) for _ in range(n))
         if any(a >= b for a, b in zip(ws, ws[1:])):

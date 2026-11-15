@@ -338,6 +338,51 @@ final class GCTests: XCTestCase {
         }
     }
 
+    /// §8.3, §12.3: at a key change a deleted record becomes a mark, its tombstone isn't carried, a late edit of it isn't
+    /// signed again, writing to it is refused, a write to it signed anyway is invalid, the mark is carried forward, and a
+    /// new device never sees the record.
+    func testDeletedRecordsBecomeMarks() async throws {
+        let w = try await world()
+        let shelf = w.alice.newRecordID()
+        try await w.alice.setField(list: w.house, record: shelf, field: "title", value: Bytes("Shelf".utf8))
+        try await w.carol.sync()
+        try await w.alice.deleteRecord(list: w.house, record: shelf)
+        try await w.bob.sync()
+        try await w.bob.rekey(list: w.house)
+        // Carol, not yet aware of the delete or the key change, edits the shelf.
+        try await w.carol.setField(list: w.house, record: shelf, field: "title", value: Bytes("Late".utf8))
+        try await sync(w.alice, w.carol, w.bob, w.carol)
+        var c = await w.bob.collections[w.house]!
+        var epoch = c.epoch(of: c.head!)!
+        for d in [w.alice, w.bob, w.carol] {
+            let marked = await d.inventory(epoch)?.marks(shelf) == true
+            XCTAssertTrue(marked, "the new inventory marks the deleted record")
+            let item = await d.item(list: w.house, id: shelf)
+            XCTAssertNil(item, "a marked record is gone")
+            let n = try await writes(d, w.house, shelf)
+            XCTAssertEqual(n, 0, "writes of a marked record kept")
+        }
+        let n = try await messagesOf(w.hub, w.bob, w.house, shelf)
+        XCTAssertEqual(n, 0, "no tombstone carried, no late edit signed again")
+        do { try await w.alice.setField(list: w.house, record: shelf, field: "title", value: Bytes("Again".utf8)); XCTFail("refused") } catch {}
+        // A write to it that another device signed anyway, as an older client would, isn't valid.
+        let me = try some(await w.bob.me)
+        let forged = try await w.bob.signRecord(c, me: me, record: shelf, field: Bytes("title".utf8), op: .assign,
+                                                value: Bytes("Forged".utf8), element: nil, head: c.head!, epoch: epoch, after: [])
+        let validity = await w.alice.dataWriteValidity(forged, cid: w.house, epoch: epoch)
+        XCTAssertFalse(validity.isValid, "a write to a marked record is invalid")
+        try await w.bob.rekey(list: w.house)
+        try await sync(w.alice, w.carol, w.bob)
+        c = await w.bob.collections[w.house]!
+        epoch = c.epoch(of: c.head!)!
+        let carried = await w.bob.inventory(epoch)?.marks(shelf) == true
+        XCTAssertTrue(carried, "the mark is carried forward")
+        let laptop = try Device.open(genesis: w.f.genesis, directoryKey: w.f.directoryKey, keys: w.aliceKeys, store: try Store(path: ":memory:"), hub: await w.hub.connect())
+        try await sync(laptop, laptop)
+        let fresh = await titles(laptop, w.house)
+        XCTAssertEqual(fresh, ["Milk", "Bread"], "a new device")
+    }
+
     // MARK: Files
 
     struct BlobWorld { let hub: MemoryHub; let blobs: MemoryBlobHub; let bob: Device; let alice: Device; let list: Bytes }

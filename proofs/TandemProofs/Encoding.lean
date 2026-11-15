@@ -335,4 +335,103 @@ theorem inventory_bytes_inj {P Q : Finset (List Byte × List Byte)} (hP : PairsW
 theorem empty_inventory : inventoryBytes (canon ∅) = [0, 0, 0, 0] := by
   simp [inventoryBytes, canon, counted, be]
 
+
+/-! ### Deletion marks (§8.3)
+
+At a key change a deleted record is listed with no writes: its entry has a write count of zero.
+An inventory is then a set of (record, write) pairs and a set of marked records, no record both. -/
+
+/-- The canonical inventory with marks: every listed or marked record once, sorted; a marked
+record's entry holds no writes. -/
+def canonM (P : Finset (List Byte × List Byte)) (M : Finset (List Byte)) :
+    List (List Byte × List (List Byte)) :=
+  (((P.image Prod.fst) ∪ M).sort (· ≤ ·)).map fun r =>
+    (r, ((P.filter (·.1 = r)).image Prod.snd).sort (· ≤ ·))
+
+def MarksWF (P : Finset (List Byte × List Byte)) (M : Finset (List Byte)) : Prop :=
+  ((P.image Prod.fst) ∪ M).card < 256 ^ 4 ∧ P.card < 256 ^ 4 ∧
+    (∀ p ∈ P, p.1.length = 16 ∧ p.2.length = 32) ∧ (∀ r ∈ M, r.length = 16) ∧
+    ∀ r ∈ M, ∀ p ∈ P, p.1 ≠ r
+
+theorem mem_of_canonM {P : Finset (List Byte × List Byte)} {M : Finset (List Byte)}
+    {r w : List Byte} : (r, w) ∈ P ↔ ∃ e ∈ canonM P M, e.1 = r ∧ w ∈ e.2 := by
+  constructor
+  · intro h
+    refine ⟨_, List.mem_map.2 ⟨r, Finset.mem_sort _ |>.2
+      (Finset.mem_union_left _ (Finset.mem_image.2 ⟨(r, w), h, rfl⟩)), rfl⟩, rfl, ?_⟩
+    exact Finset.mem_sort _ |>.2 (Finset.mem_image.2 ⟨(r, w), Finset.mem_filter.2 ⟨h, rfl⟩, rfl⟩)
+  · rintro ⟨e, he, rfl, hw⟩
+    obtain ⟨r', -, rfl⟩ := List.mem_map.1 he
+    obtain ⟨p, hp, hpw⟩ := Finset.mem_image.1 ((Finset.mem_sort _).1 hw)
+    obtain ⟨hpP, hpr⟩ := Finset.mem_filter.1 hp
+    obtain ⟨p1, p2⟩ := p
+    simp only at hpr hpw
+    subst hpr hpw
+    simpa using hpP
+
+theorem mark_of_canonM {P : Finset (List Byte × List Byte)} {M : Finset (List Byte)}
+    (hd : ∀ r ∈ M, ∀ p ∈ P, p.1 ≠ r) {r : List Byte} :
+    r ∈ M ↔ ∃ e ∈ canonM P M, e.1 = r ∧ e.2 = [] := by
+  constructor
+  · intro h
+    refine ⟨_, List.mem_map.2 ⟨r, Finset.mem_sort _ |>.2 (Finset.mem_union_right _ h), rfl⟩, rfl, ?_⟩
+    rw [List.eq_nil_iff_forall_not_mem]
+    intro w hw
+    obtain ⟨p, hp, -⟩ := Finset.mem_image.1 ((Finset.mem_sort _).1 hw)
+    obtain ⟨hpP, hpr⟩ := Finset.mem_filter.1 hp
+    exact hd r h p hpP hpr
+  · rintro ⟨e, he, rfl, hnil⟩
+    obtain ⟨r', hr', rfl⟩ := List.mem_map.1 he
+    rcases Finset.mem_union.1 ((Finset.mem_sort _).1 hr') with hr | hr
+    · obtain ⟨p, hp, rfl⟩ := Finset.mem_image.1 hr
+      have : p.2 ∈ ((P.filter (·.1 = p.1)).image Prod.snd).sort (· ≤ ·) :=
+        Finset.mem_sort _ |>.2 (Finset.mem_image.2 ⟨p, Finset.mem_filter.2 ⟨hp, rfl⟩, rfl⟩)
+      simp only at hnil
+      rw [hnil] at this
+      exact absurd this (List.not_mem_nil)
+    · exact hr
+
+theorem canonM_inj {P Q : Finset (List Byte × List Byte)} {M N : Finset (List Byte)}
+    (hP : ∀ r ∈ M, ∀ p ∈ P, p.1 ≠ r) (hQ : ∀ r ∈ N, ∀ p ∈ Q, p.1 ≠ r)
+    (h : canonM P M = canonM Q N) : P = Q ∧ M = N := by
+  refine ⟨?_, ?_⟩
+  · ext ⟨r, w⟩
+    rw [mem_of_canonM (M := M), mem_of_canonM (M := N), h]
+  · ext r
+    rw [mark_of_canonM hP, mark_of_canonM hQ, h]
+
+theorem canonM_wf {P : Finset (List Byte × List Byte)} {M : Finset (List Byte)}
+    (hP : MarksWF P M) : (canonM P M).length < 256 ^ 4 ∧ ∀ e ∈ canonM P M, e.1.length = 16 ∧
+      (e.2.length < 256 ^ 4 ∧ ∀ w ∈ e.2, w.length = 32) := by
+  obtain ⟨hcard, hPcard, hpairs, hmarks, -⟩ := hP
+  refine ⟨?_, ?_⟩
+  · simpa [canonM, List.length_map, Finset.length_sort] using hcard
+  · intro e he
+    simp only [canonM, List.mem_map, Finset.mem_sort] at he
+    obtain ⟨r, hr, rfl⟩ := he
+    refine ⟨?_, ?_, ?_⟩
+    · rcases Finset.mem_union.1 hr with hr | hr
+      · obtain ⟨p, hp, rfl⟩ := Finset.mem_image.1 hr
+        exact (hpairs p hp).1
+      · exact hmarks r hr
+    · simp only [Finset.length_sort]
+      exact lt_of_le_of_lt card_le_of_sub hPcard
+    · intro w hw
+      simp only [Finset.mem_sort, Finset.mem_image, Finset.mem_filter] at hw
+      obtain ⟨q, ⟨hq, -⟩, rfl⟩ := hw
+      exact (hpairs q hq).2
+
+/-- **With marks, the inventory bytes still determine the inventory**: the set of (record, write)
+pairs and the set of marked records. -/
+theorem inventory_marks_inj {P Q : Finset (List Byte × List Byte)} {M N : Finset (List Byte)}
+    (hP : MarksWF P M) (hQ : MarksWF Q N)
+    (h : inventoryBytes (canonM P M) = inventoryBytes (canonM Q N)) : P = Q ∧ M = N := by
+  have := selfDelim_counted 4 selfDelim_invEntry (canonM P M) (canonM Q N) [] [] (canonM_wf hP)
+    (canonM_wf hQ) (by simpa [inventoryBytes] using h)
+  exact canonM_inj hP.2.2.2.2 hQ.2.2.2.2 this.1
+
+/-- Without marks the format is the one before (§8.3): old inventories read the same. -/
+theorem canonM_empty (P : Finset (List Byte × List Byte)) : canonM P ∅ = canon P := by
+  simp [canonM, canon]
+
 end Tandem.Enc

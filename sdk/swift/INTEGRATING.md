@@ -236,8 +236,11 @@ if let info = await device.blob(list: list, record: id, name: "photo") {        
 
 Nothing for the app to do; a device keeps itself and the hub from growing where the protocol allows. After each sync:
 
-- Edits replaced before a key change are dropped once the change is through (an edit's history otherwise stays until the
-  next key change; `GC.md` proposes more).
+- Replaced edits are dropped once their replacement is on the hub (a device keeps its own edits that someone else
+  replaced until the next key change). The mailbox keeps about one message per item.
+- Deleted items: on the owner's devices, many small "deleted" messages are packed into a few (`setPackThreshold(_:)`,
+  50 by default); at the next key change a deleted item becomes a 20-byte mark and stops costing a message at all.
+  Writing to an item deleted that way throws.
 - A list that was deleted, or that this user was removed from, stays readable on the device for 30 days from when the
   device learned of it, so the app can offer to rescue what is in it. Then it goes, and `goneLists()` lists it.
   `setRetention(_:)` changes the period; a negative value keeps such lists for good. The owner's device also deletes
