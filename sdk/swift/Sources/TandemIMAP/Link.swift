@@ -2,7 +2,7 @@ import Foundation
 import Synchronization
 import Tandem
 
-/// The module's one timer: the IDLE refresh (RFC 2177), Gmail's IDLE restart and the
+/// The module's one timer: the IDLE refresh (RFC 2177), a configured IDLE restart period and the
 /// reconnect backoff (§10.3). Nothing here reconciles on a timer.
 func pause(_ duration: Duration) async throws { try await Task.sleep(for: duration) } // allowed-timer: §10.3
 

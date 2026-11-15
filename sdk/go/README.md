@@ -49,11 +49,12 @@ session, err := tandem.NewSession(store, savedCursor, 64)
 It behaves as the Swift binding does: one connection runs commands and idles between
 them (`SeparateWatchConnection` idles on a second); QRESYNC when offered, otherwise
 `UID SEARCH ALL`; MULTIAPPEND and LITERAL+ for `AppendBatch`; a NOOP in the same write
-as every IDLE; on Gmail (`X-GM-EXT-1`) IDLE restarts every 3 s and destroyed messages
+as every IDLE; on Gmail (`X-GM-EXT-1`) destroyed messages
 leave All Mail through Trash; a lost connection is retried with backoff and reported
 as one wake once IDLE runs again. IDs (`<uidvalidity>.<uid>`), cursors and the §10.4
-message are the same as Swift's. Its only timers are the IDLE refresh, Gmail's IDLE
-restart, reconnect backoff and a deadline on connecting and logging in
+message are the same as Swift's. Its only timers are the IDLE refresh, an IDLE
+restart period if `Config.IdleRestart` sets one (none by default, on Gmail too), reconnect
+backoff and a deadline on connecting and logging in
 (`Config.ConnectTimeout`, 30 s; running out counts as a lost connection), marked
 `allowed-timer:`. `Config.Trace` receives the
 protocol lines without login credentials.

@@ -633,7 +633,7 @@ func (l *link) arm() {
 	l.stopTimer()
 	l.timerGen++
 	gen := l.timerGen
-	l.timer = time.AfterFunc(l.restartPeriod(), func() { l.post(event{evRefresh, gen}) }) // allowed-timer: IDLE refresh (RFC 2177, 29 min) and Gmail's 3 s IDLE restart (§10.3)
+	l.timer = time.AfterFunc(l.restartPeriod(), func() { l.post(event{evRefresh, gen}) }) // allowed-timer: IDLE refresh (RFC 2177, 29 min) and a configured IDLE restart period (§10.3)
 }
 
 func (l *link) stopTimer() {
