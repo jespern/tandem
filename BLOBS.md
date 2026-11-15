@@ -700,8 +700,10 @@ base64 as §10.4 has it; "base64" is the same bytes declared `application/octet-
 
 - **A chunk should not be a text body.** On Fastmail the same base64 moved twice as fast declared
   as `application/octet-stream` as declared `text/plain`. No form of section 4.2 is text.
-- **Fastmail is fast with binary and base64 and slow with the escaped form**, which it stores as it
-  is: 8,541,323 bytes for 8 MiB, against 1.37 times the file for the other two. Why 8-bit content
+- **Fastmail is fast with binary and base64 and slow with the escaped form**, which it hands back
+  byte for byte under the header it was sent with: 8,541,323 bytes for 8 MiB, 1.02 times the file,
+  against the 1.37 it charges for the other two. The quota charge for the escaped form was not
+  read, here or on Gmail; 1.02 is the size sent and returned. Why 8-bit content
   is slow there is not known. So on Fastmail speed and space pull apart, and binary is the default.
 - **On Gmail the escaped form is the fastest and the smallest.** Gmail limits each connection by the
   bytes of the message, and the escaped form has a quarter fewer than base64: about a fifth more
