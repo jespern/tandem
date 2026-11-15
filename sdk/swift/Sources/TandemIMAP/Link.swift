@@ -33,6 +33,8 @@ actor Link {
     private var caps: Set<String> = []
     private var fresh = false
     private var folder: Bytes
+    /// The personal namespace prefix (RFC 2342), empty if none.
+    private(set) var prefix: Bytes = []
     private var selected: Bytes?
     private var validity: UInt32 = 0, modseq: UInt64 = 0
     private var qresync = false
@@ -162,7 +164,8 @@ actor Link {
             if caps.contains("NAMESPACE") || caps.contains("IMAP4REV2") {
                 let r = try await c.execute([.text("NAMESPACE")])
                 for case .namespace(let personal) in r.untagged {
-                    folder = (personal.first?.prefix ?? []) + Bytes(config.folder.utf8)
+                    prefix = personal.first?.prefix ?? []
+                    folder = prefix + Bytes(config.folder.utf8)
                 }
             }
             self.caps = caps
@@ -339,6 +342,15 @@ actor Link {
     }
 
     private func scan(_ c: Connection, _ cursor: Cursor?) async throws -> ChangeBatch {
+        let page = try await scanFolder(c, cursor, fetch: fetchItems, decode: decode)
+        return ChangeBatch(added: page.added, removed: page.removed, cursor: page.cursor, more: page.more)
+    }
+
+    /// One page of what changed in the folder since the cursor: the new messages that decode, in UID
+    /// order, the IDs removed, the next cursor and whether more is waiting. The feed fetches bodies with
+    /// it; the blob folder only the headers its index needs (BLOBS.md section 4.3).
+    private func scanFolder<T>(_ c: Connection, _ cursor: Cursor?, fetch: (Connection, String) async throws -> [UInt32: FetchItem],
+                               decode: (FetchItem, UInt32) -> T?) async throws -> (added: [T], removed: [String], cursor: String, more: Bool) {
         // SELECT every time: it is where UIDVALIDITY and HIGHESTMODSEQ are learned, and a
         // session may keep a stale view of a folder deleted and recreated by another client.
         var vanished: UIDSet?
@@ -354,7 +366,7 @@ actor Link {
         } else if let cursor {
             removed = cursor.known.uids.map { MessageID.make(cursor.validity, $0) }   // UIDVALIDITY changed: full resync
         }
-        var added: [Message] = []
+        var added: [T] = []
         var top = last, more = false
         if last < .max {
             // n:* always returns the last message, so a UID below the range is ignored.
@@ -367,16 +379,15 @@ actor Link {
                 if let end = uids.last { top = end }   // past the page even if its last messages went meanwhile
                 set = UIDSet(uids).description
             }
-            let items = set.isEmpty ? [:] : try await fetchItems(c, set)
+            let items = set.isEmpty ? [:] : try await fetch(c, set)
             for uid in items.keys.sorted() where uid > last {
                 top = max(top, uid)
-                guard let message = decode(items[uid]!, uid) else { continue }
-                added.append(message)
+                guard let value = decode(items[uid]!, uid) else { continue }
+                added.append(value)
                 known.insert(uid)
             }
         }
-        return ChangeBatch(added: added, removed: removed,
-                           cursor: Cursor(validity: validity, modseq: qresync ? modseq : 0, last: top, known: known).text, more: more)
+        return (added, removed, Cursor(validity: validity, modseq: qresync ? modseq : 0, last: top, known: known).text, more)
     }
 
     private func searchAll(_ c: Connection) async throws -> UIDSet { try await search(c, "ALL") }
@@ -396,7 +407,11 @@ actor Link {
 
     private func fetchItems(_ c: Connection, _ set: String) async throws -> [UInt32: FetchItem] {
         let fields = MessageFormat.fields.joined(separator: " ")
-        let r = try await c.execute([.text("UID FETCH \(set) (UID RFC822.SIZE BODY.PEEK[HEADER.FIELDS (\(fields))] BODY.PEEK[TEXT]<0.\(config.maxMessageSize)>)")])
+        return try await fetchWith(c, "UID FETCH \(set) (UID RFC822.SIZE BODY.PEEK[HEADER.FIELDS (\(fields))] BODY.PEEK[TEXT]<0.\(config.maxMessageSize)>)")
+    }
+
+    private func fetchWith(_ c: Connection, _ command: String) async throws -> [UInt32: FetchItem] {
+        let r = try await c.execute([.text(command)])
         var items: [UInt32: FetchItem] = [:]
         for case .fetch(_, let item) in r.untagged {
             if let uid = item.uid { items[uid, default: FetchItem()].merge(item) }
@@ -426,27 +441,98 @@ actor Link {
     /// Appends whole messages, several per command with MULTIAPPEND (RFC 3502). IDs in order;
     /// "" where the server named no UID.
     func append(_ messages: [Bytes]) async throws -> [String] {
+        try await run { c in try await self.append(c, messages, to: self.folder) }
+    }
+
+    /// Appends to the named folder under the namespace prefix; APPEND needs none selected. A folder that
+    /// doesn't exist yet is created on TRYCREATE and the append sent again: a NO stored nothing (§10.3).
+    func append(_ messages: [Bytes], toFolderNamed name: String) async throws -> [String] {
         try await run { c in
-            var ids: [String] = [], i = 0
-            let multi = self.caps.contains("MULTIAPPEND")
-            while i < messages.count {
-                var batch = [messages[i]], size = messages[i].count
-                i += 1
-                while multi, i < messages.count, batch.count < 100, size + messages[i].count <= 8 << 20 {
-                    batch.append(messages[i]); size += messages[i].count; i += 1
-                }
-                var parts: [Part] = [.text("APPEND "), .astring(self.folder)]
-                for m in batch { parts += [.text(" (\\Seen) "), .literal(m)] }
-                let r = try await c.execute(parts)
-                if case .appendUID(let v, let uids)? = r.status.code, uids.count == batch.count {
-                    ids += uids.map { MessageID.make(v, $0) }
-                } else {
-                    ids += Array(repeating: "", count: batch.count)
-                }
+            let folder = self.prefix + Bytes(name.utf8)
+            do { return try await self.append(c, messages, to: folder) } catch IMAPError.rejected(let code, _) where code == "TRYCREATE" {
+                do { try await c.execute([.text("CREATE "), .astring(folder)]) } catch IMAPError.rejected(let code, _) where code == "ALREADYEXISTS" {}
+                return try await self.append(c, messages, to: folder)
             }
-            return ids
         }
     }
+
+    private func append(_ c: Connection, _ messages: [Bytes], to folder: Bytes) async throws -> [String] {
+        var ids: [String] = [], i = 0
+        let multi = self.caps.contains("MULTIAPPEND")
+        while i < messages.count {
+            var batch = [messages[i]], size = messages[i].count
+            i += 1
+            while multi, i < messages.count, batch.count < 100, size + messages[i].count <= 8 << 20 {
+                batch.append(messages[i]); size += messages[i].count; i += 1
+            }
+            var parts: [Part] = [.text("APPEND "), .astring(folder)]
+            for m in batch { parts += [.text(" (\\Seen) "), .literal(m)] }
+            let r = try await c.execute(parts)
+            if case .appendUID(let v, let uids)? = r.status.code, uids.count == batch.count {
+                ids += uids.map { MessageID.make(v, $0) }
+            } else {
+                ids += Array(repeating: "", count: batch.count)
+            }
+        }
+        return ids
+    }
+
+    // MARK: - The blob folder (BLOBS.md section 4.3)
+
+    /// One page of the folder's changes, from the headers alone: no body is fetched.
+    func refs(since text: String) async throws -> BlobStore.Changes {
+        let cursor = try Cursor(text)
+        return try await retrying { c in
+            let page = try await self.scanFolder(c, cursor, fetch: { c, set in
+                try await self.fetchWith(c, "UID FETCH \(set) (UID BODY.PEEK[HEADER.FIELDS (Tandem-Channel Tandem-Blob)])")
+            }, decode: self.decodeRef)
+            return BlobStore.Changes(added: page.added, removed: page.removed, cursor: page.cursor, more: page.more)
+        }
+    }
+
+    private func decodeRef(_ item: FetchItem, _ uid: UInt32) -> BlobStore.Ref? {
+        guard let header = item.sections["HEADER.FIELDS"], let tag = MessageFormat.field("Tandem-Channel", in: header), !tag.isEmpty,
+              let channel = String(validating: tag, as: UTF8.self), let claim = MessageFormat.field("Tandem-Blob", in: header),
+              let address = B32.decode(String(decoding: claim, as: UTF8.self)), address.count == 32 else { return nil }
+        return BlobStore.Ref(id: MessageID.make(validity, uid), channel: channel, address: address)
+    }
+
+    /// Chunk messages by ID; those that are gone, too large or don't decode are left out.
+    func chunks(ids: [String]) async throws -> [BlobStore.Chunk] {
+        try await retrying { c in
+            let uids = self.current(ids)
+            let fields = ChunkFormat.fields.joined(separator: " ")
+            var out: [BlobStore.Chunk] = []
+            for set in self.chunks(uids) {
+                let items = try await self.fetchWith(c, "UID FETCH \(set) (UID RFC822.SIZE BODY.PEEK[HEADER.FIELDS (\(fields))] BODY.PEEK[TEXT]<0.\(self.config.maxMessageSize)>)")
+                for uid in items.keys.sorted() where uids.contains(uid) {
+                    let item = items[uid]!
+                    guard let size = item.size, size <= UInt64(self.config.maxMessageSize), let header = item.sections["HEADER.FIELDS"],
+                          let text = item.sections["TEXT"], let envelope = try? ChunkFormat.decode(header: header, text: text) else { continue }
+                    out.append(BlobStore.Chunk(id: MessageID.make(self.validity, uid), envelope: envelope))
+                }
+            }
+            return out
+        }
+    }
+
+    /// The storage quota of the folder's root; unknown where the server has no QUOTA or reports no storage.
+    func quota() async throws -> BlobStore.Quota {
+        try await retrying { c in
+            guard self.caps.contains("QUOTA") else { return BlobStore.Quota.unknown }
+            let r: Connection.Result
+            do { r = try await c.execute([.text("GETQUOTAROOT "), .astring(self.folder)]) } catch IMAPError.rejected { return BlobStore.Quota.unknown }
+            for case .quota(_, let resources) in r.untagged {
+                if let storage = resources.first(where: { $0.name == "STORAGE" }) {
+                    return BlobStore.Quota.known(used: Int64(storage.usage) * 1024, limit: Int64(storage.limit) * 1024)
+                }
+            }
+            return BlobStore.Quota.unknown
+        }
+    }
+
+    /// Makes sure the connection is up; for a transfer connection being opened.
+    func connectNow() async throws { try await run { _ in () } }
 
     func fetch(ids: [String]) async throws -> [Message] {
         try await retrying { c in

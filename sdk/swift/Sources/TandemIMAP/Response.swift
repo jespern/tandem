@@ -163,7 +163,13 @@ enum Untagged: Sendable, Equatable {
     case esearch(tag: String?, uid: Bool, all: UIDSet)
     case list(flags: [String], delimiter: Bytes?, name: Bytes)
     case namespace(personal: [Namespace])
+    /// QUOTA (RFC 9208): a root and its resources by uppercased name, (usage, limit).
+    case quota(root: Bytes, resources: [QuotaResource])
     case other(String)
+}
+
+struct QuotaResource: Sendable, Equatable {
+    var name: String, usage: UInt64, limit: UInt64
 }
 
 enum Response: Sendable, Equatable {
@@ -319,6 +325,19 @@ struct Parser {
                 }
             }
             return .namespace(personal: personal)
+        case "QUOTA":
+            try space()
+            let root = try astring()
+            try space()
+            guard case .list(let items) = try value(0), items.count % 3 == 0 else { throw IMAPError.protocol("bad QUOTA") }
+            var resources: [QuotaResource] = []
+            for i in stride(from: 0, to: items.count, by: 3) {
+                guard case .atom(let name) = items[i], case .atom(let used) = items[i + 1], case .atom(let limit) = items[i + 2],
+                      let u = UInt64(used), let l = UInt64(limit) else { throw IMAPError.protocol("bad QUOTA") }
+                resources.append(QuotaResource(name: name.uppercased(), usage: u, limit: l))
+            }
+            try end()
+            return .quota(root: root, resources: resources)
         case "VANISHED":
             try space()
             var earlier = false

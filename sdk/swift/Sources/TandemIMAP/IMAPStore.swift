@@ -53,6 +53,7 @@ public actor IMAPStore: PushStore {
     public nonisolated let configuration: Configuration
     private let sink = Sink()
     private let link: Link
+    var feedLink: Link { link }
     private var watcher: Link?
     private var watched = false
 
