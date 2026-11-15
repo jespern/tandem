@@ -50,6 +50,16 @@ Every method that talks to the hub takes a `context.Context` and returns an erro
 
 **Files** (`DESIGN.md` §17). A slow link for a narrow purpose: files shared among the hub's devices that never leave its mailbox (no SMTP, no other service), measured at about 12 MiB/s up and 19 down on Fastmail and 0.8 up and 2.8 down on Gmail with the default connections (`sdk/swift/INTEGRATING.md`, Files, has the table). `device.UseBlobs(blobHub, engine.BlobSettings{})` with `imap.NewBlobStore(cfg, imap.BlobOptions{})` (or `engine.NewMemoryBlobHub()` in tests); `AttachFile`/`AttachBytes(ctx, list, record, name, …)`, `Blob(list, record, name)` (`BlobHere`, `BlobRemote`, `BlobDownloading`, `BlobUnavailable`, `BlobUnreadable`, `BlobUploading`), `FetchBlob` (a path), `CancelAttach`, `KeepFiles`, `SetBlobSettings`, `CheckBlobs`, `SettleBlobs`, `BlobQuota`, and `EventBlobs`. Up to 16 KiB is inline; anything larger is a pending write until its chunks are on the hub. After each sync a worker removes chunks of replaced and deleted files and restores missing chunks of files this device holds.
 
+File verification checks inline hashes before caching bytes. Partial-download
+bitmaps are bound to the normalized manifest (`blobs.layout.*`), so another
+manifest with the same content hash cannot reuse its offsets or inherit its
+failed request. Old checkpoints without that binding restart once. Learning of
+removal or a writer-to-reader downgrade cancels pending uploads before waiting
+for chunks or keys. The cache budget retains the just-fetched file even when it
+alone exceeds the budget; a subsequent fetch may evict it. The
+[reliability campaign](../../../interop/CAMPAIGN.md) documents the regressions,
+socket failures and scale measurements.
+
 **Garbage collection** (`gc.go`). After each sync: writes of past epochs the current inventory doesn't list (§9.3); a deleted or removed list's replica after `SetRetention` (30 days by default, on this device's clock from when it first saw it gone), all but the roster, with `GoneLists()`; for the owner of a deleted list, its data and chunks on the hub, all but the roster; and downloaded files no record names. Also: replaced writes of the current epoch once their messages are gone; packs of tombstones and old channels' rosters cut to their epoch, on the owner's devices (`SetPackThreshold`); deletion marks at key changes. `sdk/swift/ENGINE.md` (Garbage collection) has the details, `GC.md` the design.
 
 ## What is done

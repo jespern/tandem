@@ -74,15 +74,30 @@ time includes setup and cleanup, so it is not a file-transfer benchmark.
 | `file_copy_refuses_attachments` | Copying an attachment-bearing collection refuses before creating a partial list; existing file contents stay readable. |
 | `file_unpublished_content_survives_eviction` | A committed upload with an offline feed survives cache eviction, remote chunk loss and process restart through its retained staged source. |
 | `file_push` | Both directions discover a file through actual IDLE and engine events, with no explicit receiver sync after upload. |
+| `file_partial_manifest_isolation` | A malformed chunk order cannot poison another manifest with the same hash, including after restart. |
+| `file_inline_hash_isolation` | False inline hashes cannot poison the shared content cache or conceal invalid data behind an existing cache entry. |
+| `file_removed_upload_stays_cancelled` | Learning of membership removal cancels blocked uploads; re-admission never revives them. |
+| `file_larger_than_cache` | Fetching a file larger than the cache budget returns readable bytes; the following fetch can evict it. |
+| `file_folder_recreation` | A genuinely recreated blob folder changes UIDVALIDITY; old IDs and first-seen clocks reset, and encrypted contents remain readable. |
 
 ## Fault boundaries and remaining work
 
-The driver fixtures wrap the real IMAP stores. A blob fault interrupts after a
+The [reliability campaign guide](CAMPAIGN.md) describes seeded multi-device
+histories, actual TLS socket failures and crashes, the four subsequent fixes,
+and bounded chunk-index scale measurements. Run its socket matrix separately:
+
+```sh
+python3 -B interop/interop.py --wire --race --report .build/file-wire.json
+```
+
+The lifecycle driver fixtures wrap the real IMAP stores. A blob fault interrupts after a
 specified number of chunks have actually been stored; `lostAck` discards the
 successful store's answer. An offline feed refuses engine calls while blob
 connections remain usable. The harness then kills the process without a graceful
-shutdown and reopens its durable state. This tests the engine's recovery at the
-store boundary; it does not inject arbitrary TCP cuts inside TLS or IMAP literals.
+shutdown and reopens its durable state. These fixtures test the engine's recovery
+at the store boundary. The separate `--wire` suite terminates real TLS connections
+during IMAP literals and before successful append acknowledgements, interrupts
+IDLE, and triggers SIGKILL from actual socket events.
 SQLite triggers also inject durable-store failures before inserting a write and before deleting its upload journal entry. Cache eviction and provider chunk deletion are exercised independently. Fault controls are compiled into the test drivers, not the SDK libraries.
 
 A small `chunkSize` (64 KiB) keeps lifecycle tests inexpensive on live accounts;
@@ -122,7 +137,10 @@ The first, second and fourth cases also have native engine regressions. The copy
 refusal is covered natively and end to end. These are implementation findings;
 they do not change the cryptographic wire format or provider defaults.
 
-## Verified runs (2026-11-15)
+## Initial verified runs (2026-11-15)
+
+The later [reliability campaign](CAMPAIGN.md) records the expanded matrices,
+subsequent fixes, seeded histories, socket failures and scale measurements.
 
 | Provider | Engine pairings | File cases | Outcome |
 |---|---|---|---|

@@ -59,6 +59,16 @@ adds real IMAP file lifecycle, restart and fault scenarios on Stalwart and Fastm
 exists, the engine doesn't use it yet); requested downloads ahead of unasked ones; pipelined appends for a server with
 `LITERAL+` but no `MULTIAPPEND`.
 
+File verification checks inline hashes before caching bytes. Partial-download
+bitmaps bind the normalized manifest (`blobs.layout.*`), so descriptions sharing
+a content hash cannot poison one another's offsets or concurrent requests.
+Checkpoints written before that binding restart once. Learning of removal or a
+writer-to-reader downgrade cancels pending uploads before waiting for chunks or
+keys. Cache eviction retains the just-fetched file even if it alone exceeds the
+budget; a subsequent fetch may evict it. The
+[reliability campaign](../../interop/CAMPAIGN.md) records the regressions and
+measurements.
+
 ## Garbage collection (2026-11-15)
 
 `GC.swift`, the same as the Go engine's `gc.go`: what `DESIGN.md` already allows, after each sync. Writes of past epochs

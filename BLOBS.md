@@ -39,8 +39,9 @@ those findings concern a binary form of the chunk message that was dropped after
 
 The [native harness](interop/README.md) exercises the real Go/Swift engines and
 IMAP bindings, including upload interruption, process loss, publication failures,
-malformed manifests, healing and cleanup. It also documents four implementation
-findings and the fixes or explicit limitations they led to. These lifecycle runs
+malformed manifests, healing and cleanup. The [reliability campaign](interop/CAMPAIGN.md)
+adds seeded histories, actual TLS socket cuts and crashes, manifest/cache isolation
+regressions and a 100,000-message chunk index. These lifecycle runs
 are separate from the transfer measurements below; their elapsed times include
 setup and cleanup.
 
