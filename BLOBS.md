@@ -1,9 +1,15 @@
 # Proposal: blobs (files in the mailbox)
 
-Status: **proposal**, 2026-11-15. Nothing here is implemented or measured. It extends `DESIGN.md`
-(v2) and removes its non-goal "Large binary attachments" (§1.2). Section numbers with § refer to
-`DESIGN.md`. Decisions Jesper made on 2026-11-15 are marked **Decided**; numbers that still need a
-measurement are in §12.
+Status: **proposal**, 2026-11-15. Nothing here is implemented. How chunks travel was measured on
+Fastmail and Stalwart (section 12); Gmail was not. It extends `DESIGN.md` (v2) and removes its
+non-goal "Large binary attachments" (§1.2). References with § are to `DESIGN.md`; this document's
+own parts are called sections. Decisions Jesper made on 2026-11-15 are marked **Decided**; what is
+still open is in section 13.
+
+Revised the same day after a review found five faults: a pending replacement could destroy the
+published file (section 6), a false header could suppress healing (section 4.3), two healers could
+destroy each other's copy (section 7), binary reads were decoded twice (section 4.2) and the orphan
+grace trusted a time a client can set (section 7).
 
 ## 1. Summary
 
@@ -23,19 +29,20 @@ immutable chunks.
 
 | Property | How |
 |---|---|
-| Works offline | The manifest write is made locally when the file is attached; chunks follow when the hub is reachable (§6). |
+| Works offline | The manifest write is signed locally when the file is attached; chunks follow when the hub is reachable (section 6). |
 | Real time | A manifest reaches the feed only when its blob is complete on the hub, so its arrival is the event other devices act on. Nothing polls. |
 | Resumable | Chunk encryption is deterministic. An interrupted upload continues by listing the folder and appending what is missing; no per-chunk state is kept. |
 | One content for everyone | The signed manifest lists the hash of every encrypted chunk, so not even a member can show two devices different bytes. |
-| No re-upload on a key change | Chunk keys are in the manifest, and the manifest moves to the new epoch with its record (§9 below). |
-| Self-healing | Any device that still holds the file re-creates a destroyed chunk byte for byte (§8). |
+| No re-upload on a key change | Chunk keys are in the manifest, and the manifest moves to the new epoch with its record (section 9). |
+| Self-healing | Any device that still holds the file re-creates a destroyed chunk byte for byte (section 8). |
 
 Costs, accepted on purpose:
 
-- **Two ways to carry a chunk.** Where the server offers `BINARY` (RFC 3516) a chunk is stored as
-  raw bytes. Elsewhere, Gmail included, it is base64 text like every other message (§10.4), about
-  37% larger: a 1 MiB chunk is a 1.4 MiB message and counts as that against quota and bandwidth.
-  Readers handle both forms (§4.2).
+- **Two ways to carry a chunk.** Where the server offers `BINARY` (RFC 3516) a chunk travels as raw
+  bytes. Elsewhere, Gmail included, it is base64 text like every other message (§10.4), about 37%
+  larger: a 1 MiB chunk is a 1.4 MiB message. Readers handle both forms (section 4.2). `BINARY` saves
+  transfer but not always storage: Fastmail keeps a binary chunk as base64 and charges quota for
+  that; Stalwart keeps it raw (section 12).
 - **No delta sync in the first implementation.** See the second decision above.
 - **Weaker durability than records.** Every device holds every record (§12.1); not every device
   holds every file. A blob destroyed on the hub survives only if some device kept it.
@@ -61,7 +68,7 @@ Costs, accepted on purpose:
 ### 4.1 Encryption
 
 ```
-ck       = the chunk's 32-byte key, from the manifest (§5)
+ck       = the chunk's 32-byte key, from the manifest (section 5)
 aad      = "TNDM" || u8(2) || u8(4) || hubID
 ct       = ChaCha20-Poly1305-Seal(ck, 12 zero bytes, plaintext, aad)
 envelope = "TNDM" || u8(2) || u8(4) || ct          # kind 4 = blob chunk; no salt field
@@ -77,14 +84,14 @@ else. The key is not derived from a channel key, so a chunk outlives the epoch i
 ck = KDF(r, H(plaintext), "tandem/v2/blob-chunk", 32)     # KDF(ikm, salt, info, L) of §5.2
 ```
 
-where `r` is 32 random bytes, fresh for every upload and kept in the upload journal (§6). The zero
+where `r` is 32 random bytes, fresh for every upload and kept in the upload journal (section 6). The zero
 nonce is safe because the key is bound to the content. A reader cannot check how a key was made and
 does not need to: a writer who reuses a key harms only the secrecy of their own content.
 
 Encryption is therefore deterministic: the same `r` and plaintext give the same envelope and the
 same address. Three things rest on that. A retry after a lost answer finds its chunk instead of
 storing a second one. A resumed upload needs no record of which chunks went out. And a device that
-holds a file can restore a destroyed chunk from the plaintext and the manifest alone (§8), without
+holds a file can restore a destroyed chunk from the plaintext and the manifest alone (section 8), without
 having kept any ciphertext.
 
 ### 4.2 The chunk message
@@ -98,8 +105,9 @@ Tandem-Blob: <b32 of the address, 52 characters>
 ```
 
 Both are claims the hub or any participant could falsify. `Tandem-Blob` lets a device find a chunk
-without fetching bodies; a body whose hash differs from the claim is junk and is ignored.
-`Tandem-Channel` only limits clean-up (§7); it is not in the AAD and never authorizes anything.
+without fetching bodies; a body whose hash differs from the claim is junk and is ignored, and section 4.3
+says what a claim may be relied on for.
+`Tandem-Channel` only limits clean-up (section 7); it is not in the AAD and never authorizes anything.
 
 The body carries the envelope in one of two forms. A chunk's identity is its address, so the form
 is a property of the message, not of the chunk, and one hub may hold both.
@@ -113,8 +121,9 @@ Content-Transfer-Encoding: binary
 <the envelope, as it is>
 ```
 
-It is appended as a binary literal (`APPEND Tandem-Blobs (\Seen) ~{n}`) and fetched with
-`UID FETCH <uid> BINARY.PEEK[1]`, which returns the content with its transfer encoding undone.
+It is appended as a binary literal (`APPEND Tandem-Blobs (\Seen) ~{n}`). The server may keep it in
+another transfer encoding: Fastmail stores it as base64 and reports `Content-Transfer-Encoding:
+base64` from then on (section 12).
 
 **Text**, everywhere else: exactly §10.4, `text/plain` and `7bit` with the base64 of the envelope
 wrapped at 76 characters, fetched as §10.3 says.
@@ -123,31 +132,58 @@ wrapped at 76 characters, fetched as §10.3 says.
 allows it (on by default), otherwise the text form. Every device on a hub talks to the same server,
 so they agree without negotiating.
 
-**Reading.** A reader accepts both, whatever it would write. It undoes the transfer encoding
-(§10.4 step 1). If the content type is `application/octet-stream`, the result is the envelope. If
-it is `text/plain`, steps 2 and 3 of §10.4 follow. A server that hands back a binary body as base64
-is covered by step 1. Whatever arrives must hash to the address, so a server that damages a binary
-body produces a chunk that reads as missing, never wrong content; healing then restores it (§8). A
-device that sees its own binary appends come back damaged switches that hub to the text form and
-says so.
+**Reading.** A reader accepts both forms, whatever it would write. There are two ways to fetch, and
+the transfer encoding is undone exactly once, by the server or by the reader:
 
-The binary form is conditional on B2: it has not been tried on any provider.
+- Where the server advertises `BINARY`: `UID FETCH <uid> (BINARY.PEEK[1] BODY.PEEK[HEADER.FIELDS
+  (Content-Type)])`. The server has undone the transfer encoding (RFC 3516 section 4.2), whatever it
+  stored. The reader does not look at `Content-Transfer-Encoding` and skips step 1 of §10.4.
+- Elsewhere, and where the server refuses a `BINARY.PEEK` with `UNKNOWN-CTE`: `BODY.PEEK[TEXT]` with
+  the `Content-Type` and `Content-Transfer-Encoding` header fields, as §10.3 fetches. The reader
+  undoes the transfer encoding that header names (step 1 of §10.4).
+
+Either way the reader now has the body's content. If the content type is
+`application/octet-stream`, that content is the envelope. If it is `text/plain`, steps 2 and 3 of
+§10.4 turn it into the envelope. Anything else is not a chunk.
+
+Whatever arrives must hash to the address, so a server that damages a binary body produces a chunk
+that reads as missing, never wrong content; healing then restores it (section 8). A device that sees its
+own binary appends come back damaged switches that hub to the text form and says so. On Fastmail
+and Stalwart every binary chunk came back byte for byte (section 12).
 
 ### 4.3 The blob folder
 
 `Tandem-Blobs` sits beside `Tandem`, with the same namespace-prefix rule (§10.3). It is a second
-instance of the abstract store (§10.1) with two additions and one omission:
+instance of the abstract store (§10.1) with three additions and one omission:
 
 - `append` takes the address as well as the channel tag;
-- `changes` returns, for each added message, its channel tag, its claimed address and the time the
-  server stored it (IMAP `INTERNALDATE`, JMAP `receivedAt`);
+- `changes` returns, for each added message, its channel tag and its claimed address;
+- message IDs have an order that is the same for every device, in which a later append is never
+  lower (IMAP: the UID);
 - `watch` is not used. No device idles on the blob folder.
 
-A device keeps a **chunk index**: message ID, claimed address, tag and stored time for every message
-in the folder, built by `changes` (headers only, paged like the feed). It refreshes the index only
-when it has a reason: before fetching a chunk, before publishing a manifest, and in the hygiene pass
-if it holds blob content or has chunks to collect. A device with no interest in files never opens
-the folder. A `UIDVALIDITY` change rebuilds the index.
+A device keeps a **chunk index**: for every message in the folder its ID, claimed address and tag,
+built by `changes` (headers only, paged like the feed), and two things only this device knows: when
+it first saw the message, by its own clock, and whether it has verified it. It refreshes the index
+only when it has a reason: before fetching a chunk, before publishing a manifest, and in the hygiene
+pass if it holds blob content or has chunks to collect. A device with no interest in files never
+opens the folder. A `UIDVALIDITY` change rebuilds the index; first-seen times and verification start
+over with it.
+
+**Claimed and verified.** A header is a claim. A device has **verified** a message once it has had
+the body and seen it hash to the claimed address: it appended the message and the server answered
+with its ID, or it fetched it. A message whose body hashes to something else is **rejected** on that
+device for good, since a message never changes under one ID. A rejected message counts as absent
+everywhere in this document. It is not destroyed on that account, like any message a device cannot
+read (§12.2).
+
+An address **is on the hub**, for a device, when the device has verified a message for it. An
+address with nothing but unverified claims is unknown: before the device relies on it either way, to
+skip an upload, to commit, to leave a chunk unhealed or to destroy a copy, it fetches a claim and
+settles it. That costs one fetch of the chunk, once per message and device, and a device that
+uploaded or downloaded the file has already paid it. Without this rule anyone with the hub
+credential could destroy a chunk, append junk under its address, and stop every device from
+restoring it.
 
 **Why a second folder.** The Swift and Go bindings fetch every body in the feed folder with
 `changes`; a first sync must not download every file on the hub. Five hundred chunk appends in the
@@ -158,7 +194,13 @@ messages (Q3) stays about records.
 transfer, so the feed connection stays in IDLE and edits keep arriving during a long upload. Where
 the server refuses a second connection (§10.3 lists the caps), the device uses its one connection
 and transfers one chunk between returns to IDLE. That is a per-hub setting with the automatic
-choice as default. `MULTIAPPEND` and `LITERAL+` are used where offered, as for the feed.
+choice as default.
+
+**Batching.** Appends are sent without waiting for each answer where `LITERAL+` allows it, and in
+one `MULTIAPPEND` where only that is offered; several chunks are fetched with one command. An
+implementation MUST do this: on Fastmail an append answered alone costs half a second whatever its
+size, which matters more than the chunk size (section 12). A batch is a few MiB, so memory stays bounded
+and a lost connection costs little.
 
 ## 5. Manifests
 
@@ -210,24 +252,36 @@ of them again.
 2. **Describe.** One pass over the staged copy: cut it into chunks (1 MiB by default, a per-hub
    setting; the last may be shorter), compute each `ck`, envelope and address, and `hash`. That gives
    the manifest.
-3. **Write.** The device makes the `assign` write with the manifest as its value, signs it and stores
-   it with a journal entry (`r`, the staged copy, the write). The file now shows on this device. All
-   of this works offline.
+3. **Sign.** The device makes the `assign` write with the manifest as its value, with the context it
+   would have if it were published now (§9.2), and signs it. It stores the write in its **upload
+   journal** with `r` and the staged copy. The write is **pending**: it is not merged into the
+   device's replica. The app is shown the pending file on top of the record's state. All of this
+   works offline.
 4. **Upload.** The device refreshes the chunk index and appends every chunk whose address is not on
-   the hub, sealing it again from the staged copy. After a crash or a lost connection it starts this
-   step over; determinism makes that a resume.
-5. **Commit.** It refreshes the index once more, checks that every address is there, and only then
-   publishes the write (§10.7). **A manifest on the feed means its blob was complete on the hub.**
+   the hub (section 4.3), sealing it again from the staged copy. After a crash or a lost connection it
+   starts this step over; determinism makes that a resume.
+5. **Commit.** It refreshes the index once more and checks that every address is on the hub, each
+   through a message it has verified. Only then does it merge the write into its replica, and from
+   there the write is published like any other (§10.7). **A manifest on the feed means its blob was
+   complete on the hub.**
 
-Until step 5 the write is **withheld**: it is in the device's local state but left out of every
-record message the device appends, and it does not count when the device asks whether the hub lacks
-something it holds (§12.2). Other writes to the same record publish as usual.
+**A pending write does not exist yet.** Until step 5 the device acts, for every purpose of the
+protocol, as if the write had not been made. Its replica still holds what the field held before, and
+that is what it publishes, heals (§12.2), counts as kept when it collects chunks (section 7), lists in the
+inventory when it starts an epoch (§8.3) and builds the contexts of other writes from. If the pending
+write were in the replica it would supersede the published version there, and the device could
+destroy that version's chunks, or leave it out of a new epoch, while every other device still shows
+it. A pending write has the standing of a write from another device that has not arrived: at commit
+it is merged like one. If someone changed the field meanwhile, the two are siblings (§9.2), which is
+the truth, since the user attached the file without having seen that change.
 
-If the user replaces or removes the file before step 5, or cancels, the device drops the write and
-destroys the chunks it uploaded for it. Its dot is spent; that is harmless (§9.2).
+The device drops a pending write and destroys the chunks it uploaded for it when the user replaces
+or removes the pending file, deletes the record or cancels, and when the record is deleted by the
+time of the commit. Its dot is spent; that is harmless (§9.2).
 
-If the scope's epoch changes while a write is withheld, the write is published by the rules for late
-writes (§11.6). If its author was removed, it is never published, and its chunks are orphans (§7).
+If the scope's epoch changes while a write is pending, it is published at commit by the rules for
+late writes (§11.6). If its author was removed, it is never published, and its chunks are orphans
+(section 7).
 
 A full hub (`OVERQUOTA`, RFC 9208) or a chunk over the server's `APPENDLIMIT` stops the upload with
 a clear state the app can show. The journal entry stays, and the upload resumes when asked.
@@ -240,40 +294,51 @@ full sync of a scope, a device MAY destroy a chunk message when all of this hold
 1. its `Tandem-Channel` is the tag of a channel of that scope which the device knows (any epoch);
 2. the device holds a valid write in that scope whose manifest lists its address, so the device can
    account for the chunk;
-3. no manifest lists its address among the scope's kept writes, its held writes (§8.3) and the
-   device's own withheld writes.
+3. no manifest lists its address among the scope's kept writes of records that are not deleted, its
+   held writes (§8.3) and the pending writes in the device's own upload journal.
 
 Condition 1 keeps one scope's clean-up from touching another's chunks, whatever a manifest claims.
 Condition 2 means a device never destroys what it cannot explain, as with messages it has not
-merged.
+merged. A pending replacement changes nothing here: the version it will replace is still kept (section 6).
 
-**Copies.** Several messages with one address come from an append repeated after a lost answer. Only
-the device that appended them removes the extras, keeping one (§10.7).
+**Copies.** Several messages can carry one address: an append repeated after a lost answer, or two
+devices healing the same chunk, which gives identical envelopes. Nobody owns such a message, so the
+rule cannot depend on who appended it. After an index refresh, a device MAY destroy a message for
+which condition 1 holds when it has verified another message with the same address and a lower ID
+(section 4.3). Every device thus keeps the same survivor, the lowest verified copy, and since a lower ID
+cannot appear later, no device comes to prefer a copy another has destroyed. The survivor must be
+verified: a junk message with a low ID claiming the address would otherwise get every real copy
+destroyed.
 
 **Orphans.** A chunk that no write ever listed comes from an upload that never committed. Its
-uploader destroys it (§6). Another device MAY destroy it when conditions 1 and 3 hold, no write the
-device holds has ever listed it, and it was stored more than the **orphan grace** before the newest
-message in the blob folder. Both times are the server's, so no device's clock is involved. The
-default is 7 days, a per-hub setting. This is a safety net for a device that died mid-upload, not a
-mechanism anything waits on. A device that holds a `_blob:` write it cannot read in a scope collects
-no orphans there: the chunks may belong to a manifest version it does not know.
+uploader destroys it (section 6). Another device MAY destroy it when conditions 1 and 3 hold, no write the
+device holds has ever listed it, and the device itself first saw the message more than the **orphan
+grace** ago, by its own clock and its own chunk index. The default is 7 days, a per-hub setting. No
+time stored on the hub is used: a client may set a message's `INTERNALDATE` when it appends
+(RFC 9051 §6.3.12), so one future-dated message could make every unfinished upload look old. The
+guarantee is therefore local: an honest device collects no orphan it has known for less than the
+grace, and nothing a participant writes to the hub shortens that. A device whose own clock jumps
+forward may collect early; that costs an upload in progress some chunks, which its commit check
+appends again (section 6). This is a safety net for a device that died mid-upload, not a mechanism anything
+waits on. A device that holds a `_blob:` write it cannot read in a scope collects no orphans there:
+the chunks may belong to a manifest version it does not know.
 
 **What can go wrong, and what repairs it.** Clean-up decides from what one device has seen. Two
 rare histories leave a kept manifest with a destroyed chunk: a device reuses or re-assigns a blob at
 the moment another collects it, or an old write becomes current again in a new epoch (§9.3) after
 its chunks were collected. In both the record is intact and the file reads as unavailable until a
-device that holds it restores it (§8). The commit check of §6 covers the uploader's own case.
+device that holds it restores it (section 8). The commit check of section 6 covers the uploader's own case.
 
 ## 8. Reading, keeping and healing
 
 **States.** For each manifest a device reports one of: **here** (inline, or downloaded and
-verified), **remote** (not fetched), **downloading** with progress, **unavailable** (a listed chunk
-was not on the hub at the last index refresh) and **unreadable** (§5). Unavailable is not an error
+verified), **remote** (not fetched), **downloading** with progress, **unavailable** (at the last
+index refresh a listed address had no message, or only rejected ones) and **unreadable** (section 5). Unavailable is not an error
 of the record and is distinct from remote.
 
 **Fetching.** The device refreshes the chunk index, finds a message claiming each address, fetches
-it, checks the hash, opens it and writes the plaintext at its offset. A wrong body is ignored and
-another message claiming the same address is tried. Download resumes, and content can be read from
+it, checks the hash, opens it and writes the plaintext at its offset. The check verifies or rejects
+that message (section 4.3); after a rejection another message claiming the same address is tried. Download resumes, and content can be read from
 any offset, chunk by chunk. An unavailable blob is tried again at the next index refresh or when
 the app asks.
 
@@ -282,10 +347,10 @@ scope and device, with an upper size for what is fetched unasked. The blob store
 what is evicted becomes remote again. A staged copy is kept until its write is published.
 
 **Healing** (§12.2) gains one rule. After an index refresh in the hygiene pass, for every kept
-manifest in a current channel whose whole content the device holds: each listed address missing
-from the hub is sealed again with the listed key and appended. The envelope must hash to the
+manifest in a current channel whose whole content the device holds: each listed address that is not
+on the hub (section 4.3: an unverified claim is fetched and settled first) is sealed again with the listed key and appended. The envelope must hash to the
 address; if it does not, the local copy is damaged and is dropped. A device that holds no content
-does nothing, which is the durability cost named in §2.
+does nothing, which is the durability cost named in section 2.
 
 ## 9. Keys, membership and removal
 
@@ -297,7 +362,7 @@ does nothing, which is the durability cost named in §2.
   they cannot read.
 - **A reader** can fetch and open blobs and cannot write manifests. Like anyone with the hub
   credential they can still append junk and destroy messages (§3.1).
-- **Deleting a record or a collection** makes its chunks collectable by §7. A dead collection
+- **Deleting a record or a collection** makes its chunks collectable by section 7. A dead collection
   (§9.4) stops collecting and keeps its blobs readable.
 - **Moving or copying to another scope** uploads the blob again under new keys. A blob belongs to
   one scope.
@@ -311,9 +376,9 @@ therefore cut files where their content suggests (content-defined chunking), kee
 from plaintext hash to manifest entry, and list an existing entry in a new manifest instead of
 uploading the chunk again. To leave that open, a reader MUST already accept from day one:
 
-- chunks of any mix of lengths within the limits of §4.1;
+- chunks of any mix of lengths within the limits of section 4.1;
 - the same address more than once in a manifest;
-- an address listed by several manifests of one scope (§7 condition 3 already counts them all).
+- an address listed by several manifests of one scope (section 7 condition 3 already counts them all).
 
 A writer may reuse an entry only from a kept manifest of the same scope.
 
@@ -327,17 +392,64 @@ A writer may reuse an entry only from a kept manifest of the same scope.
 | **restic**, **borg**, **Tahoe-LAFS**, **Perkeep** | Encrypted chunks addressed by hash; clean-up by reachability, guarded against uploads in progress. | Addresses are hashes of ciphertext; clean-up is conservative and repaired by healing instead of a repository lock. |
 | **Kolab** (§16) | Files as objects in IMAP folders, in production. | Confirms mail servers hold such data durably. |
 
-## 12. Open questions
+## 12. Measurements (2026-11-15)
+
+`probes/blob_probe.py` appends chunks of 256 KiB, 1 MiB and 4 MiB in both forms, fetches them back
+and compares every one byte for byte. Each chunk begins with NUL bytes, bare CR and LF, a lone dot
+and a line of 2,000 bytes. Reports are in `probes/results/*-blobs-*.json`. Fastmail was run twice.
+Stalwart is the disposable test server on the same machine, so its speeds mean nothing and are left
+out. Gmail was not run: the keychain item for it could not be read from the session that ran these.
+
+| | Fastmail | Stalwart 1.1.0 | Gmail |
+|---|---|---|---|
+| `BINARY` | yes | yes | no (probed 2026-11-13) |
+| Binary chunks intact through `BINARY.PEEK[1]` | 126 of 126, both runs | 126 of 126 | |
+| How a binary chunk is stored | as base64, header rewritten to `Content-Transfer-Encoding: base64`, quota charged at 1.37 times the bytes sent | raw | |
+| `BODY.PEEK[TEXT]` of a binary chunk | base64 | the raw bytes | |
+| `LITERAL+` and `MULTIAPPEND` | both | both | neither |
+| `APPENDLIMIT` | 200 MB | not advertised | 35 MB |
+| Quota (RFC 9208) | reported | advertised, none set | not read |
+
+Fastmail, MiB of chunk content per second, first run / second run:
+
+| Form | Chunk | Append, one at a time | Append, pipelined | Append, `MULTIAPPEND` | Fetch, one at a time | Fetch, one command |
+|---|---|---|---|---|---|---|
+| binary | 256 KiB | 0.4 / 0.4 | 5.2 / 3.7 | 6.8 / 6.9 | 0.7 / 0.7 | 8.6 / 9.3 |
+| binary | 1 MiB | 1.6 / 1.6 | 9.6 / 7.9 | 9.3 / 9.4 | 2.6 / 2.5 | 12.4 / 10.2 |
+| binary | 4 MiB | 5.7 / 4.8 | 12.4 / 11.9 | 11.1 / 11.0 | 7.1 / 6.2 | 15.1 / 13.8 |
+| text | 256 KiB | 0.5 / 0.5 | 4.6 / 1.7 | 5.4 / 5.0 | 0.7 / 0.7 | 3.2 / 3.2 |
+| text | 1 MiB | 1.0 / 0.9 | 0.7 / 1.6 | 3.3 / 5.7 | 2.5 / 2.5 | 5.6 / 5.5 |
+| text | 4 MiB | 1.6 / 1.5 | 1.5 / 1.5 | 8.3 / 9.0 | 6.5 / 6.4 | 8.9 / 8.6 |
+
+What follows from it:
+
+- **Batching matters more than chunk size.** An append answered alone costs about half a second and
+  a fetch about a third, whatever the size. One at a time, 1 MiB chunks go up at 1.6 MiB per second;
+  batched, at 8 to 10.
+- **1 MiB stays the default where appends can be batched.** Batched, it is within about a quarter of
+  4 MiB, and 256 KiB loses up to half. Where they cannot be batched the question is open (B1).
+- **The binary form is worth having on Fastmail for speed only**: about twice as fast both ways when
+  batched, and no saving in storage (B2).
+- **Text appends sent pipelined were slow and uneven** (0.7 to 4.6); in one `MULTIAPPEND` they were
+  steady. Not explained. A hub on the text form should prefer `MULTIAPPEND`.
+- **The feed stays live during an upload, at half speed.** A small append to the feed folder reached
+  an idling connection in 0.53 s with nothing else going on, and in 1.0 to 1.2 s while another
+  connection uploaded 1 MiB chunks.
+- **The chunk index scan works as specified**: one command returned the ID and both headers of all
+  126 messages in 0.32 s. Scale is unmeasured (B11).
+
+## 13. Open questions
 
 | # | Question |
 |---|---|
-| B1 | **Chunk size.** 1 MiB is a guess. Measure appends and fetches of 256 KiB, 1 MiB and 4 MiB chunks on Fastmail, Gmail and Stalwart with `probes/imap_probe.py`, with and without `MULTIAPPEND`/`LITERAL+`, and on a second connection while the first idles. |
-| B2 | **`BINARY`.** §4.2 uses it where offered, untested. Gmail does not advertise it (probed 2026-11-13). Do Fastmail and Stalwart, do they return a binary body byte for byte, with `MULTIAPPEND` and `LITERAL+` too, and do they count its raw size against quota? If a provider fails this, its hubs use the text form. |
-| B3 | **Provider limits and terms.** Gmail's append limit was probed at about 35 MB and its daily IMAP volumes are documented for Workspace only. Fastmail's limits for large folders of large messages are unconfirmed, and no provider's terms were checked for use as file storage. |
-| B4 | **Orphan grace.** Is 7 days right, and should the uploader's app show an upload that has waited that long? |
+| B1 | **Chunk size where appends cannot be batched.** 1 MiB holds on Fastmail (section 12). Gmail offers neither `LITERAL+` nor `MULTIAPPEND` and is unmeasured; if an append there costs what one costs on Fastmail, 4 MiB chunks would move about three times as fast. Should the default depend on the server? |
+| B2 | **Storage of binary chunks.** `BINARY` works on Fastmail and Stalwart (section 12), but Fastmail stores the chunk as base64, so it saves transfer and no quota there. No way to store raw bytes on Fastmail is known. |
+| B3 | **Provider limits and terms.** Gmail's append limit was probed at about 35 MB and its daily IMAP volumes are documented for Workspace only. Fastmail advertises an append limit of 200 MB; its behaviour with large folders of large messages is unmeasured, and no provider's terms were checked for use as file storage. |
+| B4 | **Orphan grace.** Is 7 days right, and should the uploader's app show an upload that has waited that long? The grace runs on each device's own first sight of a chunk (section 7), so a device that opens the blob folder rarely collects late. |
 | B5 | **Copying a dead collection** (§11.8) uploads every blob again. Letting the copy list the old chunks would avoid that but nothing would ever collect them. |
 | B6 | **Earlier versions.** Keeping the chunks of superseded manifests for a time would give version history. Not designed. |
 | B7 | **Padding** the last chunk to hide exact sizes (Q9). |
 | B8 | **Waiting for an unavailable blob.** A device could idle on the blob folder while it wants a missing chunk. Today it retries at the next refresh. |
-| B9 | **Proofs.** The clean-up rule of §7 and the withheld write of §6 should get the treatment the mailbox clean-up proofs give §10.7. |
-| B10 | **The browser binding** (§10.2): a second Mailbox and the same message format; JMAP could fetch byte ranges. Not designed. |
+| B9 | **Proofs.** The clean-up rule of section 7 and the pending write of section 6 should get the treatment the mailbox clean-up proofs give §10.7. |
+| B10 | **The browser binding** (§10.2): a second Mailbox and the same message format; JMAP could fetch byte ranges. Not designed. It needs an order of message IDs that every device shares (section 4.3), which JMAP's IDs do not give by themselves. |
+| B11 | **Scale.** The chunk index was scanned for 126 messages only. How long does a folder of tens of thousands of chunks take to scan and to select? |
