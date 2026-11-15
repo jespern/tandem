@@ -116,11 +116,13 @@ public actor Device {
                   let key = try? j.bytes("k", count: 32) else { continue }
             let o = Offer(grant: grant, key: key)
             offers[try grant.id()] = o
-            // A list offered but not answered has no membership record in home, so loadCollections skipped it: load its
-            // roster from the store, or the offer can't be checked again and is lost (found by Liszto, 2026-11-15).
-            let roster = try? Self.loadRoster(store: store, hub: pin.hub, cid: o.collection,
-                                              membership: Record(hub: pin.hub, scope: o.collection, id: o.collection))
-            var c = collections[o.collection] ?? roster ?? CollectionState(id: o.collection)
+            // A list offered but not answered has no membership record in home, so loadCollections skipped it. Without
+            // its roster the offer can't be checked again and is lost; without its records, accepting it shows an empty list.
+            if collections[o.collection] == nil {
+                collections[o.collection] = try Self.loadCollection(store: store, hub: pin.hub, cid: o.collection,
+                    membership: try Record(hub: pin.hub, scope: o.collection, id: o.collection), inventories: inventories)
+            }
+            var c = collections[o.collection] ?? CollectionState(id: o.collection)
             c.offer(key: key, epoch: o.epoch)
             collections[o.collection] = c
         }

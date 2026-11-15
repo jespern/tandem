@@ -156,7 +156,7 @@ func (d *Device) crash(point string) error {
 }
 
 // setCrashPoint stops a key change at point ("1:chosen", "2:journal", "2:note", "3:roster",
-// "4:announced", "4:home", "5:grant", "6:cleaned"), for tests.
+// "4:announced", "4:home", "5:grant", "6:cleaned") or accepting a list at "accept:keys", for tests.
 func (d *Device) setCrashPoint(point string) {
 	d.mu.Lock()
 	d.crashPoint = point

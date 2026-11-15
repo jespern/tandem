@@ -91,6 +91,8 @@ extension Device {
     /// Create a collection owned by this participant, private until shared (§7.4). Returns its ID.
     public func createList(name: String) async throws -> Bytes {
         guard let me else { throw TandemError.invalid("device: not on this hub yet") }
+        // The one home step that needs the hub: done before anything is stored, so a failure leaves nothing behind.
+        try await rotateHomeIfNeeded()
         let key = Self.random(32)
         let statement = Statement(n: 0, keyN: 0, commit: Tandem.commit(key), prev: nil, snapshot: nil, nonce: Self.random(16),
                                   members: [.init(uid: me.participant, role: .owner, name: Bytes(), floor: me.auth)], deleted: false)
@@ -112,9 +114,9 @@ extension Device {
         // Offline, everything stays saved and the next sync's healing publishes it (§12.2): the list exists
         // from here on, so failing now would leave an orphan the caller can't name.
         let membership = "membership:" + B64u.encode(cid)
-        try await writeHome(membership, field: "owner", op: .assign, value: me.participant, tolerateOffline: true)
-        try await writeHome(membership, field: "role", op: .assign, value: Bytes("owner".utf8), tolerateOffline: true)
-        try await writeHome(membership, field: "keys", op: .add, element: Self.keyElement(epoch: gid, key: key), tolerateOffline: true)
+        try await setHome(membership, field: "owner", value: me.participant)
+        try await setHome(membership, field: "role", value: Bytes("owner".utf8))
+        try await addHome(membership, field: "keys", element: Self.keyElement(epoch: gid, key: key))
         do { try await publish(cid: cid, epoch: gid, record: Roster.record, writes: [genesis]) }
         catch { changed(.syncFailed("\(error)")); flushEvents() }
         try await setField(list: cid, record: Self.meta, field: "name", value: Bytes(name.utf8))
@@ -306,13 +308,19 @@ extension Device {
         for (_, r) in home {
             guard let name = r.value(Bytes("_name".utf8)), name.starts(with: Bytes("membership:".utf8)),
                   let cid = B64u.decode(String(decoding: name.dropFirst(11), as: UTF8.self)), cid.count == 16 else { continue }
-            var c = try loadRoster(store: store, hub: hub, cid: cid, membership: r)
-            for record in try store.records(scope: cid) where record != Roster.record {
-                c.records[record] = try loadData(store: store, hub: hub, c: c, record: record, inventories: inventories)
-            }
-            out[cid] = c
+            out[cid] = try loadCollection(store: store, hub: hub, cid: cid, membership: r, inventories: inventories)
         }
         return out
+    }
+
+    /// One collection as the store holds it: roster and records. `membership` is its home record, or an empty one for a
+    /// list offered and not answered yet.
+    static func loadCollection(store: Store, hub: Bytes, cid: Bytes, membership r: Record, inventories: [ID: Inventory]) throws -> CollectionState {
+        var c = try loadRoster(store: store, hub: hub, cid: cid, membership: r)
+        for record in try store.records(scope: cid) where record != Roster.record {
+            c.records[record] = try loadData(store: store, hub: hub, c: c, record: record, inventories: inventories)
+        }
+        return c
     }
 
     /// A collection's keys (from its `membership:` record in home), roster and announcements, without its records.

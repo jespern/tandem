@@ -4,7 +4,7 @@ import XCTest
 @testable import TandemEngine
 
 /// What Liszto asked of the app API (2026-11-14): one message per batched write, the list's properties in `_meta`,
-/// and creating or accepting a list without the hub.
+/// creating or accepting a list without the hub, and an offer that survives a restart.
 final class AppWriteTests: XCTestCase {
     let account = MailboxAccount(host: "imap.example.org", port: 993, user: "hub@example.org", password: "app-password")
 
@@ -130,6 +130,8 @@ final class AppWriteTests: XCTestCase {
         let aliceID = try XCTUnwrap(aliceMe?.participant)
         try await bob.sync()
         let groceries = try await bob.createList(name: "Groceries")
+        let milk = bob.newRecordID()
+        try await bob.setField(list: groceries, record: milk, field: "title", value: Bytes("Milk".utf8))
         try await bob.share(list: groceries, with: aliceID, role: .writer, name: "Alice")
         try await alice.sync()
         let before = await alice.pendingOffers().map(\.list)
@@ -143,6 +145,56 @@ final class AppWriteTests: XCTestCase {
         try await restarted.accept(list: groceries)
         let followed = await restarted.lists().map(\.id)
         XCTAssertEqual(followed, [groceries], "and it can still be accepted")
+        let name = await restarted.name(list: groceries)
+        XCTAssertEqual(name, "Groceries", "with its name")
+        let title = await restarted.item(list: groceries, id: milk)?.text("title")
+        XCTAssertEqual(title, "Milk", "and the items written before the share")
+    }
+
+    /// A crash in the middle of accepting leaves the offer open: the answer, which closes it, is written last.
+    func testACrashWhileAcceptingLeavesTheOfferOpen() async throws {
+        let (hub, f, bob, _) = try await founded()
+        let link = try await bob.invite(label: "Alice", account: account, ms: f.managementSeed)
+        let aliceKeys = DeviceKeys(), alicePath = temporaryPath()
+        defer { try? FileManager.default.removeItem(atPath: alicePath) }
+        let alice = try await Device.join(link: try InvitationLink.parse(try link.json()), keys: aliceKeys, label: "Alice’s iPhone",
+                                          store: try Store(path: alicePath), hub: await hub.connect())
+        let aliceMe = await alice.me
+        let aliceID = try XCTUnwrap(aliceMe?.participant)
+        try await bob.sync()
+        let groceries = try await bob.createList(name: "Groceries")
+        try await bob.share(list: groceries, with: aliceID, role: .writer, name: "Alice")
+        try await alice.sync()
+
+        await alice.crash(at: "accept:keys")
+        do { try await alice.accept(list: groceries); XCTFail("expected the crash") } catch is Crash {}
+
+        let working = await hub.connect()
+        let restarted = try XCTUnwrap(try Device.reopen(store: try Store(path: alicePath), keys: aliceKeys, hub: working))
+        let pending = await restarted.pendingOffers().map(\.list)
+        XCTAssertEqual(pending, [groceries], "the offer is still open")
+        try await restarted.accept(list: groceries)
+        let followed = await restarted.lists().map(\.id)
+        XCTAssertEqual(followed, [groceries])
+    }
+
+    /// Home writes are local first, like list writes: offline they don't throw, and the next sync sends them.
+    func testAHomeWriteOfflineIsSentLater() async throws {
+        let (hub, f, bob, keys) = try await founded()
+        let network = SwitchedAppends(await hub.connect())
+        let phone = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try Store(path: ":memory:"),
+                                    hub: network)
+        try await phone.sync()
+        network.online = false
+        try await phone.setHome("settings:liszto", field: "theme", value: Bytes("dark".utf8))
+        let local = await phone.homeValue("settings:liszto", field: "theme")
+        XCTAssertEqual(local, Bytes("dark".utf8))
+
+        network.online = true
+        try await phone.sync()
+        try await bob.sync()
+        let there = await bob.homeValue("settings:liszto", field: "theme")
+        XCTAssertEqual(there, Bytes("dark".utf8), "healing sent it")
     }
 }
 

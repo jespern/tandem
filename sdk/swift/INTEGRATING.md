@@ -103,7 +103,7 @@ await device.item(list: list, id: Device.metaRecord)?.text("icon")
 - **Field values are bytes.** Pick one encoding per field and keep it: UTF-8 for text, a single byte for flags, the record ID's 16 bytes for a parent, your sort key's bytes for order. Unknown fields from newer app versions are kept and synced.
 - **Moving an item between lists** is create in the target, delete in the source, as Liszto does today.
 - Coalesce rapid edits (typing) before calling `setField`; every call is one message on the hub. `write(list:record:_:)` takes several changes (`ItemWriter.Change`) of one record and sends them as one message.
-- **Offline:** `createList` and `accept` don't throw when the hub can't be reached. They save everything, and the next sync's healing publishes it, as with `setField`; a failure is reported as `.syncFailed`.
+- **Offline:** `createList`, `accept` and home writes (`setHome`, `addHome`) don't throw when the hub can't be reached. They save everything, and the next sync's healing publishes it, as with `setField`; a failure is reported as `.syncFailed`. The exception: right after one of the participant's devices is revoked, home must be rekeyed first, and that needs the hub.
 
 ### Default lists (Inbox, Later)
 

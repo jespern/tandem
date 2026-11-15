@@ -300,14 +300,18 @@ extension Device {
         return Dot(device: installation, millis: next.millis, counter: next.counter)
     }
 
-    /// Sign one home write on `name` and publish it in the current home epoch.
-    /// `tolerateOffline`: a publish that fails is reported as `.syncFailed` and left to the next sync's healing
-    /// (§12.2) instead of thrown, for callers that must not stop halfway (creating a list, accepting one).
-    func writeHome(_ name: String, field: String, op: Op, value: Bytes = [], element: Bytes? = nil,
-                   tolerateOffline: Bool = false) async throws {
-        try takeExternalChanges()
-        // A revocation not yet reflected in home: rekey before writing, so nothing new goes into the exposed epoch.
+    /// A revocation not yet reflected in home: rekey before writing, so nothing new goes into the exposed epoch.
+    /// The one part of a home write that needs the hub.
+    func rotateHomeIfNeeded() async throws {
         if let me, homeNeedsRotation(me), registry.activity(me.certificate).isValid { try await rotateHome() }
+    }
+
+    /// Sign one home write on `name`, save it, and publish it in the current home epoch. Local first, like a list write:
+    /// if the hub can't be reached it is reported as `.syncFailed` and the next sync's healing publishes it (§12.2).
+    /// What must be on the hub before a next step syncs first (a change's note, §11.6 step 3).
+    func writeHome(_ name: String, field: String, op: Op, value: Bytes = [], element: Bytes? = nil) async throws {
+        try takeExternalChanges()
+        try await rotateHomeIfNeeded()
         guard let me, let scope = homeScope, let epoch = currentHomeEpoch, let key = homeKeys[epoch]
         else { throw TandemError.invalid("device: no home to write to") }
         let record = Tandem.namedID(Bytes(name.utf8))
@@ -322,13 +326,8 @@ extension Device {
         changed(.home)
         if name.hasPrefix("membership:") { changed(.lists) }
         flushEvents()
-        let kept = home[record]?.kept.map(\.write) ?? writes
-        if tolerateOffline {
-            do { try await publishHome(record, epoch: epoch, writes: kept) }
-            catch { changed(.syncFailed("\(error)")); flushEvents() }
-        } else {
-            try await publishHome(record, epoch: epoch, writes: kept)
-        }
+        do { try await publishHome(record, epoch: epoch, writes: home[record]?.kept.map(\.write) ?? writes) }
+        catch { changed(.syncFailed("\(error)")); flushEvents() }
     }
 
     /// One home record's state, in a home epoch's channel (§10.7).

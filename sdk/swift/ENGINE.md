@@ -29,11 +29,12 @@ Built by the Liszto session at Jesper's request, from its handover; tests in `Ap
 
 - **`write(list:record:_:)`** is public: several changes of one record, signed together, one message. It's the internal batched `writeRecord`.
 - **`Device.metaRecord`** is public, so the owner can keep app properties (icon, kind) in `_meta`.
-- **`createList` survives a hub that can't be reached.** Its home writes and roster publish are left to healing instead of thrown, so a caller never ends up with a created list it can't name (an orphan "Untitled" on every device). `writeHome(…, tolerateOffline:)` does this; other callers still throw.
-- **`accept(list:)` is all or nothing locally.** All four home writes land even offline, so the offer can't close with the list never followed. A lost answer only leaves the owner seeing "pending".
-- **An unanswered offer survives a restart.** Reopening loaded only followed lists, so an offered list's roster was missing, its offer couldn't be checked again, and `pendingOffers()` lost it for good. Now the offered list's roster loads from the store.
+- **Home writes are local first, like list writes.** `writeHome` saves, then publishes; if the hub can't be reached it reports `.syncFailed` and the next sync's healing publishes it (§12.2). It always saved before publishing, so a throw never undid anything: it only stopped the caller halfway (an invitation's record with a label and no capability, a pairing receipt sent twice). What must be on the hub before a next step syncs first, which heals or throws: a key change's note before its upload (§11.6 step 3). The one part that still needs the hub is rotating home after a revocation (`rotateHomeIfNeeded`): nothing new goes into an exposed epoch, so that throws offline. `createList` and `accept` rotate before they store anything.
+- **`createList` survives a hub that can't be reached**, so a caller never ends up with a created list it can't name (an orphan "Untitled" on every device). Its roster publish is left to healing too.
+- **`accept(list:)` survives a hub that can't be reached and a crash.** The answer is written last: it closes the offer, so a crash before it leaves the offer open to accept again (crash point `accept:keys`). A lost answer receipt only leaves the owner seeing "pending".
+- **An unanswered offer survives a restart.** Reopening loaded only followed lists, so an offered list was missing: its offer couldn't be checked again and `pendingOffers()` lost it for good. Now the offered list loads whole from the store (`loadCollection`), roster and records; with the roster alone, accepting it after a restart showed an empty list with no name until the next launch.
 - **Not done: a removed member's writes that never reached the list.** A device can't tell them apart: it can no longer read the new epoch, so it doesn't know which of its late writes the new inventory took.
-- **Go engine:** not changed. The offline `createList`/`accept` behaviour and the restart fix are Swift-only so far.
+- **Go engine:** the same behaviour (local-first home writes, offline `createList`/`accept`, answer last, offers across restarts), tests in `app_test.go`. Not ported: the public batched write and `metaRecord` (Go has `writeChanges` and `metaRecord` internally).
 
 ## Several processes on one store (Liszto, 2026-11-13)
 

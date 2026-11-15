@@ -198,6 +198,10 @@ func (d *Device) createList(ctx context.Context, name string) ([]byte, error) {
 	if me == nil {
 		return nil, fail("device: not on this hub yet")
 	}
+	// The one home step that needs the hub: done before anything is stored, so a failure leaves nothing behind.
+	if err := d.rotateHomeIfNeeded(ctx); err != nil {
+		return nil, err
+	}
 	key := random(32)
 	st := Statement{Commit: tandem.Commit(key), Nonce: random(16), Members: []Member{{UID: me.Participant, Role: Owner, Floor: me.Auth}}}
 	dot, err := d.nextDot(me)
@@ -224,6 +228,8 @@ func (d *Device) createList(ctx context.Context, name string) ([]byte, error) {
 		return nil, err
 	}
 	// The key goes into home first: that's how this participant's other devices find the list (§6.2).
+	// Offline, everything stays saved and the next sync's healing publishes it (§12.2): the list exists
+	// from here on, so failing now would leave an orphan the caller can't name.
 	m := membershipName(cid)
 	if err := d.setHome(ctx, m, "owner", me.Participant); err != nil {
 		return nil, err
@@ -235,7 +241,7 @@ func (d *Device) createList(ctx context.Context, name string) ([]byte, error) {
 		return nil, err
 	}
 	if err := d.publish(ctx, cid, gid, rosterRecord, []*tandem.Write{genesis}); err != nil {
-		return nil, err
+		d.changed(Event{Kind: EventSyncFailed, Message: err.Error()})
 	}
 	return cid, d.writeRecord(ctx, cid, metaRecord, "name", tandem.OpAssign, []byte(name), nil)
 }
@@ -574,25 +580,35 @@ func loadCollections(store *Store, hub []byte, home map[string]*tandem.Record, i
 		if cid == nil {
 			continue
 		}
-		c, err := loadRoster(store, hub, cid, home[k])
+		c, err := loadCollection(store, hub, cid, home[k], inventories)
 		if err != nil {
 			return nil, err
-		}
-		records, err := store.Records(cid)
-		if err != nil {
-			return nil, err
-		}
-		for _, record := range records {
-			if bytes.Equal(record, rosterRecord) {
-				continue
-			}
-			if c.records[string(record)], err = loadData(store, hub, c, record, inventories); err != nil {
-				return nil, err
-			}
 		}
 		out[string(cid)] = c
 	}
 	return out, nil
+}
+
+// loadCollection is one collection as the store holds it: roster and records. membership is its
+// home record, or an empty one for a list offered and not answered yet.
+func loadCollection(store *Store, hub, cid []byte, membership *tandem.Record, inventories map[string]tandem.Inventory) (*collection, error) {
+	c, err := loadRoster(store, hub, cid, membership)
+	if err != nil {
+		return nil, err
+	}
+	records, err := store.Records(cid)
+	if err != nil {
+		return nil, err
+	}
+	for _, record := range records {
+		if bytes.Equal(record, rosterRecord) {
+			continue
+		}
+		if c.records[string(record)], err = loadData(store, hub, c, record, inventories); err != nil {
+			return nil, err
+		}
+	}
+	return c, nil
 }
 
 // loadRoster is a collection's keys (from its membership: record in home), roster and
