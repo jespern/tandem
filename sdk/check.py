@@ -89,6 +89,7 @@ def main():
     check_event_sources()
     run([sys.executable, "-B", "vectors/v2/generate.py", "--check"])
     run([sys.executable, "-B", "vectors/v2/generate_control.py", "--check"])
+    run([sys.executable, "-B", "vectors/v2/generate_blobs.py", "--check"])
     if args.oracle:
         check_lean(args.oracle.resolve())
     with tempfile.TemporaryDirectory(prefix="tandem-sdk-interop-") as directory:
@@ -99,7 +100,7 @@ def main():
         run(["go", "test", "-count=1", "./..."], ROOT / "sdk/go", env)
         run([sys.executable, "-B", "-W", "error::ResourceWarning", "-m", "unittest", "discover", "-s", "sdk/python/tests", "-q"], env=env)
         run([node, "node_modules/typescript/bin/tsc"], ROOT / "sdk/typescript", env)
-        run([node, "--test", "test/core.test.mjs", "test/control.test.mjs", "test/registry.test.mjs", "test/roster.test.mjs", "test/home-policy.test.mjs", "test/pairing.test.mjs", "test/founding.test.mjs", "test/inventory-assembly.test.mjs", "test/device-state.test.mjs", "test/grant.test.mjs", "test/actions.test.mjs", "test/jmap-config.test.mjs", "test/management.test.mjs"], ROOT / "sdk/typescript", env)
+        run([node, "--test", "test/core.test.mjs", "test/blob.test.mjs", "test/control.test.mjs", "test/registry.test.mjs", "test/roster.test.mjs", "test/home-policy.test.mjs", "test/pairing.test.mjs", "test/founding.test.mjs", "test/inventory-assembly.test.mjs", "test/device-state.test.mjs", "test/grant.test.mjs", "test/actions.test.mjs", "test/jmap-config.test.mjs", "test/management.test.mjs"], ROOT / "sdk/typescript", env)
         # TandemArgon2 is built optimized in every configuration, so the 1 GiB tests take seconds in a debug build too.
         run(["swift", "test", "--quiet"], ROOT, env)
         if args.browser:
