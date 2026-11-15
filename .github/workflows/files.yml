@@ -25,16 +25,19 @@ jobs:
           python-version: '3.15'
       - run: python -B -W error::ResourceWarning -m unittest discover -s interop -q
       - run: python -B interop/interop.py go --files --race --report .build/file-e2e.json
+      - run: python -B interop/interop.py go --wire --race --report .build/file-wire.json
+      - run: python -B interop/campaign.py go --seeds 8 9 --steps 12 --race --report .build/file-history.json
       - name: Record scenario results
         if: always()
         run: |
           python - <<'PY'
           import json, os
           from pathlib import Path
-          report = Path('.build/file-e2e.json')
-          if report.exists():
-              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-                  summary.write('| Scenario | Result | Seconds |\n|---|---|---|\n')
-                  for row in json.loads(report.read_text())['results']:
-                      summary.write(f"| {row['scenario']} | {'pass' if row['ok'] else 'FAIL'} | {row['seconds']} |\n")
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('| Scenario | Result | Seconds |\n|---|---|---|\n')
+              for name in ('file-e2e.json', 'file-wire.json', 'file-history.json'):
+                  report = Path('.build') / name
+                  if report.exists():
+                      for row in json.loads(report.read_text())['results']:
+                          summary.write(f"| {row['scenario']} | {'pass' if row['ok'] else 'FAIL'} | {row['seconds']} |\n")
           PY

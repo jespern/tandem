@@ -259,7 +259,8 @@ actor Driver {
             let store = BlobStore(try configuration(), options: .init(folder: folder + "-blobs", transferConnections: c["connections"] as? Int))
             blobs = store
             let fixture = FixtureBlobs(store); faultBlobs = fixture
-            try await dev().useBlobs(fixture, settings: BlobSettings(chunkSize: c["chunkSize"] as? Int ?? Blob.defaultChunk))
+            try await dev().useBlobs(fixture, settings: BlobSettings(chunkSize: c["chunkSize"] as? Int ?? Blob.defaultChunk,
+                                                                  storeLimit: c["storeLimit"] as? Int ?? (2 << 30)))
             return [:]
         case "blobFault":
  guard (c["after"] as? Int ?? 0)>=0 else {throw Failure(message: "negative fault boundary")}

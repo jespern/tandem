@@ -54,6 +54,7 @@ func (d *driver) blobOp(ctx context.Context, dev *engine.Device, op string, a ar
 			return nil, true, errors.New("blobs already enabled")
 		}
 		size, _ := a["chunkSize"].(float64)
+		limit, _ := a["storeLimit"].(float64)
 		connections, _ := a["connections"].(float64)
 		opts := imap.BlobOptions{Folder: d.folder + "-blobs"}
 		if connections > 0 {
@@ -66,7 +67,7 @@ func (d *driver) blobOp(ctx context.Context, dev *engine.Device, op string, a ar
 		}
 		d.blobs = b
 		d.faultBlobs = &fixtureBlobs{BlobHub: b}
-		return nil, true, dev.UseBlobs(d.faultBlobs, engine.BlobSettings{ChunkSize: int(size)})
+		return nil, true, dev.UseBlobs(d.faultBlobs, engine.BlobSettings{ChunkSize: int(size), StoreLimit: int64(limit)})
 	}
 	if op == "blobFault" {
 		n, _ := a["after"].(float64)

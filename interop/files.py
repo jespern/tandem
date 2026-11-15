@@ -9,12 +9,12 @@ import sqlite3
 import os
 
 from harness import Failed, Rejected, b64u, unb64u, check, content
-from providers import Mailbox
+from providers import Mailbox, quote
 
 CHUNK = 65536
 
 
-def world(new, hub, role='writer', third=False, chunk=CHUNK):
+def world(new, hub, role='writer', third=False, chunk=CHUNK, store_limit=None):
     bob, alice = new('a', 'Bob'), new('b', 'Alice')
     bob('found', label='Bob')
     alice('join', link=bob('invite', label='Alice')['link'], label='Alice')
@@ -30,7 +30,10 @@ def world(new, hub, role='writer', third=False, chunk=CHUNK):
             d('sync'); d('accept', list=lst)
     for d in (bob, alice, carol):
         if d:
-            d('useBlobs', chunkSize=chunk, connections=2)
+            options = dict(chunkSize=chunk, connections=2)
+            if store_limit is not None:
+                options['storeLimit'] = store_limit
+            d('useBlobs', **options)
             d('settleBlobs')
     return bob, alice, carol, lst
 
@@ -397,6 +400,114 @@ def file_push(new, hub):
         fetch(receiver, t, data)
 
 
+def file_partial_manifest_isolation(new, hub):
+    """A bad signed manifest cannot poison resume state for a good file with the same hash."""
+    bob, alice, _, lst = world(new, hub)
+    good, bad = target(lst), target(lst)
+    data = os.urandom(5 * CHUNK + 17)
+    attach(bob, good, data)
+    m = manifest(bob, good)
+    entries = unb64u(m['chunks'])
+    # Real chunks and real keys, but a false order under the legitimate hash.
+    reordered = entries[68:136] + entries[:68] + entries[136:]
+    assign_manifest(bob, bad, dict(m, chunks=b64u(reordered)))
+    alice('sync')
+    rejected(alice, 'fetchBlob', **bad)
+    check('only the bad manifest is unreadable', alice('blob', **bad)['state'], 'unreadable')
+    alice.restart()
+    fetch(alice, good, data)
+    # Correcting the rejected record is also allowed to use the real content.
+    assign_manifest(bob, bad, m)
+    alice('sync'); fetch(alice, bad, data)
+
+
+def file_inline_hash_isolation(new, hub):
+    """Inline data must match its advertised hash before it can enter the shared content cache."""
+    bob, alice, _, lst = world(new, hub)
+    good, bad = target(lst), target(lst)
+    data, poison = os.urandom(CHUNK + 17), b'false content under a real file hash'
+    attach(bob, good, data)
+    m = manifest(bob, good)
+    assign_manifest(bob, bad, dict(blob=1, size=len(poison), hash=m['hash'], data=b64u(poison)))
+    alice('sync')
+    rejected(alice, 'fetchBlob', **bad)
+    check('false inline hash is explicit', alice('blob', **bad)['state'], 'unreadable')
+    fetch(alice, good, data)
+    # A pre-existing verified cache entry must not conceal an invalid inline description.
+    rejected(alice, 'fetchBlob', **bad)
+
+
+def file_removed_upload_stays_cancelled(new, hub):
+    """Learning of removal cancels a pending upload permanently, even if re-admitted later."""
+    bob, alice, _, lst = world(new, hub)
+    t, old = target(lst), os.urandom(CHUNK + 1)
+    attach(bob, t, old); alice('sync')
+    alice('blobFault', after=1)
+    attach(alice, t, os.urandom(3 * CHUNK + 3))
+    bob('removeMember', list=lst, participant=alice('me')['participant'])
+    alice('sync'); alice('settleBlobs')
+    with sqlite3.connect(alice.directory / 'device.sqlite') as db:
+        count = db.execute('SELECT COUNT(*) FROM uploads').fetchone()[0]
+    check('observed removal consumes the pending upload', count, 0)
+    bob('share', list=lst, participant=alice('me')['participant'], role='writer')
+    alice('sync')
+    if any(o['list'] == lst for o in alice('offers')['offers']):
+        alice('accept', list=lst)
+    alice.restart(); alice('sync'); alice('settleBlobs'); bob('sync')
+    fetch(bob, t, old); fetch(alice, t, old)
+
+
+def file_larger_than_cache(new, hub):
+    """A successful explicit fetch must not evict its own return value to meet the cache budget."""
+    bob, alice, _, lst = world(new, hub, store_limit=CHUNK)
+    first, second = target(lst), target(lst)
+    old, newer = os.urandom(2 * CHUNK + 1), os.urandom(3 * CHUNK + 7)
+    attach(bob, first, old); attach(bob, second, newer); alice('sync')
+    fetch(alice, first, old)
+    fetch(alice, second, newer)
+    check('previous oversized file can be evicted', alice('blob', **first)['state'], 'remote')
+    check('the just-returned file remains readable', alice('blob', **second)['state'], 'here')
+    fetch(alice, second, newer)
+
+
+def file_folder_recreation(new, hub):
+    """Recreating the blob folder changes UIDVALIDITY; cached IDs and first-seen times must reset."""
+    bob, alice, _, lst = world(new, hub)
+    t, data = target(lst), os.urandom(2 * CHUNK + 17)
+    attach(bob, t, data); alice('sync'); fetch(alice, t, data)
+    m = manifest(alice, t)
+    mailbox = Mailbox(hub)
+    rows = mailbox.chunks()
+    with sqlite3.connect(alice.directory / 'device.sqlite') as db:
+        old_ids = {r[0] for r in db.execute('SELECT id FROM chunks')}
+        db.execute('UPDATE chunks SET seen=0')
+    # Only this scenario's random, exact folder is ever deleted/recreated.
+    with mailbox.connection() as server:
+        folder = quote(mailbox.blob_folder)
+        check('select original folder', server.select(folder)[0], 'OK')
+        old_validity = server.response('UIDVALIDITY')[1]
+        ids = ','.join(row['uid'] for row in rows)
+        check('clear owned chunks before deleting their folder', server.uid('STORE', ids, '+FLAGS.SILENT', '(\\Deleted)')[0], 'OK')
+        check('expunge only the owned chunks', server.uid('EXPUNGE', ids)[0], 'OK')
+        server.unselect()
+        check('delete owned blob folder', server.delete(folder)[0], 'OK')
+        check('recreate owned blob folder', server.create(folder)[0], 'OK')
+        for row in rows:
+            check('restore actual encrypted bytes', server.append(folder, None, None, row['raw'])[0], 'OK')
+        check('select recreated folder', server.select(folder)[0], 'OK')
+        new_validity = server.response('UIDVALIDITY')[1]
+        if old_validity == new_validity:
+            raise Failed('provider reused UIDVALIDITY: recreation was not exercised')
+    cache = alice.directory / ('device.sqlite.blobs/' + unb64u(m['hash']).hex())
+    cache.unlink()
+    alice.restart(); alice('sync'); alice('settleBlobs'); fetch(alice, t, data)
+    with sqlite3.connect(alice.directory / 'device.sqlite') as db:
+        current = db.execute('SELECT id, seen FROM chunks').fetchall()
+    check('no ID of the old folder survives', old_ids & {r[0] for r in current}, set())
+    check('every new first-seen clock starts over', all(r[1] > 0 for r in current), True)
+    check('recreation retains exactly the authentic chunks', alice('chunkCounts', **t)['counts'], [1] * 3)
+
+
 FILE_SCENARIOS = [file_boundaries, file_resume, file_lost_ack, file_pending_replacement,
                   file_unpublished_replacement, file_conflicts, file_junk_and_healing,
-                  file_membership, file_deletion, file_manifest_guards, file_reused_chunks, file_pending_rotation_conflict, file_commit_failure, file_copy_refuses_attachments, file_unpublished_content_survives_eviction, file_push]
+                  file_membership, file_deletion, file_manifest_guards, file_reused_chunks, file_pending_rotation_conflict, file_commit_failure, file_copy_refuses_attachments, file_unpublished_content_survives_eviction, file_push, file_partial_manifest_isolation, file_inline_hash_isolation, file_removed_upload_stays_cancelled, file_larger_than_cache, file_folder_recreation]

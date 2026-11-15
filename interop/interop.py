@@ -302,6 +302,8 @@ def run(config, provider, first, second, scenarios, timeout):
                     error = (error + '; ' if error else '') + f'mailbox cleanup failed: {type(exc).__name__}: {exc}; folder {hub["folder"]}'
         result = dict(provider=provider, sender=first, receiver=second, scenario=scenario.__name__,
                       seconds=round(time.monotonic() - started, 3), ok=error is None)
+        if hasattr(scenario, 'details'):
+            result['details'] = scenario.details
         if error:
             for secret in (hub['user'], hub['password']):
                 error = error.replace(secret, '[redacted]')
@@ -314,12 +316,15 @@ def run(config, provider, first, second, scenarios, timeout):
 
 def main():
     from files import FILE_SCENARIOS
+    from network import WIRE_SCENARIOS
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('engines', nargs='*', choices=list(ENGINES))
     parser.add_argument('--provider', action='append', choices=['stalwart', 'fastmail'], help='repeat for both; default Stalwart')
     parser.add_argument('--race', action='store_true', help='build the Go driver with the race detector')
-    parser.add_argument('--files', action='store_true', help='only file scenarios')
-    parser.add_argument('--scenario', action='append', choices=[s.__name__ for s in SCENARIOS + FILE_SCENARIOS])
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument('--files', action='store_true', help='only file lifecycle scenarios')
+    selection.add_argument('--wire', action='store_true', help='real TLS socket cuts and crashes; disposable Stalwart only')
+    parser.add_argument('--scenario', action='append', choices=[s.__name__ for s in SCENARIOS + FILE_SCENARIOS + WIRE_SCENARIOS])
     parser.add_argument('--timeout', type=float, default=120, help='deadline per driver command, seconds')
     parser.add_argument('--report', type=Path, help='write a credential-free JSON report')
     args = parser.parse_args()
@@ -330,8 +335,12 @@ def main():
     engines = list(dict.fromkeys(args.engines)) or list(ENGINES)
     pairs = [tuple(args.engines)] if len(args.engines) == 2 else list(itertools.product(engines, repeat=2))
     scenarios = ([blobs] + FILE_SCENARIOS) if args.files else SCENARIOS + FILE_SCENARIOS
+    if args.wire:
+        scenarios = WIRE_SCENARIOS
     if args.scenario:
-        scenarios = [s for s in SCENARIOS + FILE_SCENARIOS if s.__name__ in args.scenario]
+        scenarios = [s for s in SCENARIOS + FILE_SCENARIOS + WIRE_SCENARIOS if s.__name__ in args.scenario]
+    if 'fastmail' in (args.provider or []) and any(s in WIRE_SCENARIOS for s in scenarios):
+        parser.error('wire faults are restricted to disposable Stalwart')
     (ROOT / '.build').mkdir(exist_ok=True)
     for engine in engines:
         command = list(ENGINES[engine]['build'])

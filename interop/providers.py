@@ -38,6 +38,17 @@ class Mailbox:
     def blob_folder(self):
         return self.hub['folder'] + '-blobs'
 
+    def claimed_addresses(self):
+        """Header-only physical inventory; claims are not proof of authentic bodies."""
+        with self.connection() as m:
+            if m.select(quote(self.blob_folder), readonly=True)[0] != 'OK':
+                return set()
+            typ, data = m.uid('FETCH', '1:*', '(BODY.PEEK[HEADER.FIELDS (Tandem-Blob)])')
+            if typ != 'OK':
+                raise Failed('could not inspect chunk address headers')
+            return {str(msg['Tandem-Blob']) for p in data if isinstance(p, tuple)
+                    if (msg := email.message_from_bytes(p[1], policy=policy.default)).get('Tandem-Blob')}
+
     def chunks(self):
         with self.connection() as m:
             if m.select(quote(self.blob_folder), readonly=True)[0] != 'OK':
