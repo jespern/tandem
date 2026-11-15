@@ -471,6 +471,12 @@ func (d *Device) writeChanges(ctx context.Context, cid, record []byte, changes [
 // keepWrites merges this device's own new writes into its replica, stores them and publishes the
 // record's state.
 func (d *Device) keepWrites(ctx context.Context, c *collection, record, epoch []byte, n uint64, writes []*tandem.Write) error {
+	return d.keepWritesAndCommit(ctx, c, record, epoch, n, writes, nil)
+}
+
+// keepWritesAndCommit persists the writes and their local completion bookkeeping
+// in one transaction, before making the new replica state visible or publishing.
+func (d *Device) keepWritesAndCommit(ctx context.Context, c *collection, record, epoch []byte, n uint64, writes []*tandem.Write, finish func() error) error {
 	cid := c.id
 	var entries []tandem.Entry
 	for _, w := range writes {
@@ -493,6 +499,9 @@ func (d *Device) keepWrites(ctx context.Context, c *collection, record, epoch []
 			if _, err := d.store.PutWrite(e.ID, cid, record, epoch, p); err != nil {
 				return err
 			}
+		}
+		if finish != nil {
+			return finish()
 		}
 		return nil
 	})

@@ -3,6 +3,7 @@ import Synchronization
 import Tandem
 @testable import TandemEngine
 import XCTest
+import SQLite3
 
 /// DESIGN.md §17 in the engine: attaching, the pending write, uploads, downloads, clean-up and healing, on a memory hub and a
 /// memory blob folder. The scenarios of the Go engine's blobs_test.go.
@@ -17,10 +18,10 @@ final class BlobTests: XCTestCase {
 
     func content(_ n: Int) -> Bytes { (0..<n).map { _ in UInt8.random(in: 0...255) } }
 
-    func world() async throws -> World {
+    func world(store: Store? = nil) async throws -> World {
         let hub = MemoryHub(), keys = DeviceKeys()
         let f = try Founder.found(account: account, keys: keys, label: "Bob’s Mac")
-        let bob = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try Store(path: ":memory:"), hub: await hub.connect())
+        let bob = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try store ?? Store(path: ":memory:"), hub: await hub.connect())
         try await bob.publish(f)
         let link = try await bob.invite(label: "Alice", account: account, ms: f.managementSeed)
         let alice = try await Device.join(link: link, keys: DeviceKeys(), label: "Alice’s iPhone", store: try Store(path: ":memory:"), hub: await hub.connect())
@@ -139,7 +140,8 @@ final class BlobTests: XCTestCase {
         await bob.settleBlobs()
         let m1 = try await manifest(bob, list, photo, "photo")
         feed.down.withLock { $0 = true }
-        try await bob.attach(list: list, record: photo, name: "photo", content: content(2600))
+        let newer = content(2600)
+        try await bob.attach(list: list, record: photo, name: "photo", content: newer)
         await bob.settleBlobs()
         let m2 = try await manifest(bob, list, photo, "photo")
         XCTAssertNotEqual(m1.hash, m2.hash, "the replacement committed")
@@ -147,11 +149,25 @@ final class BlobTests: XCTestCase {
         await bob.settleBlobs()
         let kept = await onHub(blobs, m1)
         XCTAssertEqual(kept, m1.chunks!.count, "collected before the replacement was on the feed")
+        let local = await bob.store
+        XCTAssertEqual(try local.values(prefix: "blobs.staged.").count, 1)
+        let hash = m2.hash.map { String(format: "%02x", $0) }.joined()
+        try FileManager.default.removeItem(at: local.blobDirectory.appendingPathComponent(hash))
+        for e in m2.chunks ?? [] {
+            let refs = await blobs.withAddress(e.address)
+            try await blobs.destroy(ids: refs)
+        }
+        await bob.checkBlobs(); await bob.settleBlobs()
+        let restored = await onHub(blobs, m2)
+        XCTAssertEqual(restored, m2.chunks!.count, "staged source must repair an evicted file")
         feed.down.withLock { $0 = false }
         try await clean(bob)
         try await clean(bob)
         let left = await onHub(blobs, m1)
         XCTAssertEqual(left, 0)
+        XCTAssertTrue(try local.values(prefix: "blobs.staged.").isEmpty)
+        let got = try await fetched(bob, list, photo, "photo")
+        XCTAssertEqual(got, newer)
     }
 
     /// Review 2: junk claiming a chunk's address neither lets an upload skip it nor stops healing.
@@ -453,6 +469,69 @@ final class BlobTests: XCTestCase {
         let s = await state(w.bob, w.list, photo, "photo")
         XCTAssertEqual(s, .here)
     }
+    func testPendingRotationPreservesConcurrentAttachment() async throws {
+        let w = try await world()
+        let record = w.bob.newRecordID()
+        try await w.bob.attach(list: w.list, record: record, name: "file", content: content(3000))
+        await w.bob.settleBlobs(); try await w.alice.sync()
+        await w.blobs.set(failAppends: true)
+        try await w.bob.attach(list: w.list, record: record, name: "file", content: content(3200))
+        await w.bob.settleBlobs()
+        try await w.alice.attach(list: w.list, record: record, name: "file", content: Bytes("peer version".utf8))
+        try await w.bob.sync(); try await w.bob.rekey(list: w.list); try await w.alice.sync()
+        await w.blobs.set(failAppends: false); await w.bob.settleBlobs()
+        try await w.alice.sync(); try await w.bob.sync()
+        let item = await w.bob.item(list: w.list, id: record)
+        XCTAssertEqual(item?.values("_blob:file").count, 2, "rotation must preserve the concurrent attachment")
+    }
+
+    func testCommitFailureKeepsJournalAndStagedContent() async throws {
+        for (table, action, row) in [("writes", "INSERT", "NEW"), ("uploads", "DELETE", "OLD")] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let path = directory.appendingPathComponent("device.sqlite").path, store = try Store(path: path)
+            let w = try await world(store: store), record = w.bob.newRecordID(), newer = content(3200)
+            try await w.bob.attach(list: w.list, record: record, name: "file", content: content(3000))
+            await w.bob.settleBlobs()
+            let previous = await w.bob.value(list: w.list, record: record, field: "_blob:file")
+            await w.blobs.set(failAppends: true)
+            try await w.bob.attach(list: w.list, record: record, name: "file", content: newer)
+            await w.bob.settleBlobs()
+            var db: OpaquePointer?
+            XCTAssertEqual(sqlite3_open(path, &db), SQLITE_OK)
+            defer { sqlite3_close(db) }
+            let hex = record.map { String(format: "%02x", $0) }.joined()
+            let sql = "CREATE TRIGGER fail_file_commit BEFORE \(action) ON \(table) WHEN \(row).record = X'\(hex)' BEGIN SELECT RAISE(ABORT, 'injected durable commit failure'); END"
+            XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK)
+            await w.blobs.set(failAppends: false); await w.bob.settleBlobs()
+            let uploads = try store.uploads()
+            XCTAssertEqual(uploads.count, 1, "a failed commit must retain the journal")
+            let upload = try some(uploads.first)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: store.blobDirectory.appendingPathComponent("staged/" + upload.staged).path))
+            let after = await w.bob.value(list: w.list, record: record, field: "_blob:file")
+            XCTAssertEqual(after, previous, "failed persistence must not change the replica")
+            XCTAssertEqual(sqlite3_exec(db, "DROP TRIGGER fail_file_commit", nil, nil, nil), SQLITE_OK)
+            await w.bob.settleBlobs(); try await w.alice.sync()
+            let got = try await fetched(w.alice, w.list, record, "file")
+            XCTAssertEqual(got, newer)
+        }
+    }
+
+    func testCopyRefusesAttachmentsBeforeCreatingAList() async throws {
+        for data in [Bytes("inline file".utf8), content(3000)] {
+            let w = try await world()
+            let record = w.bob.newRecordID()
+            try await w.bob.attach(list: w.list, record: record, name: "file", content: data)
+            await w.bob.settleBlobs()
+            let before = await w.bob.lists().count
+            do { _ = try await w.bob.copy(list: w.list); XCTFail("copy silently omitted attachments") }
+            catch { XCTAssertTrue("\(error)".contains("file attachments")) }
+            let after = await w.bob.lists().count
+            XCTAssertEqual(after, before, "refused copy must not create a partial list")
+        }
+    }
+
 }
 
 /// A feed connection that can go away.
@@ -521,4 +600,5 @@ final class GatedBlobs: BlobHub, @unchecked Sendable {
         if armed.withLock({ $0 }) { state.withLock { if $0.inFlight > 0 { $0.broken = true } } }   // closing a connection under a command
         await inner.release()
     }
+
 }

@@ -36,6 +36,11 @@ extension Device {
         try await sync()
         guard let me, let old = collections[cid], old.genesis != nil, following(cid)
         else { throw TandemError.invalid("copy: not a list this participant follows") }
+        // Cross-scope manifests would depend on chunks the source can collect.
+        // Refuse before creating a partial copy until files can be re-encrypted.
+        guard !old.records.values.contains(where: { r in
+            !r.deleted && r.kept.contains { $0.write.op == .assign && Self.isBlobField($0.write.field) }
+        }) else { throw TandemError.invalid("copy: copying lists with file attachments is not implemented") }
         let mark = "copy." + cid.hex
         let copy: Bytes
         if let earlier = try store.value(mark), collections[earlier] != nil {

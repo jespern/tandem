@@ -405,34 +405,47 @@ extension Device {
         guard let me, let head = c.head, !c.dead, let st = c.statements[head]?.statement, !st.deleted,
               let member = st.members.first(where: { $0.uid == me.participant }), member.role != .reader
         else { try dropUpload(u); flushEvents(); return }   // never published: its chunks are orphans (§17.6)
-        guard let (c2, me2, head2, epoch) = try? writable(u.scope, record: u.record) else { return }   // wait for a key or a rekey
+        guard let (c2, me2, _, epoch) = try? writable(u.scope, record: u.record) else { return }   // wait for a key or a rekey
         if epoch != u.epoch {
-            w = try signRecord(c2, me: me2, record: u.record, field: w.field, op: .assign, value: w.value, element: nil, head: head2, epoch: epoch, after: [])
+            let base = reissueBase(w)
+            guard let ref = firstWriterStatement(c2, epoch: epoch, me: me2), base.count <= maxVector
+            else { throw TandemError.invalid("blob: pending write cannot enter the current epoch") }
+            w = try reissueWrite(w, me: me2, ref: ref, base: base)
         }
-        let content = b.content(m.hash)
+        let content = b.content(m.hash), staged = b.staged.appendingPathComponent(u.staged)
+        // Preserve staged content until the manifest and journal removal commit together.
+        // A failed transaction or process loss can then retry the same upload.
         if !FileManager.default.fileExists(atPath: content.path) {
-            try FileManager.default.moveItem(at: b.staged.appendingPathComponent(u.staged), to: content)
-        } else {
-            try? FileManager.default.removeItem(at: b.staged.appendingPathComponent(u.staged))
+            try FileManager.default.linkItem(at: staged, to: content)
         }
-        try touch(m.hash)
-        try store.removeUpload(u.write)
+        let stageMark = "blobs.staged." + u.write.hex, id = try w.id()
+        try await keepWrites(u.scope, record: u.record, epoch: epoch, writes: [w]) {
+            try touch(m.hash)
+            try store.setValue(stageMark, id + m.hash)
+            try store.removeUpload(u.write)
+        }
+        // A failed feed append must not turn the only source into evictable cache.
+        if try store.onFeed(id) {
+            try? FileManager.default.removeItem(at: staged)
+            try? store.removeValue(stageMark)
+        }
         changed(.blobs(list: u.scope, records: [u.record]))
-        try await keepWrites(u.scope, record: u.record, epoch: epoch, writes: [w])
+        flushEvents()
     }
 
-    /// Merges this device's own new writes into its replica, stores them and publishes the record's state.
-    func keepWrites(_ cid: Bytes, record: Bytes, epoch: ID, writes: [Write]) async throws {
+    /// Save writes and optional completion bookkeeping atomically before exposing or publishing the new replica.
+    func keepWrites(_ cid: Bytes, record: Bytes, epoch: ID, writes: [Write], commit: () throws -> Void = {}) async throws {
         guard var c = collections[cid], let head = c.head, let n = c.statements[head]?.statement.keyN else { return }
         var r = try c.records[record] ?? Record(hub: pin.hub, scope: cid, id: record)
         try r.merge(try writes.map { try Entry($0, epoch: epoch, epochNumber: n) })
-        c.records[record] = r
-        collections[cid] = c
         try store.transaction {
             for w in writes {
                 try store.putWrite(id: try w.id(), scope: cid, record: record, epoch: epoch, payload: try recordPayload(record: record, writes: [w]))
             }
+            try commit()
         }
+        c.records[record] = r
+        collections[cid] = c
         changed(.items(list: cid, records: [record]))
         flushEvents()
         do { try await publish(cid: cid, epoch: epoch, record: record, writes: r.kept.map(\.write)) }

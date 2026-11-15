@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"strings"
 
 	tandem "github.com/jespern/tandem/sdk/go"
 )
@@ -50,6 +51,19 @@ func (d *Device) Copy(ctx context.Context, list []byte) (ListCopy, error) {
 	me, old := d.me, d.collections[string(list)]
 	if me == nil || old == nil || old.genesis == nil || !d.following(list) {
 		return ListCopy{}, fail("copy: not a list this participant follows")
+	}
+	// File manifests cannot be copied as opaque values across scopes: the
+	// source's cleanup would destroy the destination's chunks. Until copying
+	// can download and re-encrypt files, refuse before creating a partial list.
+	for _, r := range old.records {
+		if r.Deleted() {
+			continue
+		}
+		for _, e := range r.Entries() {
+			if e.W.Op == tandem.OpAssign && strings.HasPrefix(e.W.Field, BlobPrefix) {
+				return ListCopy{}, fail("copy: copying lists with file attachments is not implemented")
+			}
+		}
 	}
 	mark := "copy." + hexs(list)
 	var cp []byte

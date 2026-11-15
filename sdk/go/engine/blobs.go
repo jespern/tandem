@@ -686,25 +686,48 @@ func (d *Device) commit(ctx context.Context, b *blobs, u Upload) error {
 		d.dropUpload(u) // never published: its author can't write here any more, and its chunks are orphans (§17.6)
 		return nil
 	}
-	c2, me, head, epoch, cur, err := d.writable(u.Scope, u.Record)
+	c2, me, _, epoch, cur, err := d.writable(u.Scope, u.Record)
 	if err != nil {
 		return nil // no key for the current epoch yet, or waiting for a rekey: the next round tries again
 	}
 	if !bytes.Equal(epoch, u.Epoch) {
-		if w, err = d.signRecord(c2, me, u.Record, u.Field, tandem.OpAssign, w.Value, nil, head, epoch, nil); err != nil {
+		ref := d.firstWriterStatement(c2, epoch, me)
+		base := tandem.Join(w.Base, w.Context, tandem.VV{w.Dot})
+		if ref == nil || len(base) > tandem.MaxVector {
+			return fail("blob: pending write cannot enter the current epoch")
+		}
+		w, err = d.reissueWrite(w, me, ref, base)
+		if err != nil {
 			return err
 		}
 	}
 	content := filepath.Join(b.dir, hex.EncodeToString(m.Hash))
-	if err := os.Rename(filepath.Join(b.dir, "staged", u.Staged), content); err != nil && !os.IsNotExist(err) {
+	staged := filepath.Join(b.dir, "staged", u.Staged)
+	// Keep the staged inode until the manifest and journal removal commit
+	// together. A crash or a failed transaction must leave a resumable upload.
+	if err := os.Link(staged, content); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
 	}
-	d.touchLocked(m.Hash)
-	if err := d.store.RemoveUpload(u.Write); err != nil {
+	stageMark := "blobs.staged." + hex.EncodeToString(u.Write)
+	id := writeID(w)
+	if err := d.keepWritesAndCommit(ctx, c2, u.Record, epoch, cur.s.KeyN, []*tandem.Write{w}, func() error {
+		d.touchLocked(m.Hash)
+		if err := d.store.SetValue(stageMark, append(bytes.Clone(id), m.Hash...)); err != nil {
+			return err
+		}
+		return d.store.RemoveUpload(u.Write)
+	}); err != nil {
 		return err
+	}
+	// Publication may fail while the durable write succeeds. Its staged source
+	// stays outside the evictable cache until a feed message holds the write.
+	if d.store.OnFeed(id) {
+		if err := os.Remove(staged); err == nil || errors.Is(err, os.ErrNotExist) {
+			_ = d.store.RemoveValue(stageMark)
+		}
 	}
 	d.changed(Event{Kind: EventBlobs, List: u.Scope, Records: [][]byte{u.Record}})
-	return d.keepWrites(ctx, c2, u.Record, epoch, cur.s.KeyN, []*tandem.Write{w})
+	return nil
 }
 
 // The index (§17.4.3)

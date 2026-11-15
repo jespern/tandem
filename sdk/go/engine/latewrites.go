@@ -242,11 +242,8 @@ func (d *Device) resign(ctx context.Context, cid []byte, me *Me) error {
 			}
 			continue
 		}
-		o := x.entry.W
-		w := &tandem.Write{Hub: d.pin.Hub, Certificate: me.Certificate, Authorization: me.Auth, Scope: cid, Record: x.record,
-			Field: o.Field, Op: o.Op, Element: o.Element, Value: o.Value, Author: me.Participant, Dot: o.Dot, Ref: ref,
-			Context: tandem.VV{}, Base: base}
-		if err := w.Sign(me.Keys.Signing); err != nil {
+		w, err := d.reissueWrite(x.entry.W, me, ref, base)
+		if err != nil {
 			return err
 		}
 		touched[string(x.record)] = append(touched[string(x.record)], w)
@@ -338,4 +335,15 @@ func (d *Device) carryListed(ctx context.Context, cid []byte) error {
 		}
 	}
 	return nil
+}
+
+// reissueWrite preserves what the author saw and its original dot (§11.6).
+// It is shared by ordinary late writes and pending file uploads crossing epochs.
+func (d *Device) reissueWrite(o *tandem.Write, me *Me, ref []byte, base tandem.VV) (*tandem.Write, error) {
+	w := &tandem.Write{Hub: d.pin.Hub, Certificate: me.Certificate, Authorization: me.Auth, Scope: o.Scope, Record: o.Record,
+		Field: o.Field, Op: o.Op, Element: o.Element, Value: o.Value, Author: me.Participant, Dot: o.Dot, Ref: ref, Context: tandem.VV{}, Base: base}
+	if err := w.Sign(me.Keys.Signing); err != nil {
+		return nil, err
+	}
+	return w, nil
 }

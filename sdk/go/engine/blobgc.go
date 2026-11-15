@@ -541,6 +541,52 @@ func (d *Device) dropUnnamed(b *blobs, n named) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	// A crash after commit can leave a staged hard link. Use a fresh journal
+	// under the state lock: an earlier snapshot could miss a newly staged upload.
+	uploads, uploadErr := d.store.Uploads()
+	stages, stageErr := d.store.Values("blobs.staged.")
+	if uploadErr == nil && stageErr == nil {
+		pending := map[string]bool{}
+		markers := map[string]string{}
+		for _, v := range stages {
+			name := strings.TrimPrefix(v.Name, "blobs.staged.")
+			markers[name] = v.Name
+			if len(v.Value) != 64 {
+				pending[name] = true
+				continue
+			}
+			id, hash := v.Value[:32], hex.EncodeToString(v.Value[32:])
+			if n.hashes[hash] {
+				source, cache := filepath.Join(b.dir, "staged", name), filepath.Join(b.dir, hash)
+				if !fileExists(cache) {
+					_ = os.Link(source, cache)
+				}
+				if !fileExists(cache) || !d.store.OnFeed(id) {
+					pending[name] = true
+					continue
+				}
+			}
+			if !fileExists(filepath.Join(b.dir, "staged", name)) {
+				_ = d.store.RemoveValue(v.Name)
+			}
+		}
+		for _, u := range uploads {
+			pending[u.Staged] = true
+		}
+		staged := filepath.Join(b.dir, "staged")
+		entries, _ := os.ReadDir(staged)
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || len(name) != 64 || pending[name] {
+				continue
+			}
+			if _, err := hex.DecodeString(name); err == nil {
+				if err := os.Remove(filepath.Join(staged, name)); err == nil && markers[name] != "" {
+					_ = d.store.RemoveValue(markers[name])
+				}
+			}
+		}
+	}
 	for _, prefix := range []string{"blobs.opened.", "blobs.partial."} {
 		vs, _ := d.store.Values(prefix)
 		for _, v := range vs {

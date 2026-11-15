@@ -6,6 +6,8 @@ import (
 	"crypto/rand"
 	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -230,7 +232,8 @@ func TestBlobUnpublishedReplacementStaysProtected(t *testing.T) {
 	// Bob's feed goes away just as the replacement commits.
 	bob.hub = feed
 	feed.fail(true)
-	must(t, bob.AttachBytes(bg, list, photo, "photo", content(2600)))
+	newer := content(2600)
+	must(t, bob.AttachBytes(bg, list, photo, "photo", newer))
 	settle(t, bob)
 	m2 := manifestOf(t, bob, list, photo, "photo")
 	if bytes.Equal(m1.Hash, m2.Hash) {
@@ -241,11 +244,29 @@ func TestBlobUnpublishedReplacementStaysProtected(t *testing.T) {
 	if onHub(blobs, m1) != len(m1.Chunks) {
 		t.Fatal("collected before the replacement was on the feed")
 	}
+	if len(try(bob.store.Values("blobs.staged."))) != 1 {
+		t.Fatal("unpublished content has no staged source")
+	}
+	must(t, os.Remove(filepath.Join(bob.store.BlobDir(), hexs(m2.Hash))))
+	for _, e := range m2.Chunks {
+		must(t, blobs.Destroy(bg, blobs.WithAddress(e.Address)))
+	}
+	bob.CheckBlobs()
+	settle(t, bob)
+	if onHub(blobs, m2) != len(m2.Chunks) {
+		t.Fatal("staged source did not repair evicted content")
+	}
 	feed.fail(false)
 	clean(t, bob) // the sync's healing publishes the record; then the old chunks may go
 	clean(t, bob)
 	if onHub(blobs, m1) != 0 {
 		t.Fatalf("%d chunks of the replaced version left", onHub(blobs, m1))
+	}
+	if len(try(bob.store.Values("blobs.staged."))) != 0 {
+		t.Fatal("published upload kept its staged marker")
+	}
+	if !bytes.Equal(fetched(t, bob, list, photo, "photo"), newer) {
+		t.Fatal("repaired file differs")
 	}
 }
 
@@ -793,4 +814,84 @@ func (g *gatedBlobs) Release() {
 		g.brokenOnce.Store(true) // what closing a connection under a command does
 	}
 	g.MemoryBlobHub.Release()
+}
+
+// A pending attachment was signed before the peer edit. Crossing an epoch
+// must not rebuild its causal context from the state seen only at commit.
+func TestBlobPendingRotationPreservesConcurrentAttachment(t *testing.T) {
+	w := newBlobWorld(t)
+	record := NewRecordID()
+	must(t, w.bob.AttachBytes(bg, w.list, record, "file", content(3000)))
+	settle(t, w.bob)
+	syncAll(t, w.alice)
+	w.blobs.SetFailAppends(true)
+	must(t, w.bob.AttachBytes(bg, w.list, record, "file", content(3200)))
+	settle(t, w.bob)
+	// An inline peer attachment still publishes while chunk appends are blocked.
+	must(t, w.alice.AttachBytes(bg, w.list, record, "file", []byte("peer version")))
+	syncAll(t, w.bob)
+	must(t, w.bob.Rekey(bg, w.list))
+	syncAll(t, w.alice)
+	w.blobs.SetFailAppends(false)
+	settle(t, w.bob)
+	syncAll(t, w.alice, w.bob)
+	item, ok := w.bob.Item(w.list, record)
+	if !ok || len(item.Values(BlobPrefix+"file")) != 2 {
+		t.Fatal("rotation silently replaced a concurrent file")
+	}
+}
+
+func TestBlobCommitFailureKeepsJournalAndStagedContent(t *testing.T) {
+	for _, point := range []struct{ table, action, row string }{{"writes", "INSERT", "NEW"}, {"uploads", "DELETE", "OLD"}} {
+		t.Run(point.table, func(t *testing.T) {
+			w := newBlobWorld(t)
+			record := NewRecordID()
+			old, newer := content(3000), content(3200)
+			must(t, w.bob.AttachBytes(bg, w.list, record, "file", old))
+			settle(t, w.bob)
+			before, _ := w.bob.Value(w.list, record, BlobPrefix+"file")
+			w.blobs.SetFailAppends(true)
+			must(t, w.bob.AttachBytes(bg, w.list, record, "file", newer))
+			settle(t, w.bob)
+			sql := "CREATE TRIGGER fail_file_commit BEFORE " + point.action + " ON " + point.table + " WHEN " + point.row + ".record = X'" + hexs(record) + "' BEGIN SELECT RAISE(ABORT, 'injected durable commit failure'); END"
+			_, err := w.bob.store.conn.ExecContext(bg, sql)
+			must(t, err)
+			w.blobs.SetFailAppends(false)
+			settle(t, w.bob)
+			ups := try(w.bob.store.Uploads())
+			if len(ups) != 1 {
+				t.Fatalf("failed commit consumed the upload journal: %d", len(ups))
+			}
+			if _, err := os.Stat(filepath.Join(w.bob.store.BlobDir(), "staged", ups[0].Staged)); err != nil {
+				t.Fatal("staged content lost", err)
+			}
+			after, _ := w.bob.Value(w.list, record, BlobPrefix+"file")
+			if !bytes.Equal(before, after) {
+				t.Fatal("failed commit changed the replica")
+			}
+			_, err = w.bob.store.conn.ExecContext(bg, "DROP TRIGGER fail_file_commit")
+			must(t, err)
+			settle(t, w.bob)
+			syncAll(t, w.alice)
+			if !bytes.Equal(fetched(t, w.alice, w.list, record, "file"), newer) {
+				t.Fatal("upload did not resume")
+			}
+		})
+	}
+}
+
+func TestBlobCopyRefusesAttachmentsBeforeCreatingAList(t *testing.T) {
+	for _, data := range [][]byte{[]byte("inline file"), content(3000)} {
+		w := newBlobWorld(t)
+		record := NewRecordID()
+		must(t, w.bob.AttachBytes(bg, w.list, record, "file", data))
+		settle(t, w.bob)
+		before := len(w.bob.Lists())
+		if _, err := w.bob.Copy(bg, w.list); err == nil || !strings.Contains(err.Error(), "file attachments") {
+			t.Fatalf("copy must refuse attachments: %v", err)
+		}
+		if len(w.bob.Lists()) != before {
+			t.Fatal("refused copy left a partial list")
+		}
+	}
 }

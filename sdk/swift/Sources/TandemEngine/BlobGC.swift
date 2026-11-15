@@ -188,7 +188,8 @@ extension Device {
     /// Removes content no record names any more, downloaded or half downloaded: a deleted record's, a replaced
     /// version's, a collected list's, and what was kept about it. A gone list's files stay as long as its replica does.
     func dropUnnamed(_ b: BlobRuntime) {
-        var hashes: Set<String> = [], writes: Set<String> = []
+        guard let uploads = try? store.uploads(), let stages = try? store.values(prefix: "blobs.staged.") else { return }
+        var hashes: Set<String> = [], writes: Set<String> = [], staged: Set<String> = []
         for c in collections.values {
             for r in c.records.values where !r.deleted {
                 for e in r.kept where e.write.op == .assign && Self.isBlobField(e.write.field) {
@@ -197,14 +198,28 @@ extension Device {
                 }
             }
         }
-        for u in (try? store.uploads()) ?? [] {
+        for u in uploads {
+            staged.insert(u.staged)
             if case let .record(state)? = try? Kind1.parse(u.payload, hub: pin.hub, scope: u.scope), let w = state.writes.first,
                case let .manifest(m) = Blob.parse(w.value), m.chunks != nil { hashes.insert(m.hash.hex) }
         }
         let fm = FileManager.default
-        for (dir, marker) in [(b.directory, "blobs.opened."), (b.partial, "blobs.partial.")] {
-            for name in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] where name.count == 64 && !hashes.contains(name) && Bytes(hex: name) != nil {
-                if (try? fm.removeItem(at: dir.appendingPathComponent(name))) != nil { try? store.removeValue(marker + name) }
+        for (key, value) in stages {
+            let name = String(key.dropFirst("blobs.staged.".count)), source = b.staged.appendingPathComponent(name)
+            guard value.count == 64 else { staged.insert(name); continue }
+            let id = Array(value.prefix(32)), hash = Array(value.suffix(32)).hex
+            if hashes.contains(hash) {
+                let cache = b.directory.appendingPathComponent(hash)
+                if !fm.fileExists(atPath: cache.path) { try? fm.linkItem(at: source, to: cache) }
+                if !fm.fileExists(atPath: cache.path) || (try? store.onFeed(id)) != true { staged.insert(name); continue }
+            }
+            if !fm.fileExists(atPath: source.path) { try? store.removeValue(key) }
+        }
+        for (dir, marker, names) in [(b.directory, "blobs.opened.", hashes), (b.partial, "blobs.partial.", hashes), (b.staged, "", staged)] {
+            for name in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] where name.count == 64 && !names.contains(name) && Bytes(hex: name) != nil {
+                if (try? fm.removeItem(at: dir.appendingPathComponent(name))) != nil {
+                    try? store.removeValue((marker.isEmpty ? "blobs.staged." : marker) + name)
+                }
             }
         }
         for prefix in ["blobs.opened.", "blobs.partial."] {

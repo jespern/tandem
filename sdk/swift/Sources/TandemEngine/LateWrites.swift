@@ -8,7 +8,7 @@ import Tandem
 // kept for the app as possibly unshared.
 
 /// The core's vector join, outside `Device`, whose `join(link:…)` would shadow it.
-private func joined(_ a: VV, _ b: VV, _ c: VV) -> VV { join(a, b, c) }
+func reissueBase(_ write: Write) -> VV { join(write.base, write.context, [write.dot]) }
 
 extension Device {
     /// This participant's writes in a list that a key change may have left behind: the app offers to recover or
@@ -112,16 +112,13 @@ extension Device {
                 if old.kept.contains(where: { $0.id == x.id }) { try store.setValue("unshared." + cid.hex + "." + x.id.hex, record) }
                 continue
             }
-            let base = joined(x.write.base, x.write.context, [x.write.dot])
+            let base = reissueBase(x.write)
             guard let ref = firstWriterStatement(c, epoch: current, me: me), base.count <= maxVector else {
                 try store.setValue(done, [1])
                 try store.setValue("unshared." + cid.hex + "." + x.id.hex, record)   // no statement allows it, or it can't be carried
                 continue
             }
-            var w = Write(hub: pin.hub, certificate: me.certificate, authorization: me.auth, scope: cid, record: record,
-                          field: x.write.field, op: x.write.op, element: x.write.element, value: x.write.value,
-                          author: me.participant, dot: x.write.dot, ref: ref, context: [], base: base)
-            try w.sign(with: me.keys.signing)
+            let w = try reissueWrite(x.write, me: me, ref: ref, base: base)
             touched[record, default: []].append(w)
             resigned.append(done)
         }
@@ -162,4 +159,13 @@ extension Device {
             try await publish(cid: cid, epoch: current, record: record, writes: writes)
         }
     }
+    /// Keep the original dot and causal reach for both late edits and pending file uploads (§11.6).
+    func reissueWrite(_ o: Write, me: Me, ref: ID, base: VV) throws -> Write {
+        var w = Write(hub: pin.hub, certificate: me.certificate, authorization: me.auth, scope: o.scope, record: o.record,
+                      field: o.field, op: o.op, element: o.element, value: o.value, author: me.participant,
+                      dot: o.dot, ref: ref, context: [], base: base)
+        try w.sign(with: me.keys.signing)
+        return w
+    }
+
 }
