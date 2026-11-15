@@ -125,9 +125,13 @@ func (d *Device) settleLateWrites(ctx context.Context) error {
 }
 
 // currentEpoch is the current epoch of a list, its key and inventory, once this device can act in it.
+// A deleted list has none: nothing is published in it any more (§11.9).
 func (d *Device) currentEpoch(cid []byte) (epoch, key []byte, inv tandem.Inventory, ok bool) {
 	c := d.collections[string(cid)]
 	if c == nil || c.dead() {
+		return nil, nil, nil, false
+	}
+	if s, ok := c.headStatement(); ok && s.Deleted {
 		return nil, nil, nil, false
 	}
 	epoch = c.epochOf(c.head())

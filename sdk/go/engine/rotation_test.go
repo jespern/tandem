@@ -304,3 +304,32 @@ func try2[A, B any](a A, b B, err error) (A, B) {
 	}
 	return a, b
 }
+
+// The owner's device merges the writes it carried into the new channel itself, though they reach it
+// before its statement is announced: they wait for the statement instead of being refused (§8.3,
+// §9.4). Otherwise it can't tell what those messages hold, to collect them (§10.7, §11.9).
+func TestRotationOwnCarriedWritesAreMerged(t *testing.T) {
+	w := newRotWorld(t)
+	must(t, w.bob.RemoveMember(bg, w.carolID, w.house))
+	syncAll(t, w.bob, w.alice, w.bob)
+	epoch, key := epochKey(w.bob, w.house)
+	tag := tandem.CollectionTag(key, w.f.Pin.Hub, epoch)
+	data := 0
+	for _, m := range w.hub.Messages() {
+		if m.Channel != tag {
+			continue
+		}
+		_, p := try2(tandem.Open(key, w.f.Pin.Hub, tag, m.Body))
+		state, frag, err := tandem.ParseKind1(p, w.f.Pin.Hub, w.house)
+		if err != nil || frag != nil || bytes.Equal(state.Record, rosterRecord) {
+			continue
+		}
+		data++
+		if len(try(w.bob.store.Contents(m.ID))) != len(state.Writes) {
+			t.Fatal("the owner's device didn't merge a message it carried")
+		}
+	}
+	if data == 0 {
+		t.Fatal("nothing carried")
+	}
+}

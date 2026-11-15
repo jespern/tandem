@@ -244,4 +244,25 @@ final class RotationTests: XCTestCase {
         let stale = await titles(tablet, w.house)
         XCTAssertFalse(stale.contains("Soap"), "the revoked tablet gets no key to the new epoch")
     }
+
+    /// The owner's device merges the writes it carried into the new channel itself, though they reach it before its
+    /// statement is announced: they wait for the statement instead of being refused (§8.3, §9.4). Otherwise it can't
+    /// tell what those messages hold, to collect them (§10.7, §11.9).
+    func testOwnCarriedWritesAreMerged() async throws {
+        let w = try await world()
+        try await w.bob.remove(w.carolID, from: w.house)
+        try await w.bob.sync(); try await w.alice.sync(); try await w.bob.sync()
+        let c = await w.bob.collections[w.house]!
+        let epoch = c.epoch(of: c.head!)!, key = c.keys[epoch]!
+        let tag = Tandem.collectionTag(key: key, hub: w.founding.pin.hub, epoch: epoch)
+        let store = await w.bob.store
+        var data = 0
+        for m in await w.hub.messages where m.channel == tag {
+            let (_, p) = try Envelope.open(key: key, hub: w.founding.pin.hub, tag: tag, envelope: m.body)
+            guard case let .record(state)? = try? Kind1.parse(p, hub: w.founding.pin.hub, scope: w.house), state.record != Roster.record else { continue }
+            data += 1
+            XCTAssertEqual(try store.contents(message: m.id).count, state.writes.count, "the owner's device didn't merge a message it carried")
+        }
+        XCTAssertGreaterThan(data, 0, "nothing carried")
+    }
 }

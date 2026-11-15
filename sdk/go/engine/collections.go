@@ -1065,6 +1065,10 @@ func (d *Device) dataWriteValidity(w *tandem.Write, cid, epoch []byte) Validity 
 	if bytes.Equal(source, epoch) {
 		checks = append(checks, d.dataLateness(w, c, epoch))
 	} else {
+		// The channel's own statement not here yet, or a draft: held until it counts (§8.3, §9.4).
+		if _, ok := c.statements[string(epoch)]; !ok || !c.counts(epoch) {
+			return pending(epoch)
+		}
 		if !c.precedes(w.Ref, epoch) && !bytes.Equal(w.Ref, epoch) {
 			return invalid("not from an earlier epoch of this chain")
 		}

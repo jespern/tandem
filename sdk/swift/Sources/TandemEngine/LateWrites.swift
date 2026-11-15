@@ -64,9 +64,11 @@ extension Device {
         }
     }
 
-    /// The current epoch of a list, its key and inventory, once this device can act in it.
+    /// The current epoch of a list, its key and inventory, once this device can act in it. A deleted list has none:
+    /// nothing is published in it any more (§11.9).
     func currentEpoch(_ cid: Bytes) -> (epoch: ID, key: Bytes, inventory: Inventory)? {
-        guard let c = collections[cid], !c.dead, let head = c.head, let epoch = c.epoch(of: head), epoch != c.genesis,
+        guard let c = collections[cid], !c.dead, let head = c.head, c.statements[head]?.statement.deleted != true,
+              let epoch = c.epoch(of: head), epoch != c.genesis,
               let key = c.keys[epoch], let inv = inventory(epoch) else { return nil }
         return (epoch, key, inv)
     }

@@ -522,6 +522,8 @@ extension Device {
         if source == epoch {
             checks.append(dataLateness(w, c: c, epoch: epoch))
         } else {
+            // The channel's own statement not here yet, or a draft: held until it counts (§8.3, §9.4).
+            guard c.statements[epoch] != nil, c.counts(epoch) else { return .pending([epoch]) }
             guard c.precedes(w.ref, epoch) || w.ref == epoch else { return .invalid("not from an earlier epoch of this chain") }
             guard let inv = inventory(epoch) else { return .pending([epoch]) }
             guard let id = try? w.id(), inv.entries[w.record]?.contains(id) == true else { return .invalid("not carried into this epoch") }

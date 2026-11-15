@@ -91,7 +91,8 @@ func TestGCLateWritesOfARemovedMemberStay(t *testing.T) {
 }
 
 // §11.9: a deleted list stays, read-only, for the retention period; then its replica goes, all
-// but the roster, and a device of the owner destroys its data on the hub, all but the roster.
+// but the roster, and a device of the owner destroys its data on the hub, all but the roster. The
+// list changed key first, so the new channel holds writes carried over from the old one.
 func TestGCDeletedListAfterRetention(t *testing.T) {
 	hub, f, bob, alice, aliceID := lifeHub(t)
 	list := try(bob.CreateList(bg, "Old"))
@@ -101,6 +102,8 @@ func TestGCDeletedListAfterRetention(t *testing.T) {
 	must(t, alice.Accept(bg, list))
 	must(t, alice.SetField(bg, list, NewRecordID(), "title", []byte("Bread")))
 	syncAll(t, bob)
+	must(t, bob.Rekey(bg, list))
+	syncAll(t, alice, bob, alice)
 	epoch, key := epochKey(bob, list)
 	tag := tandem.CollectionTag(key, bob.Pin().Hub, epoch)
 	inChannel := func() (data, roster int) {
@@ -128,7 +131,7 @@ func TestGCDeletedListAfterRetention(t *testing.T) {
 	for _, d := range []*Device{alice, bob} {
 		d.SetRetention(time.Nanosecond)
 	}
-	syncAll(t, alice, bob, alice)
+	syncAll(t, bob, bob, alice, alice, alice)
 	if data, roster := inChannel(); data != 0 || roster == 0 {
 		t.Fatalf("on the hub: %d data messages, %d roster messages", data, roster)
 	}
