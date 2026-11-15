@@ -465,6 +465,11 @@ def forms(connect_raw, caps, folder, run, counter, which, total=8, size=1024 * K
             continue
         c = connect_raw(compress)
         c.cmd([b'SELECT ' + astring(folder)])
+        # A new connection is slow until its window has opened: the first form measured on one
+        # looked half as fast as the rest. One transfer is thrown away first.
+        warm = [message(run, next(counter), chunk(size), False, True) for _ in range(total)]
+        warm_uids = append_batch(c, prefix, warm, False)
+        c.cmd([b'UID FETCH ' + b','.join(b'%d' % u for u in warm_uids) + b' (BODY.PEEK[TEXT])'])
         for form in which:
             if form == 'binary' and 'BINARY' not in caps:
                 continue
