@@ -118,6 +118,7 @@ type link struct {
 	caps             map[string]bool
 	fresh            bool
 	folder, selected string
+	prefix           string // the personal namespace prefix (RFC 2342), "" if none
 	validity         uint32
 	modseq           uint64
 	qresync          bool
@@ -466,7 +467,7 @@ func (l *link) login(ctx context.Context, c *conn) error {
 				if len(personal) > 0 {
 					prefix = string(personal[0].prefix)
 				}
-				l.folder = prefix + l.cfg.Folder
+				l.prefix, l.folder = prefix, prefix+l.cfg.Folder
 			}
 		}
 	}
@@ -715,17 +716,29 @@ func (l *link) stopWatching() {
 // Store operations (§10.3)
 
 func (l *link) scan(ctx context.Context, c *conn, cur *cursor) (tandem.ChangeBatch, error) {
+	added, removed, more, next, err := scanFolder(l, ctx, c, cur, l.fetchItems, l.decode)
+	if err != nil {
+		return tandem.ChangeBatch{}, err
+	}
+	return tandem.ChangeBatch{Added: added, Removed: removed, More: more, Cursor: next}, nil
+}
+
+// scanFolder is one page of what changed in the link's folder since cur: the new messages that
+// decode, in UID order, the IDs removed, whether more is waiting, and the next cursor. The feed
+// fetches bodies with it; the blob folder only the headers its index needs (BLOBS.md section 4.3).
+func scanFolder[T any](l *link, ctx context.Context, c *conn, cur *cursor,
+	fetch func(context.Context, *conn, string) (map[uint32]*fetchItem, error), decode func(*fetchItem, uint32) (T, bool)) (
+	added []T, removed []string, more bool, next string, err error) {
 	// SELECT every time: it is where UIDVALIDITY and HIGHESTMODSEQ are learned, and a
 	// session may keep a stale view of a folder deleted and recreated by another client.
 	s, err := l.selectFolder(ctx, c, cur)
 	if err != nil {
-		return tandem.ChangeBatch{}, err
+		return nil, nil, false, "", err
 	}
 	var vanished *uidSet
 	if l.qresync && cur != nil && cur.modseq > 0 && cur.validity == s.validity {
 		vanished = &s.vanished
 	}
-	var removed []string
 	var known uidSet
 	var last uint32
 	if cur != nil && cur.validity == l.validity {
@@ -736,7 +749,7 @@ func (l *link) scan(ctx context.Context, c *conn, cur *cursor) (tandem.ChangeBat
 		} else {
 			all, err := l.searchAll(ctx, c)
 			if err != nil {
-				return tandem.ChangeBatch{}, err
+				return nil, nil, false, "", err
 			}
 			gone = known.subtracting(all)
 		}
@@ -749,8 +762,7 @@ func (l *link) scan(ctx context.Context, c *conn, cur *cursor) (tandem.ChangeBat
 			removed = append(removed, messageID(cur.validity, uid))
 		}
 	}
-	var added []tandem.Message
-	top, more := last, false
+	top := last
 	if last < math.MaxUint32 {
 		// n:* always returns the last message, so a UID below the range is ignored.
 		set := fmt.Sprintf("%d:*", last+1)
@@ -759,7 +771,7 @@ func (l *link) scan(ctx context.Context, c *conn, cur *cursor) (tandem.ChangeBat
 		if page := l.cfg.PageSize; s.uidNext == 0 || int64(s.uidNext)-1-int64(last) > int64(page) {
 			found, err := l.search(ctx, c, set)
 			if err != nil {
-				return tandem.ChangeBatch{}, err
+				return nil, nil, false, "", err
 			}
 			var uids []uint32
 			for _, uid := range found.uids() {
@@ -778,8 +790,8 @@ func (l *link) scan(ctx context.Context, c *conn, cur *cursor) (tandem.ChangeBat
 		items := map[uint32]*fetchItem{}
 		if set != "" {
 			var err error
-			if items, err = l.fetchItems(ctx, c, set); err != nil {
-				return tandem.ChangeBatch{}, err
+			if items, err = fetch(ctx, c, set); err != nil {
+				return nil, nil, false, "", err
 			}
 		}
 		for _, uid := range sortedKeys(items) {
@@ -787,7 +799,7 @@ func (l *link) scan(ctx context.Context, c *conn, cur *cursor) (tandem.ChangeBat
 				continue
 			}
 			top = max(top, uid)
-			if m, ok := l.decode(items[uid], uid); ok {
+			if m, ok := decode(items[uid], uid); ok {
 				added = append(added, m)
 				known.insert(uid)
 			}
@@ -797,8 +809,7 @@ func (l *link) scan(ctx context.Context, c *conn, cur *cursor) (tandem.ChangeBat
 	if l.qresync {
 		modseq = l.modseq
 	}
-	return tandem.ChangeBatch{Added: added, Removed: removed, More: more,
-		Cursor: cursor{validity: l.validity, modseq: modseq, last: top, known: known}.String()}, nil
+	return added, removed, more, cursor{validity: l.validity, modseq: modseq, last: top, known: known}.String(), nil
 }
 
 func sortedKeys(m map[uint32]*fetchItem) []uint32 {
@@ -905,6 +916,25 @@ func (l *link) currentUIDs(ids []string) uidSet {
 // appendMessages appends whole messages, several per command with MULTIAPPEND (RFC 3502).
 // IDs in order; "" where the server named no UID.
 func (l *link) appendMessages(ctx context.Context, c *conn, messages [][]byte) ([]string, error) {
+	return l.appendTo(ctx, c, l.folder, messages)
+}
+
+// appendTo appends to any folder; APPEND needs none selected. A folder that doesn't exist yet is
+// created on TRYCREATE and the append sent again: a NO stored nothing, so that is no repeat (§10.3).
+func (l *link) appendTo(ctx context.Context, c *conn, folder string, messages [][]byte) ([]string, error) {
+	ids, err := l.appendBatches(ctx, c, folder, messages)
+	var rejected *RejectedError
+	if errors.As(err, &rejected) && rejected.Code == "TRYCREATE" && len(ids) == 0 {
+		if _, err = c.execute(ctx, []part{text("CREATE "), astring([]byte(folder))}, false, false); err != nil &&
+			!(errors.As(err, &rejected) && rejected.Code == "ALREADYEXISTS") {
+			return nil, err
+		}
+		return l.appendBatches(ctx, c, folder, messages)
+	}
+	return ids, err
+}
+
+func (l *link) appendBatches(ctx context.Context, c *conn, folder string, messages [][]byte) ([]string, error) {
 	var ids []string
 	multi := l.caps["MULTIAPPEND"]
 	for i := 0; i < len(messages); {
@@ -915,13 +945,13 @@ func (l *link) appendMessages(ctx context.Context, c *conn, messages [][]byte) (
 			size += len(messages[i])
 			i++
 		}
-		parts := []part{text("APPEND "), astring([]byte(l.folder))}
+		parts := []part{text("APPEND "), astring([]byte(folder))}
 		for _, m := range batch {
 			parts = append(parts, text(` (\Seen) `), part{partLiteral, m})
 		}
 		r, err := c.execute(ctx, parts, false, false)
 		if err != nil {
-			return nil, err
+			return ids, err
 		}
 		if code := r.status.code; code != nil && code.name == "APPENDUID" && len(code.uids) == len(batch) {
 			for _, uid := range code.uids {

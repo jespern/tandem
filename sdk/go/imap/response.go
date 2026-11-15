@@ -315,6 +315,12 @@ type listData struct {
 type namespaceData []namespace // the personal namespaces
 type otherData string
 
+// quotaData is one QUOTA response (RFC 9208): a root and its resources, name -> (usage, limit).
+type quotaData struct {
+	root      string
+	resources map[string][2]uint64
+}
+
 // value is a generic parenthesized value, for the parts of a response that aren't read field by field.
 type value struct {
 	kind int // vAtom, vString, vNil, vList
@@ -586,6 +592,38 @@ func (p *parser) untagged() (any, error) {
 			}
 		}
 		return personal, nil
+	case "QUOTA":
+		if err := p.space(); err != nil {
+			return nil, err
+		}
+		root, err := p.astring()
+		if err != nil {
+			return nil, err
+		}
+		if err = p.space(); err != nil {
+			return nil, err
+		}
+		v, err := p.value(0)
+		if err != nil {
+			return nil, err
+		}
+		if v.kind != vList || len(v.list)%3 != 0 {
+			return nil, perr("bad QUOTA")
+		}
+		q := quotaData{root: string(root), resources: map[string][2]uint64{}}
+		for i := 0; i < len(v.list); i += 3 {
+			name, used, limit := v.list[i], v.list[i+1], v.list[i+2]
+			if name.kind != vAtom || used.kind != vAtom || limit.kind != vAtom {
+				return nil, perr("bad QUOTA")
+			}
+			u, e1 := strconv.ParseUint(used.atom, 10, 63)
+			n, e2 := strconv.ParseUint(limit.atom, 10, 63)
+			if e1 != nil || e2 != nil {
+				return nil, perr("bad QUOTA")
+			}
+			q.resources[strings.ToUpper(name.atom)] = [2]uint64{u, n}
+		}
+		return q, p.end()
 	case "VANISHED":
 		if err := p.space(); err != nil {
 			return nil, err
