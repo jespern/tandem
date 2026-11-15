@@ -313,7 +313,7 @@ test('files between the Swift engine and the browser over Stalwart, both ways, w
   const native = JSON.parse(process.env.TANDEM_NATIVE_FIXTURE), cfg = JSON.parse(process.env.TANDEM_JMAP_FIXTURE), driver = nativeDriver(native), command = driver.command;
   // A feed folder of its own, so the account's Tandem folder stays as the other tests expect it; the Swift driver's
   // blob folder is its feed folder's name with "-blobs" (sdk/swift/Sources/tandem-device).
-  const feed = `Tandem-Files-${Date.now()}`, folderName = `${feed}-blobs`, jmap = {...cfg, folderName: feed};
+  const feed = `Tandem-Files-${Date.now()}`, folderName = `${feed}-Blobs`, jmap = {...cfg, folderName: feed};
   try {
     await command('hub', {...native, folder: feed}); await command('found', {label: 'Mac with files'});
     const list = (await command('createList', {name: 'Shared files'})).list, {link} = await command('startPairing', {label: 'Browser with files'});

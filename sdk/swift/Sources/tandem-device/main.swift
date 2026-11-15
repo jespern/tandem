@@ -189,7 +189,7 @@ actor Driver {
         case "copyOf":
             return ["from": try await dev().copyOf(list: try b("list")).map(B64u.encode) ?? NSNull()]
         case "useBlobs":
-            let store = BlobStore(try configuration(), options: .init(folder: folder + "-blobs"))
+            let store = BlobStore(try configuration(), options: .init(folder: folder + "-Blobs"))
             blobs = store
             try await dev().useBlobs(store, settings: BlobSettings(chunkSize: c["chunkSize"] as? Int ?? Blob.defaultChunk))
             return [:]

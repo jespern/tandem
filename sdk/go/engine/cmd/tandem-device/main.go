@@ -44,7 +44,7 @@ var blobStates = map[engine.BlobState]string{engine.BlobHere: "here", engine.Blo
 func (d *driver) blobOp(ctx context.Context, dev *engine.Device, op string, a args) (map[string]any, bool, error) {
 	if op == "useBlobs" {
 		size, _ := a["chunkSize"].(float64)
-		b, err := imap.NewBlobStore(d.imapConfig(), imap.BlobOptions{Folder: d.folder + "-blobs"})
+		b, err := imap.NewBlobStore(d.imapConfig(), imap.BlobOptions{Folder: d.folder + "-Blobs"})
 		if err != nil {
 			return nil, true, err
 		}
