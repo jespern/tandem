@@ -20,8 +20,9 @@ and it can delay or delete messages. Revocation protects future epochs; it canno
 erase data someone has already downloaded.
 
 This repository contains the **v2 protocol draft and its verification work**.
-The complete control-message wire formats, a production implementation and an
-independent security review are still to come. The earlier v1 reference SDK and
+The control-message wire formats, native device engines and optional file extension
+are implemented. These are development implementations: broader live-provider and
+crash testing, and an independent security review, remain acceptance gates. The earlier v1 reference SDK and
 device engine on the [`testbed` branch](https://github.com/jespern/tandem/tree/testbed)
 implement a different protocol.
 
@@ -33,7 +34,9 @@ event-driven session API for push updates and submitting local changes, with
 bounded buffers and cancellation. They contain no polling loop.
 
 The four implementations share vectors and check every sender/receiver pairing.
-Swift and Go include durable device engines and IMAP adapters. All four offer
+Swift and Go include durable device engines, IMAP adapters and encrypted file
+attachments with resumable uploads and healing. File durability depends on a device
+retaining the content; see the [file specification](DESIGN.md#17-extension-files). All four offer
 [optional JMAP push](sdk/JMAP.md), and the [browser controller](sdk/typescript/BROWSER.md)
 adds durable hub creation, pairing, editing, sharing, key rotation and healing.
 These remain development SDKs; browser invitation acceptance and creator recovery
@@ -96,7 +99,7 @@ root. It writes the static pages to `site/out/`.
 
 ## Reviewing the draft
 
-The [specification's open questions](DESIGN.md#18-open-questions) identify what
+The [specification's open questions](DESIGN.md#19-open-questions) identify what
 still needs a decision or evidence. Reports are most useful when they name the
 section, describe a concrete history of messages or device actions, and state
 which rule or security property fails. Small counterexamples are welcome.

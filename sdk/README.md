@@ -3,7 +3,7 @@
 Four native **v2 protocol cores**, with an event-driven session API and the complete
 control-object formats (DESIGN §10.8), checked against shared vectors. Swift and Go have IMAP
 bindings ([`TandemIMAP`](swift/README.md#imap), [`sdk/go/imap`](go/README.md)). Swift and Go have
-production device engines: `TandemEngine` ([INTEGRATING.md](swift/INTEGRATING.md)) and
+development device engines: `TandemEngine` ([INTEGRATING.md](swift/INTEGRATING.md)) and
 [`sdk/go/engine`](go/engine/README.md). `interop/interop.py` runs Swift and Go devices on one hub, in
 every pairing. The v1
 implementations on `testbed` are separate.
@@ -11,8 +11,8 @@ implementations on `testbed` are separate.
 The [browser target](typescript/BROWSER.md) adds direct JMAP push, an IndexedDB
 journal, remembered browser keys and worker-based admin capsules for Liszto.
 Its durable controller supports pairing, verified reads/edits, sharing and
-home/collection rotation, removal and healing. Browser administration and pairing/invitation creation are implemented. Browser-first
-founding/join/recovery and Liszto’s web workspace still need integration. All four SDKs also offer an
+home/collection rotation, removal and healing. Browser administration and pairing/invitation creation are implemented. Browser hub founding is implemented; invitation acceptance and creator recovery
+still need controller entry points. Liszto’s web workspace lives in its own repository. All four SDKs also offer an
 [optional JMAP transport](JMAP.md); native applications keep IMAP as the default.
 
 | Language | Runtime | Changes arrive as | Runtime dependencies |
@@ -139,6 +139,15 @@ sdk/python/.venv/bin/python -B sdk/check.py \
 Build the oracle first using [its guide](../proofs/README.md). The SDK check's source
 scan also rejects timer/sleep calls in SDK runtime code. That scan complements
 the session tests; it is not a proof that a third-party transport never polls.
+
+## Files
+
+All four cores implement the file encodings and manifests of DESIGN §17. Go and
+Swift also upload, fetch, resume and heal files over IMAP. Browser file transport
+is not implemented. Files are optional; clients without them still merge their
+manifest fields. Replacing a file uploads it whole; delta sync and version history
+remain future work. See [BLOBS.md](../BLOBS.md) for measured provider costs and
+[the file rules](../DESIGN.md#17-extension-files) for durability and cleanup limits.
 
 ## What comes next
 

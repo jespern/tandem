@@ -1,6 +1,6 @@
 # The Swift device engine
 
-`TandemEngine` is the production implementation of a Tandem v2 device for Apple platforms: what Liszto links. `Tandem` (the core) has the primitives and the control-object codec; the engine runs a hub on top of them. This file is the plan and the state of the work, kept current so a later session can pick it up.
+`TandemEngine` is the development implementation of a Tandem v2 device for Apple platforms, used by Liszto. Independent security review and broader live-provider testing remain acceptance gates. `Tandem` (the core) has the primitives and the control-object codec; the engine runs a hub on top of them. This file is the plan and the state of the work, kept current so a later session can pick it up.
 
 ## Shape
 
