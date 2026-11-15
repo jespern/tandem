@@ -1,6 +1,6 @@
 # Proposal: garbage collection beyond what the specification allows today
 
-Status: **recommendations agreed** by Jesper, 2026-11-15; the open questions of section 8 remain. Nothing here is implemented yet. References with § are to
+Status: **recommendations agreed** by Jesper, 2026-11-15. Section 2's rule is proved (`proofs/TandemProofs/Drop.lean`), on one condition about §11.6 (section 2.3). Answers so far are in section 8. Nothing here is implemented yet. References with § are to
 `DESIGN.md`. Decisions left for Jesper are marked **Open**.
 
 Step 1 of the clean-up work, on branch `gc`, implements what `DESIGN.md` already allows and the
@@ -91,10 +91,13 @@ themselves, so a dropped write that arrives again is merged again and dropped ag
   snapshot data before the statement is on the hub (§11.6 step 3), and a device that dropped `x`
   reads it from the new channel when it moves over, in the same sync. If the inventory does not
   list `x`, the new epoch never needed it.
-- **Late writes.** Condition 3 keeps every own write that another author's write replaced, which is
-  exactly the set §11.6 may sign again. An own write replaced by a later own write `w` is covered:
-  either `w` is listed, or a listed write supersedes `w` and so `x`, or `w` is signed again and keeps
-  replacing what it replaced (`reissued_keeps_replacing`).
+- **Late writes.** Condition 3 keeps every own write that another author's write replaced. An own
+  write that a later own write replaced is dropped, and the proof shows that is safe only if §11.6
+  does not sign such a write again: as written, §11.6 signs both again, and they come back as a
+  conflict, where a device that dropped the earlier one signs only the later
+  (`listed_rule_differs`). Not signing it again is better on its own merits, since the later write,
+  signed again or listed, carries the change. `proofs/README.md` F6 has this, and that the engines
+  decide signing again differently from both.
 - **The inventory and healing.** The state a device preserves at a key change (§11.6 step 1) and
   the state it heals (§12.2) are its kept writes, which the rule never touches. Entries carried over
   unseen are earlier-epoch writes, which condition 1 leaves alone.
@@ -116,14 +119,15 @@ themselves, so a dropped write that arrives again is merged again and dropped ag
   write today. **Open:** is that rollback meant to be possible? If it is, the owner's devices keep
   §9.3's rule and only other devices use this one.
 
-**Needs a proof.** The argument above is informal. It should be proved in the model of `proofs/`,
-which has `Kept`, `Eligibility` and `Reissue` but no step from one epoch to the next with devices
-that drop: after any history of writes, drops under these conditions, key changes and late writes,
-every device reaches the state it would have reached without dropping, once it has read the new
-channel. The forgery check of the late-write rule (§11.6, the Go engine's `latewrites.go`) reads
-every held write of the record, superseded ones included; it should give the same answer when
-another author's superseded write is gone and only a write superseding it remains. Supersession is
-transitive (`sup_strict`), so it should, but this is what the proof has to settle.
+**Proved** in `proofs/TandemProofs/Drop.lean` (2026-11-15). After any history of receiving
+writes, dropping under section 2.2 and §9.3, and key changes, a device holds the state of a device
+that drops nothing (`same_state`), and decides as it which own writes to sign again (`resign_same`),
+given §11.6 amended as in section 2.3. Condition 3 is needed (`own_condition_needed`). What the proof
+takes from the protocol: an inventory lists only eligible writes; the listed writes of the replaced
+epoch are in the new channel when a device moves over; a write waits until its epoch counts, which
+both engines do since 2026-11-15 (a write carried into a new channel used to be refused when it
+arrived before the channel's statement). Not modelled: condition 2's "on the feed", which serves
+files only (§17.7), and the durability window above.
 
 ### 2.5 The alternative: rotate to compact
 
@@ -318,9 +322,9 @@ roster only in current channels already.
 
 | # | Question |
 |---|---|
-| G1 | Section 2.4: may the owner leave a removed member's writes out of the inventory to undo their damage? It decides whether owner devices may use the narrower rule. |
-| G2 | The proof of section 2.4: devices that drop under section 2's rule reach the same states as devices that don't. |
-| G3 | Section 3.3: does `gc_safe` hold for messages holding several records? Should small live records be packed too? |
-| G4 | The deletion mark changes the inventory format. Is that acceptable before v2 ships, and should it come together with packing, or packing first? |
-| G5 | The checkpoint of section 4.2, as part of the owner-control design §9.4 mentions. |
-| G6 | Thresholds: how many tombstone messages before a device packs; whether a device should pack only when it is the owner's (fewer concurrent packers) or any device (no waiting on the owner). |
+| G1 | Open. Section 2.4: may the owner leave a removed member's writes out of the inventory to undo their damage? It decides whether owner devices may use the narrower rule. |
+| G2 | **Done** (2026-11-15): `proofs/TandemProofs/Drop.lean`, given §11.6 amended (section 2.3, F6 in `proofs/README.md`). |
+| G3 | Open. Section 3.3: does `gc_safe` hold for messages holding several records? Should small live records be packed too? |
+| G4 | **Yes** (Jesper, 2026-11-15): the inventory format may change before v2 ships. Packing first, then the marks. |
+| G5 | Open. The checkpoint of section 4.2, as part of the owner-control design §9.4 mentions. |
+| G6 | **The owner's devices pack** (Jesper, 2026-11-15). The threshold is open: about 50 tombstone messages in a channel is the proposal. |

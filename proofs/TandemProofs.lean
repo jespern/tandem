@@ -1,5 +1,6 @@
 -- Tandem formal proofs and reference model. See README.md.
 import TandemProofs.Kept
+import TandemProofs.Drop
 import TandemProofs.Model
 import TandemProofs.Supersession
 import TandemProofs.Record
