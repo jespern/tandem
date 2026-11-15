@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -738,3 +739,58 @@ func TestBlobUnknownVersionProtectedByTheFeedStopsCleanup(t *testing.T) {
 }
 
 func readFile(path string) ([]byte, error) { return os.ReadFile(path) }
+
+// Found by interop on Stalwart: the worker let the hub's connections go at the end of its round while a
+// download was still using them. A download in flight keeps them.
+func TestBlobDownloadSurvivesTheWorkersRelease(t *testing.T) {
+	w := newBlobWorld(t)
+	photo, data := NewRecordID(), content(2500)
+	must(t, w.bob.AttachBytes(bg, w.list, photo, "photo", data))
+	settle(t, w.bob)
+	syncAll(t, w.alice)
+	gated := &gatedBlobs{MemoryBlobHub: w.blobs, entered: make(chan struct{}, 1), gate: make(chan struct{})}
+	w.alice.blobs.hub = gated
+	got := make(chan error, 1)
+	go func() {
+		_, err := w.alice.FetchBlob(bg, w.list, photo, "photo")
+		got <- err
+	}()
+	<-gated.entered // the download is in a fetch
+	gated.armed.Store(true)
+	w.alice.afterSync()
+	settle(t, w.alice) // a whole worker round, which ends by letting connections go if nobody uses them
+	close(gated.gate)
+	if err := <-got; err != nil {
+		t.Fatalf("the download broke: %v", err)
+	}
+}
+
+type gatedBlobs struct {
+	*MemoryBlobHub
+	entered    chan struct{}
+	gate       chan struct{}
+	armed      atomic.Bool
+	inFlight   atomic.Int32
+	brokenOnce atomic.Bool
+}
+
+func (g *gatedBlobs) Fetch(ctx context.Context, ids []string) ([]tandem.Chunk, error) {
+	g.inFlight.Add(1)
+	defer g.inFlight.Add(-1)
+	select {
+	case g.entered <- struct{}{}:
+		<-g.gate
+	default:
+	}
+	if g.brokenOnce.Load() {
+		return nil, errors.New("imap: store closed")
+	}
+	return g.MemoryBlobHub.Fetch(ctx, ids)
+}
+
+func (g *gatedBlobs) Release() {
+	if g.armed.Load() && g.inFlight.Load() > 0 {
+		g.brokenOnce.Store(true) // what closing a connection under a command does
+	}
+	g.MemoryBlobHub.Release()
+}

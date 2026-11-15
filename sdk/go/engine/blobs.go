@@ -111,6 +111,7 @@ type blobs struct {
 	hygiene     bool                 // a sync asked for a clean-up pass
 	healed      bool                 // the healing check ran since UseBlobs
 	view        []byte               // scopeView when the index was last refreshed by clean-up
+	users       int                  // transfers using the hub's connections now: the worker, downloads, quota
 	idle        chan struct{}        // closed and replaced whenever the worker has nothing left to do
 }
 
@@ -153,6 +154,23 @@ func (d *Device) blobState() *blobs {
 	return d.blobs
 }
 
+// use notes a transfer starting on the hub's connections; the returned function ends it, and the
+// last one to end lets the connections go.
+func (b *blobs) use() func() {
+	b.mu.Lock()
+	b.users++
+	b.mu.Unlock()
+	return func() {
+		b.mu.Lock()
+		b.users--
+		last := b.users == 0
+		b.mu.Unlock()
+		if last {
+			b.hub.Release()
+		}
+	}
+}
+
 func (b *blobs) wake() {
 	select {
 	case b.kick <- struct{}{}:
@@ -190,6 +208,36 @@ func (d *Device) BlobsIdle() <-chan struct{} {
 	return b.idle
 }
 
+// SettleBlobs wakes the blob worker and returns once it has run a whole round after now.
+func (d *Device) SettleBlobs(ctx context.Context) error {
+	b := d.blobState()
+	if b == nil {
+		return ErrNoBlobHub
+	}
+	for range 2 {
+		ch := d.BlobsIdle()
+		b.wake()
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+// CheckBlobs makes the next clean-up pass check that the chunks of files this device holds are still on
+// the hub, and restore those that aren't, as after a restart (section 8). An app may call it when it
+// comes to the foreground.
+func (d *Device) CheckBlobs() {
+	if b := d.blobState(); b != nil {
+		b.mu.Lock()
+		b.healed, b.hygiene = false, true
+		b.mu.Unlock()
+		b.wake()
+	}
+}
+
 // blobWorker runs uploads and the clean-up pass whenever woken, and lets the hub's transfer
 // connections go when it runs out of work.
 func (d *Device) blobWorker(b *blobs) {
@@ -199,6 +247,7 @@ func (d *Device) blobWorker(b *blobs) {
 			return
 		case <-b.kick:
 		}
+		done := b.use()
 		for d.life.Err() == nil {
 			worked, err := d.blobRound(d.life, b)
 			if err != nil && d.life.Err() == nil {
@@ -208,7 +257,7 @@ func (d *Device) blobWorker(b *blobs) {
 				break
 			}
 		}
-		b.hub.Release()
+		done()
 		b.mu.Lock()
 		if len(b.kick) == 0 {
 			close(b.idle)
@@ -892,6 +941,7 @@ func (d *Device) fetchManifest(ctx context.Context, b *blobs, list, record, id [
 	b.downloads[string(m.Hash)] = dl
 	delete(b.unavailable, string(id))
 	b.mu.Unlock()
+	defer b.use()()
 	d.blobEvent(list, record)
 	err := d.download(ctx, b, dl, id, m, path)
 	b.mu.Lock()
@@ -1214,5 +1264,6 @@ func (d *Device) BlobQuota(ctx context.Context) (tandem.Quota, error) {
 	if b == nil {
 		return tandem.Quota{}, ErrNoBlobHub
 	}
+	defer b.use()()
 	return b.hub.Quota(ctx)
 }

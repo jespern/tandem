@@ -470,3 +470,55 @@ final class FailingHub: PushStore, @unchecked Sendable {
     func destroy(ids: [String]) async throws { try await inner.destroy(ids: ids) }
     func close() async { await inner.close() }
 }
+
+/// Found by interop on Stalwart: the worker let the hub's connections go at the end of its round while a download was
+/// still using them. A download in flight keeps them.
+final class BlobReleaseTests: XCTestCase {
+    func testDownloadSurvivesTheWorkersRelease() async throws {
+        let t = BlobTests()
+        let w = try await t.world()
+        let photo = w.bob.newRecordID(), data = t.content(2500)
+        try await w.bob.attach(list: w.list, record: photo, name: "photo", content: data)
+        await w.bob.settleBlobs()
+        try await w.alice.sync()
+        let gated = GatedBlobs(inner: w.blobs)
+        await w.alice.replaceBlobHub(gated)
+        let fetch = Task { try await w.alice.fetchBlob(list: w.list, record: photo, name: "photo") }
+        await gated.entered()
+        gated.armed.withLock { $0 = true }
+        await w.alice.afterSync()
+        await w.alice.settleBlobs()
+        gated.open()
+        let url = try await fetch.value
+        XCTAssertEqual(Bytes(try Data(contentsOf: url)), data)
+    }
+}
+
+final class GatedBlobs: BlobHub, @unchecked Sendable {
+    let inner: MemoryBlobHub
+    let armed = Mutex(false), state = Mutex((inFlight: 0, broken: false, gated: false))
+    let enteredStream: AsyncStream<Void>, enteredSignal: AsyncStream<Void>.Continuation
+    let gateStream: AsyncStream<Void>, gateSignal: AsyncStream<Void>.Continuation
+    init(inner: MemoryBlobHub) {
+        self.inner = inner
+        (enteredStream, enteredSignal) = AsyncStream<Void>.makeStream()
+        (gateStream, gateSignal) = AsyncStream<Void>.makeStream()
+    }
+    func entered() async { for await _ in enteredStream { return } }
+    func open() { gateSignal.finish() }
+    func changes(since cursor: String) async throws -> BlobChanges { try await inner.changes(since: cursor) }
+    func append(_ chunks: [(channel: String, envelope: Bytes)], form: ChunkForm) async throws -> [String] { try await inner.append(chunks, form: form) }
+    func fetch(ids: [String]) async throws -> [Chunk] {
+        let first = state.withLock { s -> Bool in s.inFlight += 1; defer { s.gated = true }; return !s.gated }
+        if first { enteredSignal.yield(); for await _ in gateStream {} }
+        defer { state.withLock { $0.inFlight -= 1 } }
+        if state.withLock({ $0.broken }) { throw TandemError.invalid("closed") }
+        return try await inner.fetch(ids: ids)
+    }
+    func destroy(ids: [String]) async throws { try await inner.destroy(ids: ids) }
+    func quota() async throws -> Quota { try await inner.quota() }
+    func release() async {
+        if armed.withLock({ $0 }) { state.withLock { if $0.inFlight > 0 { $0.broken = true } } }   // closing a connection under a command
+        await inner.release()
+    }
+}

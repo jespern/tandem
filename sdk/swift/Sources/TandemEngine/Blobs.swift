@@ -9,7 +9,7 @@ import Tandem
 // there is none; nothing waits on a timer. File reading, sealing and hashing run off the actor.
 
 /// What this device can do with a blob now (section 8).
-public enum BlobState: Sendable, Equatable {
+public enum BlobState: Sendable, Hashable {
     /// Inline, or downloaded and verified; `path` is the file.
     case here
     /// On the hub, not fetched.
@@ -72,6 +72,7 @@ final class BlobRuntime {
     var hygiene = false                             // a sync asked for a clean-up pass
     var healed = false                              // the healing check ran since useBlobs
     var view: Bytes?                                // scope view when clean-up last refreshed the index
+    var users = 0                                   // transfers using the hub's connections now: the worker, downloads, quota
 
     init(hub: any BlobHub, directory: URL, settings: BlobSettings, kicker: AsyncStream<Void>.Continuation) {
         self.hub = hub; self.directory = directory; self.settings = settings; self.kicker = kicker
@@ -114,6 +115,14 @@ extension Device {
         wakeBlobs()
     }
 
+    /// Tests put a misbehaving folder in place.
+    func replaceBlobHub(_ hub: any BlobHub) {
+        guard let b = blobs else { return }
+        let r = BlobRuntime(hub: hub, directory: b.directory, settings: b.settings, kicker: b.kicker)
+        r.healed = b.healed; r.view = b.view
+        blobs = r
+    }
+
     /// Changes the blob settings at runtime.
     public func setBlobSettings(_ settings: BlobSettings) { blobs?.settings = settings }
 
@@ -134,6 +143,15 @@ extension Device {
     /// Makes the next clean-up pass check held content against the hub again, as after a restart.
     func forgetHealing() { blobs?.healed = false }
 
+    /// Makes the next clean-up pass check that the chunks of files this device holds are still on the hub, and restore
+    /// those that aren't, as after a restart (section 8). An app may call it when it comes to the foreground.
+    public func checkBlobs() {
+        guard let b = blobs else { return }
+        b.healed = false
+        b.hygiene = true
+        wakeBlobs()
+    }
+
     /// Asks the worker for a clean-up and healing pass; after every sync.
     func afterSync() {
         guard let b = blobs else { return }
@@ -141,9 +159,18 @@ extension Device {
         wakeBlobs()
     }
 
+    /// Notes a transfer starting on the hub's connections; `doneUsing` ends it, and the last to end lets them go.
+    func useBlobHub(_ b: BlobRuntime) { b.users += 1 }
+
+    func doneUsing(_ b: BlobRuntime) async {
+        b.users -= 1
+        if b.users == 0 { await b.hub.release() }
+    }
+
     func blobRounds() async {
         guard let b = blobs else { return }
         b.kicked = false
+        useBlobHub(b)
         while true {
             do {
                 if try await !blobRound(b) { break }
@@ -152,7 +179,7 @@ extension Device {
                 break
             }
         }
-        await b.hub.release()
+        await doneUsing(b)
         if !b.kicked {
             let waiters = b.settledWaiters
             b.settledWaiters.removeAll()
@@ -371,7 +398,8 @@ extension Device {
     func commit(_ b: BlobRuntime, _ u: Store.Upload) async throws {
         try takeExternalChanges()
         guard try store.uploads().contains(where: { $0.write == u.write }) else { return }   // cancelled or replaced meanwhile
-        guard var (w, m) = uploadOf(u), let c = collections[u.scope] else { try dropUpload(u); flushEvents(); return }
+        guard let (signed, m) = uploadOf(u), let c = collections[u.scope] else { try dropUpload(u); flushEvents(); return }
+        var w = signed
         if c.records[u.record]?.deleted == true { try dropUpload(u); flushEvents(); return }
         guard let me, let head = c.head, !c.dead, let st = c.statements[head]?.statement, !st.deleted,
               let member = st.members.first(where: { $0.uid == me.participant }), member.role != .reader
@@ -504,7 +532,9 @@ extension Device {
         b.downloads[m.hash] = d
         b.unavailable.remove(id)
         changed(.blobs(list: cid, records: [record])); flushEvents()
+        useBlobHub(b)
         do { try await download(b, d, id: id, m, to: path) } catch { d.error = error }
+        await doneUsing(b)
         b.downloads[m.hash] = nil
         if d.error as? BlobError == .unavailable { b.unavailable.insert(id) }
         d.finished = true
@@ -641,6 +671,7 @@ extension Device {
     /// The blob folder's storage quota.
     public func blobQuota() async throws -> Quota {
         guard let b = blobs else { throw BlobError.noBlobHub }
-        return try await b.hub.quota()
+        useBlobHub(b)
+        do { let q = try await b.hub.quota(); await doneUsing(b); return q } catch { await doneUsing(b); throw error }
     }
 }
