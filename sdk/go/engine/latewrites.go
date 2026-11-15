@@ -171,25 +171,41 @@ func (d *Device) resign(ctx context.Context, cid []byte, me *Me) error {
 			}
 			continue
 		}
-		// Every write seen of the record counts, kept or since superseded. A claim about this
-		// installation beyond what it issued is forged, unless the superseding write is this
-		// installation's own later one.
-		genuine := false
+		// Decided once every listed write of the record is here: one of them may replace it.
+		waiting := false
+		for _, id := range inv[string(x.record)] {
+			waiting = waiting || !d.store.HasWrite(id)
+		}
+		if waiting {
+			continue
+		}
+		// Not signed again when a later write of this installation replaced it, which carries the
+		// change, or a listed write did, unless only through a claim about this installation beyond
+		// any dot it issued, which is forged (§11.6). A write the inventory doesn't list replaces
+		// nothing in the new epoch, whoever wrote it.
+		ownLater, genuine := false, false
 		for _, o := range all {
 			if !bytes.Equal(o.record, x.record) || !tandem.Supersedes(o.entry, x.entry) {
 				continue
 			}
-			ownLater := o.entry.W.Dot.Device == me.Installation && dotLess(x.entry.W.Dot, o.entry.W.Dot)
-			if x.entry.W.Dot.Device != me.Installation || ownLater || !d.forged(o.entry.W, me) {
+			if o.entry.W.Dot.Device == me.Installation && dotLess(x.entry.W.Dot, o.entry.W.Dot) {
+				ownLater = true
+			} else if containsID(inv[string(x.record)], o.entry.ID) && !d.forged(o.entry.W, me) {
 				genuine = true
 			}
+		}
+		if ownLater {
+			if err := d.store.SetValue(done, []byte{1}); err != nil {
+				return err
+			}
+			continue
 		}
 		if genuine {
 			if err := d.store.SetValue(done, []byte{1}); err != nil {
 				return err
 			}
-			// Replaced by a write that plausibly saw it. If it was kept when the epoch changed,
-			// the new state's claim can't be checked: keep it for the app.
+			// Replaced by a listed write. If it was kept when the epoch changed, the new state's
+			// claim can't be checked: keep it for the app.
 			var same []tandem.Entry
 			for _, o := range all {
 				if bytes.Equal(o.record, x.record) && o.entry.Epoch == x.entry.Epoch {

@@ -265,4 +265,37 @@ final class RotationTests: XCTestCase {
         }
         XCTAssertGreaterThan(data, 0, "nothing carried")
     }
+
+    /// §11.6: of two late writes of one device, the later replacing the earlier, only the later is signed again: no
+    /// conflict comes back.
+    func testOwnReplacedLateWriteIsNotSignedAgain() async throws {
+        let w = try await world()
+        try await w.bob.remove(w.carolID, from: w.house)
+        let late = w.alice.newRecordID()
+        try await w.alice.setField(list: w.house, record: late, field: "title", value: Bytes("First".utf8))
+        try await w.alice.setField(list: w.house, record: late, field: "title", value: Bytes("Second".utf8))
+        try await w.alice.sync(); try await w.bob.sync()
+        let values = await w.bob.item(list: w.house, id: late)?.values("title").map { String(decoding: $0.value, as: UTF8.self) }
+        XCTAssertEqual(values, ["Second"], "only the later write is signed again")
+    }
+
+    /// §11.6: an own write that only a write the inventory doesn't list replaced, here a removed member's, is signed
+    /// again: nothing in the new epoch replaces it.
+    func testOwnWriteReplacedOnlyByAnUnlistedWriteIsSignedAgain() async throws {
+        let w = try await world()
+        let before = Set(await w.hub.messages.map(\.id))
+        let shelf = w.alice.newRecordID()
+        try await w.alice.setField(list: w.house, record: shelf, field: "title", value: Bytes("Alice's".utf8))
+        try await w.carol.sync()
+        try await w.carol.setField(list: w.house, record: shelf, field: "title", value: Bytes("Carol's".utf8))
+        try await w.alice.sync()
+        let seen = await w.alice.value(list: w.house, record: shelf, field: "title")
+        XCTAssertEqual(seen, Bytes("Carol's".utf8))
+        // Neither reached Bob's device before the key change: their messages are gone from the hub.
+        await w.hub.drop(await w.hub.messages.map(\.id).filter { !before.contains($0) })
+        try await w.bob.remove(w.carolID, from: w.house)
+        try await w.alice.sync(); try await w.bob.sync()
+        let bobSees = await w.bob.value(list: w.house, record: shelf, field: "title")
+        XCTAssertEqual(bobSees, Bytes("Alice's".utf8), "Alice's write is signed again")
+    }
 }

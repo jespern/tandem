@@ -96,8 +96,8 @@ themselves, so a dropped write that arrives again is merged again and dropped ag
   does not sign such a write again: as written, §11.6 signs both again, and they come back as a
   conflict, where a device that dropped the earlier one signs only the later
   (`listed_rule_differs`). Not signing it again is better on its own merits, since the later write,
-  signed again or listed, carries the change. `proofs/README.md` F6 has this, and that the engines
-  decide signing again differently from both.
+  signed again or listed, carries the change. §11.6 says so since 2026-11-15, and both engines follow
+  it (`proofs/README.md` F6).
 - **The inventory and healing.** The state a device preserves at a key change (§11.6 step 1) and
   the state it heals (§12.2) are its kept writes, which the rule never touches. Entries carried over
   unseen are earlier-epoch writes, which condition 1 leaves alone.

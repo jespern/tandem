@@ -333,3 +333,52 @@ func TestRotationOwnCarriedWritesAreMerged(t *testing.T) {
 		t.Fatal("nothing carried")
 	}
 }
+
+// §11.6: of two late writes of one device, the later replacing the earlier, only the later is
+// signed again: no conflict comes back.
+func TestRotationOwnReplacedLateWriteIsNotSignedAgain(t *testing.T) {
+	w := newRotWorld(t)
+	must(t, w.bob.RemoveMember(bg, w.carolID, w.house))
+	late := NewRecordID()
+	must(t, w.alice.SetField(bg, w.house, late, "title", []byte("First")))
+	must(t, w.alice.SetField(bg, w.house, late, "title", []byte("Second")))
+	syncAll(t, w.alice, w.bob)
+	it, ok := w.bob.Item(w.house, late)
+	if !ok {
+		t.Fatal("the late write wasn't signed again")
+	}
+	if vs := it.Values("title"); len(vs) != 1 || string(vs[0].Value) != "Second" {
+		t.Fatal("expected only the later write", vs)
+	}
+}
+
+// §11.6: an own write that only a write the inventory doesn't list replaced, here a removed
+// member's, is signed again: nothing in the new epoch replaces it.
+func TestRotationOwnWriteReplacedOnlyByAnUnlistedWriteIsSignedAgain(t *testing.T) {
+	w := newRotWorld(t)
+	before := map[string]bool{}
+	for _, m := range w.hub.Messages() {
+		before[m.ID] = true
+	}
+	shelf := NewRecordID()
+	must(t, w.alice.SetField(bg, w.house, shelf, "title", []byte("Alice's")))
+	syncAll(t, w.carol)
+	must(t, w.carol.SetField(bg, w.house, shelf, "title", []byte("Carol's")))
+	syncAll(t, w.alice)
+	if v := value_(w.alice, w.house, shelf, "title"); v != "Carol's" {
+		t.Fatal("Carol's write replaced Alice's", v)
+	}
+	// Neither reached Bob's device before the key change: their messages are gone from the hub.
+	var gone []string
+	for _, m := range w.hub.Messages() {
+		if !before[m.ID] {
+			gone = append(gone, m.ID)
+		}
+	}
+	w.hub.Drop(gone)
+	must(t, w.bob.RemoveMember(bg, w.carolID, w.house))
+	syncAll(t, w.alice, w.bob)
+	if v := value_(w.bob, w.house, shelf, "title"); v != "Alice's" {
+		t.Fatalf("Alice's write is signed again; Bob sees %q", v)
+	}
+}

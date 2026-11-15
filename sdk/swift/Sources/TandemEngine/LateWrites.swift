@@ -85,18 +85,25 @@ extension Device {
             guard try store.value(done) == nil else { continue }
             // Decided without signing: marked now. A write signed again is marked when it is stored, below.
             if inv.entries[record]?.contains(x.id) == true { try store.setValue(done, [1]); continue }   // carried over
-            // Every write seen of the record counts, kept or since superseded. A claim about this installation beyond
-            // what it issued is forged, unless the superseding write is this installation's own later one.
-            var genuine = false
+            // Decided once every listed write of the record is here: one of them may replace it.
+            if try (inv.entries[record] ?? []).contains(where: { try !store.hasWrite($0) }) { continue }
+            // Not signed again when a later write of this installation replaced it, which carries the change, or a
+            // listed write did, unless only through a claim about this installation beyond any dot it issued, which
+            // is forged (§11.6). A write the inventory doesn't list replaces nothing in the new epoch, whoever wrote it.
+            var ownLater = false, genuine = false
             for (r, o) in all where r == record && supersedes(o, x) {
-                let ownLater = o.write.dot.device == me.installation
-                    && (o.write.dot.millis, o.write.dot.counter) > (x.write.dot.millis, x.write.dot.counter)
-                if try x.write.dot.device != me.installation || ownLater || !forged(o.write, me: me) { genuine = true }
+                if o.write.dot.device == me.installation
+                    && (o.write.dot.millis, o.write.dot.counter) > (x.write.dot.millis, x.write.dot.counter) {
+                    ownLater = true
+                } else if inv.entries[record]?.contains(o.id) == true, try !forged(o.write, me: me) {
+                    genuine = true
+                }
             }
+            if ownLater { try store.setValue(done, [1]); continue }
             if genuine {
                 try store.setValue(done, [1])
-                // Replaced by a write that plausibly saw it. If it was kept when the epoch changed, the new state's
-                // claim can't be checked: keep it for the app.
+                // Replaced by a listed write. If it was kept when the epoch changed, the new state's claim can't be
+                // checked: keep it for the app.
                 var old = try Record(hub: pin.hub, scope: cid, id: record)
                 try old.merge(all.filter { $0.record == record && $0.entry.epoch == x.epoch }.map(\.entry))
                 if old.kept.contains(where: { $0.id == x.id }) { try store.setValue("unshared." + cid.hex + "." + x.id.hex, record) }
