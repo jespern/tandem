@@ -28,12 +28,31 @@ extension Device {
         }
     }
 
-    /// Drops the writes of earlier epochs the current inventory doesn't list (§9.3).
+    /// Drops writes the state can do without (§9.3): those of earlier epochs the current inventory doesn't list, and
+    /// those of the current epoch that a held eligible write on the feed replaced, an own write only for a later own
+    /// one (proved in proofs/TandemProofs/Drop.lean). Only once no message this device knows holds the write: §10.7's
+    /// clean-up judges a message by the writes in it, and needs them while the message is there.
     func dropPastWrites(_ cid: Bytes, me: Me) throws {
-        guard let (current, _, inv) = currentEpoch(cid), let c = collections[cid], !purged(cid) else { return }
+        guard let (current, inv) = dropEpoch(cid), let c = collections[cid], !purged(cid) else { return }
         var drop: [Bytes] = [], markers: [String] = [], listed: [String: Bytes] = [:]
-        for (record, x) in try storedWrites(c) {
-            if x.epoch == current || inv.entries[record]?.contains(x.id) == true { continue }
+        let all = try storedWrites(c)
+        let byRecord = Dictionary(grouping: all, by: \.record)
+        func keepManifest(_ record: Bytes, _ x: Entry) throws {
+            // A manifest's chunks stay accountable after its write goes, as a dropped upload's do, until none is in the
+            // chunk index (DESIGN.md §17.7, condition 2).
+            if blobs != nil, x.write.op == .assign, Self.isBlobField(x.write.field), case let .manifest(m) = Blob.parse(x.write.value), m.chunks != nil {
+                listed["blobs.dropped." + cid.hex + "." + x.id.hex] = try recordPayload(record: record, writes: [x.write])
+            }
+        }
+        for (record, x) in all {
+            if x.epoch == current {
+                if try !store.onFeed(x.id), try replacer(byRecord[record] ?? [], x, current: current, inventory: inv, me: me) {
+                    drop.append(x.id)
+                    try keepManifest(record, x)
+                }
+                continue
+            }
+            if inv.entries[record]?.contains(x.id) == true { continue }   // carried in through the inventory
             // Shown to the app as possibly unshared: kept until it is dismissed.
             if try store.value("unshared." + cid.hex + "." + x.id.hex) != nil { continue }
             // This installation's own: only once it is settled (signed again, carried or replaced).
@@ -42,11 +61,7 @@ extension Device {
             if own, try store.value(done) == nil { continue }
             drop.append(x.id)
             markers.append(done)
-            // A manifest's chunks stay accountable after its write goes, as a dropped upload's do, until none is in the
-            // chunk index (DESIGN.md §17.7, condition 2).
-            if blobs != nil, x.write.op == .assign, Self.isBlobField(x.write.field), case let .manifest(m) = Blob.parse(x.write.value), m.chunks != nil {
-                listed["blobs.dropped." + cid.hex + "." + x.id.hex] = try recordPayload(record: record, writes: [x.write])
-            }
+            try keepManifest(record, x)
         }
         guard !drop.isEmpty else { return }
         try store.transaction {
@@ -54,6 +69,28 @@ extension Device {
             try store.dropWrites(drop)
             for m in markers { try store.removeValue(m) }
         }
+    }
+
+    /// The epoch writes are judged in for dropping, and its inventory: the current one once its inventory is here, or
+    /// the first epoch, which has none.
+    func dropEpoch(_ cid: Bytes) -> (epoch: ID, inventory: Inventory)? {
+        if let (current, _, inv) = currentEpoch(cid) { return (current, inv) }
+        guard let c = collections[cid], !c.dead, let head = c.head, c.statements[head]?.statement.deleted == false,
+              let epoch = c.epoch(of: head), epoch == c.genesis, c.keys[epoch] != nil else { return nil }
+        return (epoch, Inventory())
+    }
+
+    /// Whether a held write lets `x`, a write of the current epoch, go: eligible in it, on the feed, superseding `x`,
+    /// and for an own `x` a later own write.
+    func replacer(_ record: [(record: Bytes, entry: Entry)], _ x: Entry, current: ID, inventory inv: Inventory, me: Me) throws -> Bool {
+        let own = x.write.dot.device == me.installation
+        for (r, y) in record where y.id != x.id && supersedes(y, x) {
+            guard y.epoch == current || inv.entries[r]?.contains(y.id) == true else { continue }
+            if own, y.write.dot.device != me.installation
+                || (y.write.dot.millis, y.write.dot.counter) <= (x.write.dot.millis, x.write.dot.counter) { continue }
+            if try store.onFeed(y.id) { return true }
+        }
+        return false
     }
 
     /// Whether a gone list's replica was collected here.

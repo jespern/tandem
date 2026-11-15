@@ -54,9 +54,13 @@ func (d *Device) collectGarbage(ctx context.Context) error {
 	return nil
 }
 
-// dropPastWrites drops the writes of earlier epochs the current inventory doesn't list (§9.3).
+// dropPastWrites drops writes the state can do without (§9.3): those of earlier epochs the current
+// inventory doesn't list, and those of the current epoch that a held eligible write on the feed
+// replaced, an own write only for a later own one (proved in proofs/TandemProofs/Drop.lean). Only
+// once no message this device knows holds the write: §10.7's clean-up judges a message by the
+// writes in it, and needs them while the message is there.
 func (d *Device) dropPastWrites(c *collection, me *Me) error {
-	current, _, inv, ok := d.currentEpoch(c.id)
+	current, inv, ok := d.dropEpoch(c)
 	if !ok || d.purged(c.id) {
 		return nil
 	}
@@ -67,9 +71,36 @@ func (d *Device) dropPastWrites(c *collection, me *Me) error {
 	var drop [][]byte
 	var markers []string
 	listed := map[string][]byte{}
+	byRecord := map[string][]storedEntry{}
 	for _, x := range all {
-		if x.entry.Epoch == string(current) || containsID(inv[string(x.record)], x.entry.ID) {
+		byRecord[string(x.record)] = append(byRecord[string(x.record)], x)
+	}
+	keepManifest := func(x storedEntry) error {
+		// A manifest's chunks stay accountable after its write goes, as a dropped upload's do,
+		// until none is in the chunk index (DESIGN.md §17.7, condition 2).
+		if d.blobs != nil && x.entry.W.Op == tandem.OpAssign && strings.HasPrefix(x.entry.W.Field, BlobPrefix) {
+			if m, kind := tandem.ParseManifest(x.entry.W.Value); kind == tandem.ManifestV1 && !m.Inline() {
+				p, err := onePayload(x.record, x.entry.W)
+				if err != nil {
+					return err
+				}
+				listed["blobs.dropped."+hexs(c.id)+"."+hexs(x.entry.ID)] = p
+			}
+		}
+		return nil
+	}
+	for _, x := range all {
+		if x.entry.Epoch == string(current) {
+			if !d.store.OnFeed(x.entry.ID) && d.replacer(byRecord[string(x.record)], x, current, inv, me) {
+				drop = append(drop, x.entry.ID)
+				if err := keepManifest(x); err != nil {
+					return err
+				}
+			}
 			continue
+		}
+		if containsID(inv[string(x.record)], x.entry.ID) {
+			continue // carried in through the inventory: kept until the next one is fixed
 		}
 		// Shown to the app as possibly unshared: kept until it is dismissed.
 		if _, ok := d.store.Value("unshared." + hexs(c.id) + "." + hexs(x.entry.ID)); ok {
@@ -83,16 +114,8 @@ func (d *Device) dropPastWrites(c *collection, me *Me) error {
 		}
 		drop = append(drop, x.entry.ID)
 		markers = append(markers, done)
-		// A manifest's chunks stay accountable after its write goes, as a dropped upload's do,
-		// until none is in the chunk index (DESIGN.md §17.7, condition 2).
-		if d.blobs != nil && x.entry.W.Op == tandem.OpAssign && strings.HasPrefix(x.entry.W.Field, BlobPrefix) {
-			if m, kind := tandem.ParseManifest(x.entry.W.Value); kind == tandem.ManifestV1 && !m.Inline() {
-				p, err := onePayload(x.record, x.entry.W)
-				if err != nil {
-					return err
-				}
-				listed["blobs.dropped."+hexs(c.id)+"."+hexs(x.entry.ID)] = p
-			}
+		if err := keepManifest(x); err != nil {
+			return err
 		}
 	}
 	if len(drop) == 0 {
@@ -114,6 +137,45 @@ func (d *Device) dropPastWrites(c *collection, me *Me) error {
 		}
 		return nil
 	})
+}
+
+// dropEpoch is the epoch writes are judged in for dropping, and its inventory: the current one
+// once its inventory is here, or the first epoch, which has none.
+func (d *Device) dropEpoch(c *collection) ([]byte, tandem.Inventory, bool) {
+	if current, _, inv, ok := d.currentEpoch(c.id); ok {
+		return current, inv, true
+	}
+	if c.dead() {
+		return nil, nil, false
+	}
+	if s, ok := c.headStatement(); !ok || s.Deleted {
+		return nil, nil, false
+	}
+	if epoch := c.epochOf(c.head()); epoch != nil && bytes.Equal(epoch, c.genesis) && c.keys[string(epoch)] != nil {
+		return epoch, tandem.Inventory{}, true
+	}
+	return nil, nil, false
+}
+
+// replacer reports whether a held write lets x, a write of the current epoch, go: eligible in it,
+// on the feed, superseding x, and for an own x a later own write.
+func (d *Device) replacer(record []storedEntry, x storedEntry, current []byte, inv tandem.Inventory, me *Me) bool {
+	own := x.entry.W.Dot.Device == me.Installation
+	for _, y := range record {
+		if bytes.Equal(y.entry.ID, x.entry.ID) || !tandem.Supersedes(y.entry, x.entry) {
+			continue
+		}
+		if y.entry.Epoch != string(current) && !containsID(inv[string(y.record)], y.entry.ID) {
+			continue
+		}
+		if own && (y.entry.W.Dot.Device != me.Installation || !dotLess(x.entry.W.Dot, y.entry.W.Dot)) {
+			continue
+		}
+		if d.store.OnFeed(y.entry.ID) {
+			return true
+		}
+	}
+	return false
 }
 
 // gone reports whether a list is deleted, or this participant was removed from it after

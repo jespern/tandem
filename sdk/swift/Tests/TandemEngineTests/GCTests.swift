@@ -64,6 +64,70 @@ final class GCTests: XCTestCase {
         return try store.writeIDs(scope: list).filter { $0.record != Roster.record && $0.epoch != current && inv[$0.record]?.contains($0.id) != true }.count
     }
 
+    /// The number of writes in a device's state of a list.
+    func stateWrites(_ d: Device, _ list: Bytes) async -> Int {
+        await d.collections[list]!.records.filter { $0.key != Roster.record }.values.reduce(0) { $0 + $1.kept.count }
+    }
+
+    func writes(_ d: Device, _ list: Bytes, _ record: Bytes) async throws -> Int {
+        try await d.store.writes(scope: list, record: record).count
+    }
+
+    /// The hub messages of the current channel that hold a record.
+    func messagesOf(_ hub: MemoryHub, _ d: Device, _ list: Bytes, _ record: Bytes) async throws -> Int {
+        let c = await d.collections[list]!
+        let epoch = c.epoch(of: c.head!)!, key = c.keys[epoch]!
+        let tag = Tandem.collectionTag(key: key, hub: d.pin.hub, epoch: epoch)
+        var n = 0
+        for m in await hub.messages where m.channel == tag {
+            let (_, p) = try Envelope.open(key: key, hub: d.pin.hub, tag: tag, envelope: m.body)
+            if case let .record(state)? = try? Kind1.parse(p, hub: d.pin.hub, scope: list), state.record == record { n += 1 }
+        }
+        return n
+    }
+
+    /// GC.md §2: within an epoch a replaced write goes once its replacement is on the feed and no message holds it; an
+    /// own write only for a later own one. The state doesn't change, the hub converges to one message per record, and
+    /// a key change and a restart change nothing.
+    func testReplacedWritesGoWithinAnEpoch() async throws {
+        let w = try await world()
+        let shelf = w.alice.newRecordID(), lamp = w.alice.newRecordID(), desk = w.alice.newRecordID()
+        for v in ["1", "2", "3", "4", "5"] { try await w.alice.setField(list: w.house, record: shelf, field: "title", value: Bytes(v.utf8)) }
+        try await w.alice.setField(list: w.house, record: lamp, field: "title", value: Bytes("Alice's".utf8))
+        // Concurrent changes to two fields: the merged state is published and dominates both.
+        try await w.alice.write(list: w.house, record: desk, [.set("title", Bytes("Desk".utf8)), .set("notes", Bytes("oak".utf8))])
+        try await w.bob.sync()
+        try await w.bob.setField(list: w.house, record: lamp, field: "title", value: Bytes("Bob's".utf8))
+        try await w.alice.setField(list: w.house, record: desk, field: "title", value: Bytes("Table".utf8))
+        try await w.bob.setField(list: w.house, record: desk, field: "notes", value: Bytes("beech".utf8))
+        for _ in 0..<3 { try await sync(w.alice, w.bob, w.carol) }
+        for d in [w.alice, w.bob, w.carol] {
+            let n = try await writes(d, w.house, shelf)
+            XCTAssertEqual(n, 1, "writes of a record edited five times")
+        }
+        let aliceLamp = try await writes(w.alice, w.house, lamp), bobLamp = try await writes(w.bob, w.house, lamp)
+        XCTAssertEqual(aliceLamp, 2, "Alice keeps her own write that Bob's replaced, until the next inventory")
+        XCTAssertEqual(bobLamp, 1, "Bob drops Alice's write that his replaced")
+        for r in [shelf, desk] {
+            let n = try await messagesOf(w.hub, w.bob, w.house, r)
+            XCTAssertEqual(n, 1, "messages of a record on the hub")
+        }
+        let want: Set<String> = ["Milk", "Bread", "5", "Bob's", "Table"]
+        for d in [w.alice, w.bob, w.carol] {
+            let got = await titles(d, w.house)
+            XCTAssertEqual(got, want)
+        }
+        try await w.bob.rekey(list: w.house)
+        try await sync(w.alice, w.carol, w.bob, w.alice)
+        for d in [w.alice, w.bob, w.carol] {
+            let got = await titles(d, w.house)
+            XCTAssertEqual(got, want, "after a key change")
+        }
+        let again = try Device.open(genesis: w.f.genesis, directoryKey: w.f.directoryKey, keys: w.bobKeys, store: w.bobStore, hub: await w.hub.connect())
+        let restarted = await titles(again, w.house)
+        XCTAssertEqual(restarted, want, "after a restart")
+    }
+
     func dataWrites(_ s: Store, _ list: Bytes) throws -> Int { try s.writeIDs(scope: list).filter { $0.record != Roster.record }.count }
 
     /// §9.3: once the next inventory is here, what it doesn't list goes; the state, and a restart, don't change.
@@ -82,7 +146,8 @@ final class GCTests: XCTestCase {
             let n = try await pastWrites(d, w.house)
             XCTAssertEqual(n, 0, "unlisted writes of the past epoch kept")
         }
-        XCTAssertLessThan(try dataWrites(w.bobStore, w.house), before)
+        let inState = await stateWrites(w.bob, w.house)
+        XCTAssertEqual(try dataWrites(w.bobStore, w.house), inState, "Bob holds exactly his state (\(before) writes before the key change)")
         let want: Set<String> = ["Milk", "Bread", "Sourdough", "Eggs"]
         let bobSees = await titles(w.bob, w.house)
         XCTAssertEqual(bobSees, want)

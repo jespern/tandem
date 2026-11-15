@@ -31,6 +31,19 @@ func pastWrites(t *testing.T, d *Device, list []byte) int {
 	return n
 }
 
+// stateWrites is the number of writes in a device's state of a list.
+func stateWrites(d *Device, list []byte) int {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	n := 0
+	for k, r := range d.collections[string(list)].records {
+		if k != string(rosterRecord) {
+			n += len(r.Entries())
+		}
+	}
+	return n
+}
+
 func dataWrites(t *testing.T, s *Store, list []byte) int {
 	t.Helper()
 	n := 0
@@ -61,8 +74,8 @@ func TestGCPastWritesGoAfterAKeyChange(t *testing.T) {
 			t.Fatalf("%d unlisted writes of the past epoch kept", n)
 		}
 	}
-	if after := dataWrites(t, w.bobStore, w.house); after >= before {
-		t.Fatalf("Bob holds %d writes, %d before the key change", after, before)
+	if held, kept := dataWrites(t, w.bobStore, w.house), stateWrites(w.bob, w.house); held != kept {
+		t.Fatalf("Bob holds %d writes for a state of %d, %d before the key change", held, kept, before)
 	}
 	want := set("Milk", "Bread", "Sourdough", "Eggs")
 	if got := titles(w.bob, w.house); !sameSet(got, want) {
@@ -266,5 +279,108 @@ func TestGCDroppedManifestsChunksAreStillCollected(t *testing.T) {
 	}
 	if vs := try(w.bob.store.Values("blobs.dropped.")); len(vs) != 0 {
 		t.Fatal("the dropped manifest is forgotten once its chunks are gone")
+	}
+}
+
+// messagesOf counts the hub messages of the current channel that hold a record.
+func messagesOf(t *testing.T, hub *MemoryHub, d *Device, list, record []byte) int {
+	t.Helper()
+	epoch, key := epochKey(d, list)
+	tag := tandem.CollectionTag(key, d.Pin().Hub, epoch)
+	n := 0
+	for _, m := range hub.Messages() {
+		if m.Channel != tag {
+			continue
+		}
+		_, p := try2(tandem.Open(key, d.Pin().Hub, tag, m.Body))
+		if state, _, err := tandem.ParseKind1(p, d.Pin().Hub, list); err == nil && state != nil && bytes.Equal(state.Record, record) {
+			n++
+		}
+	}
+	return n
+}
+
+// GC.md §2: within an epoch, a replaced write goes once its replacement is on the feed; an own
+// write only for a later own one. The state doesn't change, the hub still converges to one
+// message per record, and a key change and a restart change nothing.
+func TestGCReplacedWritesGoWithinAnEpoch(t *testing.T) {
+	w := newRotWorld(t)
+	shelf, lamp := NewRecordID(), NewRecordID()
+	for _, v := range []string{"1", "2", "3", "4", "5"} {
+		must(t, w.alice.SetField(bg, w.house, shelf, "title", []byte(v)))
+	}
+	must(t, w.alice.SetField(bg, w.house, lamp, "title", []byte("Alice's")))
+	// Concurrent changes to two fields: neither message holds the other's, so the merged state is
+	// published and dominates both; writes are dropped only once their messages are gone.
+	desk := NewRecordID()
+	must(t, w.alice.Write(bg, w.house, desk, Set("title", []byte("Desk")), Set("notes", []byte("oak"))))
+	syncAll(t, w.bob)
+	must(t, w.alice.SetField(bg, w.house, desk, "title", []byte("Table")))
+	must(t, w.bob.SetField(bg, w.house, desk, "notes", []byte("beech")))
+	syncAll(t, w.bob)
+	must(t, w.bob.SetField(bg, w.house, lamp, "title", []byte("Bob's")))
+	for range 3 {
+		syncAll(t, w.alice, w.bob, w.carol)
+	}
+	for _, d := range []*Device{w.alice, w.bob, w.carol} {
+		if n := len(try(d.store.Writes(w.house, shelf))); n != 1 {
+			t.Fatalf("%d writes of a record edited five times kept", n)
+		}
+	}
+	if n := len(try(w.alice.store.Writes(w.house, lamp))); n != 2 {
+		t.Fatal("Alice keeps her own write that Bob's replaced, until the next inventory", n)
+	}
+	if n := len(try(w.bob.store.Writes(w.house, lamp))); n != 1 {
+		t.Fatal("Bob drops Alice's write that his replaced", n)
+	}
+	if n := messagesOf(t, w.hub, w.bob, w.house, desk); n != 1 {
+		t.Fatalf("%d messages of the two-field record on the hub", n)
+	}
+	if n := messagesOf(t, w.hub, w.bob, w.house, shelf); n != 1 {
+		t.Fatalf("%d messages of the record on the hub: dropped writes must still count as covered", n)
+	}
+	want := set("Milk", "Bread", "5", "Bob's", "Table")
+	for _, d := range []*Device{w.alice, w.bob, w.carol} {
+		if got := titles(d, w.house); !sameSet(got, want) {
+			t.Fatal("state", got)
+		}
+	}
+	must(t, w.bob.Rekey(bg, w.house))
+	syncAll(t, w.alice, w.carol, w.bob, w.alice)
+	for _, d := range []*Device{w.alice, w.bob, w.carol} {
+		if got := titles(d, w.house); !sameSet(got, want) {
+			t.Fatal("after a key change", got)
+		}
+	}
+	again := open(t, w.f, w.bobKeys, w.bobStore, w.hub.Connect())
+	w.bob.Close()
+	if got := titles(again, w.house); !sameSet(got, want) {
+		t.Fatal("after a restart", got)
+	}
+}
+
+// With two devices and concurrent changes, the hub still converges to one message per record:
+// a write is dropped only once no message holds it, so §10.7 can always judge.
+func TestGCDroppedWritesStillCountForCleanup(t *testing.T) {
+	hub, _, bob, alice, aliceID := lifeHub(t)
+	list := try(bob.CreateList(bg, "Desk"))
+	must(t, bob.Share(bg, list, aliceID, Writer, ""))
+	syncAll(t, alice)
+	must(t, alice.Accept(bg, list))
+	desk := NewRecordID()
+	must(t, alice.Write(bg, list, desk, Set("title", []byte("Desk")), Set("notes", []byte("oak"))))
+	syncAll(t, bob)
+	must(t, alice.SetField(bg, list, desk, "title", []byte("Table")))
+	must(t, bob.SetField(bg, list, desk, "notes", []byte("beech")))
+	for range 4 {
+		syncAll(t, bob, alice)
+	}
+	if n := messagesOf(t, hub, bob, list, desk); n != 1 {
+		t.Fatalf("%d messages of the record left on the hub", n)
+	}
+	for _, d := range []*Device{alice, bob} {
+		if v, n := value_(d, list, desk, "title"), value_(d, list, desk, "notes"); v != "Table" || n != "beech" {
+			t.Fatal(v, n)
+		}
 	}
 }
