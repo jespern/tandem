@@ -1,6 +1,6 @@
 # Proposal: garbage collection beyond what the specification allows today
 
-Status: **proposal**, 2026-11-15, for review. Nothing here is implemented. References with § are to
+Status: **recommendations agreed** by Jesper, 2026-11-15; the open questions of section 8 remain. Nothing here is implemented yet. References with § are to
 `DESIGN.md`. Decisions left for Jesper are marked **Open**.
 
 Step 1 of the clean-up work, on branch `gc`, implements what `DESIGN.md` already allows and the
