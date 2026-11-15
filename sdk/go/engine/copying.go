@@ -78,7 +78,7 @@ func (d *Device) Copy(ctx context.Context, list []byte) (ListCopy, error) {
 
 	// _meta: the old one's app fields, and where this list came from.
 	if v, _ := value(d.collections[string(cp)].records[string(metaRecord)], copyOfField); !bytes.Equal(v, list) {
-		var changes []change
+		var changes []Change
 		if m := old.records[string(metaRecord)]; m != nil {
 			item := Item{ID: metaRecord, record: m}
 			for _, f := range item.Fields() {
@@ -87,7 +87,7 @@ func (d *Device) Copy(ctx context.Context, list []byte) (ListCopy, error) {
 				}
 			}
 		}
-		changes = append(changes, change{field: copyOfField, op: tandem.OpAssign, val: list})
+		changes = append(changes, Change{field: copyOfField, op: tandem.OpAssign, val: list})
 		if err := d.writeChanges(ctx, cp, metaRecord, changes); err != nil {
 			return ListCopy{}, err
 		}
@@ -99,7 +99,7 @@ func (d *Device) Copy(ctx context.Context, list []byte) (ListCopy, error) {
 			continue
 		}
 		item := Item{ID: []byte(k), record: r}
-		var changes []change
+		var changes []Change
 		for _, f := range item.Fields() {
 			changes = append(changes, changesOf(item, f)...)
 		}
@@ -182,13 +182,13 @@ func (d *Device) CopyOf(list []byte) []byte {
 }
 
 // changesOf is the writes that recreate one field of an item: its displayed value, and its elements.
-func changesOf(item Item, field string) []change {
-	var out []change
+func changesOf(item Item, field string) []Change {
+	var out []Change
 	if v, ok := item.Value(field); ok {
-		out = append(out, change{field: field, op: tandem.OpAssign, val: v})
+		out = append(out, Change{field: field, op: tandem.OpAssign, val: v})
 	}
 	for _, e := range item.Elements(field) {
-		out = append(out, change{field: field, op: tandem.OpAdd, element: e})
+		out = append(out, Change{field: field, op: tandem.OpAdd, element: e})
 	}
 	return out
 }

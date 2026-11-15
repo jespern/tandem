@@ -564,13 +564,22 @@ func (d *Device) clock() (uint64, uint16) {
 	return m, uint16(held[8])<<8 | uint16(held[9])
 }
 
-// writeHome signs one home write on name and publishes it in the current home epoch.
-func (d *Device) writeHome(ctx context.Context, name, field string, op tandem.Op, val, element []byte) error {
-	// A revocation not yet reflected in home: rekey before writing, so nothing new goes into the exposed epoch.
+// rotateHomeIfNeeded rekeys home if a revocation isn't reflected in it yet, so nothing new goes
+// into the exposed epoch. The one part of a home write that needs the hub.
+func (d *Device) rotateHomeIfNeeded(ctx context.Context) error {
 	if me := d.me; me != nil && d.homeNeedsRotation(me) && d.registry.Activity(me.Certificate).IsValid() {
-		if err := d.rotateHome(ctx); err != nil {
-			return err
-		}
+		return d.rotateHome(ctx)
+	}
+	return nil
+}
+
+// writeHome signs one home write on name, saves it, and publishes it in the current home epoch.
+// Local first, like a list write: if the hub can't be reached it is reported as EventSyncFailed
+// and the next sync's healing publishes it (§12.2). What must be on the hub before a next step
+// syncs first (a change's note, §11.6 step 3).
+func (d *Device) writeHome(ctx context.Context, name, field string, op tandem.Op, val, element []byte) error {
+	if err := d.rotateHomeIfNeeded(ctx); err != nil {
+		return err
 	}
 	me, scope, epoch := d.me, d.homeScope(), d.currentHomeEpoch()
 	if me == nil || scope == nil || epoch == nil || d.homeKeys[string(epoch)] == nil {
@@ -605,7 +614,10 @@ func (d *Device) writeHome(ctx context.Context, name, field string, op tandem.Op
 	if strings.HasPrefix(name, "membership:") {
 		d.changed(Event{Kind: EventLists})
 	}
-	return d.publishHome(ctx, record, epoch, keptWrites(d.home[string(record)]))
+	if err := d.publishHome(ctx, record, epoch, keptWrites(d.home[string(record)])); err != nil {
+		d.changed(Event{Kind: EventSyncFailed, Message: err.Error()})
+	}
+	return nil
 }
 
 // publishHome puts one home record's state in a home epoch's channel (§10.7).

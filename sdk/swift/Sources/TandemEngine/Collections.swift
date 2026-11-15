@@ -82,12 +82,17 @@ struct CollectionState: Sendable {
 
 extension Device {
     static let meta = Tandem.namedID(Bytes("_meta".utf8))
+    /// A list's `_meta` record (§7.3): its name and the app's list properties. Only the owner writes it, with
+    /// `write(list:record:_:)`; anyone reads it with `item(list:id:)`.
+    public static var metaRecord: Bytes { meta }
 
     // MARK: Creating a list (§7.1)
 
     /// Create a collection owned by this participant, private until shared (§7.4). Returns its ID.
     public func createList(name: String) async throws -> Bytes {
         guard let me else { throw TandemError.invalid("device: not on this hub yet") }
+        // The one home step that needs the hub: done before anything is stored, so a failure leaves nothing behind.
+        try await rotateHomeIfNeeded()
         let key = Self.random(32)
         let statement = Statement(n: 0, keyN: 0, commit: Tandem.commit(key), prev: nil, snapshot: nil, nonce: Self.random(16),
                                   members: [.init(uid: me.participant, role: .owner, name: Bytes(), floor: me.auth)], deleted: false)
@@ -106,11 +111,14 @@ extension Device {
             try store.putWrite(id: gid, scope: cid, record: Roster.record, epoch: gid, payload: try recordPayload(record: Roster.record, writes: [genesis]))
         }
         // The key goes into home first: that's how this participant's other devices find the list (§6.2).
+        // Offline, everything stays saved and the next sync's healing publishes it (§12.2): the list exists
+        // from here on, so failing now would leave an orphan the caller can't name.
         let membership = "membership:" + B64u.encode(cid)
         try await setHome(membership, field: "owner", value: me.participant)
         try await setHome(membership, field: "role", value: Bytes("owner".utf8))
         try await addHome(membership, field: "keys", element: Self.keyElement(epoch: gid, key: key))
-        try await publish(cid: cid, epoch: gid, record: Roster.record, writes: [genesis])
+        do { try await publish(cid: cid, epoch: gid, record: Roster.record, writes: [genesis]) }
+        catch { changed(.syncFailed("\(error)")); flushEvents() }
         try await setField(list: cid, record: Self.meta, field: "name", value: Bytes(name.utf8))
         return cid
     }
@@ -124,6 +132,23 @@ extension Device {
 
     /// A new random record ID (§7.3).
     public nonisolated func newRecordID() -> Bytes { Self.random(16) }
+
+    /// Several changes to one record, signed in one call and published as one message (§10.7): what an app
+    /// writes when it saves an item with several fields. Offline, they stay saved and the next sync sends them.
+    public func write(list cid: Bytes, record: Bytes, _ changes: [ItemWriter.Change]) async throws {
+        guard !changes.isEmpty else { return }
+        if changes.contains(where: { if case .delete = $0 { true } else { false } }) {
+            guard record != Self.meta, record != Roster.record else { throw TandemError.invalid("device: a named record is never deleted") }
+        }
+        try await writeRecord(cid, record: record, changes.map { change in
+            switch change {
+            case let .set(f, v): (Bytes(f.utf8), .assign, v, nil)
+            case let .add(f, e): (Bytes(f.utf8), .add, [], e)
+            case let .remove(f, e): (Bytes(f.utf8), .remove, [], e)
+            case .delete: ([], .delete, [], nil)
+            }
+        })
+    }
 
     /// Set a field of a record in a list, as this device, in the list's current epoch.
     public func setField(list cid: Bytes, record: Bytes, field: String, value: Bytes) async throws {
@@ -283,13 +308,19 @@ extension Device {
         for (_, r) in home {
             guard let name = r.value(Bytes("_name".utf8)), name.starts(with: Bytes("membership:".utf8)),
                   let cid = B64u.decode(String(decoding: name.dropFirst(11), as: UTF8.self)), cid.count == 16 else { continue }
-            var c = try loadRoster(store: store, hub: hub, cid: cid, membership: r)
-            for record in try store.records(scope: cid) where record != Roster.record {
-                c.records[record] = try loadData(store: store, hub: hub, c: c, record: record, inventories: inventories)
-            }
-            out[cid] = c
+            out[cid] = try loadCollection(store: store, hub: hub, cid: cid, membership: r, inventories: inventories)
         }
         return out
+    }
+
+    /// One collection as the store holds it: roster and records. `membership` is its home record, or an empty one for a
+    /// list offered and not answered yet.
+    static func loadCollection(store: Store, hub: Bytes, cid: Bytes, membership r: Record, inventories: [ID: Inventory]) throws -> CollectionState {
+        var c = try loadRoster(store: store, hub: hub, cid: cid, membership: r)
+        for record in try store.records(scope: cid) where record != Roster.record {
+            c.records[record] = try loadData(store: store, hub: hub, c: c, record: record, inventories: inventories)
+        }
+        return c
     }
 
     /// A collection's keys (from its `membership:` record in home), roster and announcements, without its records.

@@ -409,10 +409,13 @@ func (d *Device) Accept(ctx context.Context, list []byte) error {
 	if member == nil {
 		return fail("accept: no valid offer for that list")
 	}
-	m := membershipName(list)
-	if err := d.addHome(ctx, m, "answers", append(bytes.Clone(o.admission()), 'a')); err != nil {
+	if err := d.rotateHomeIfNeeded(ctx); err != nil {
 		return err
 	}
+	// Home writes are local first, so all four land even if the hub can't be reached; healing
+	// publishes them (§12.2). The answer goes last: it closes the offer, so a crash before it
+	// leaves the offer open to accept again.
+	m := membershipName(list)
 	if err := d.setHome(ctx, m, "owner", c.owner()); err != nil {
 		return err
 	}
@@ -422,5 +425,15 @@ func (d *Device) Accept(ctx context.Context, list []byte) error {
 	if err := d.addHome(ctx, m, "keys", keyElement(o.epoch(), o.key)); err != nil {
 		return err
 	}
-	return d.sendAnswer(ctx, list, o.admission(), 'a', me)
+	if err := d.crash("accept:keys"); err != nil {
+		return err
+	}
+	if err := d.addHome(ctx, m, "answers", append(bytes.Clone(o.admission()), 'a')); err != nil {
+		return err
+	}
+	// A lost answer only leaves the owner seeing "pending"; the list works either way.
+	if err := d.sendAnswer(ctx, list, o.admission(), 'a', me); err != nil {
+		d.changed(Event{Kind: EventSyncFailed, Message: err.Error()})
+	}
+	return nil
 }

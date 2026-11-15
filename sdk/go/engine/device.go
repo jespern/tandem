@@ -308,6 +308,18 @@ func load(pin HubPin, directoryKey []byte, keys *tandem.DeviceKeys, store *Store
 		}
 		o := &offer{grant: grant, key: k}
 		d.offers[string(oid(grant))] = o
+		// A list offered but not answered has no membership record in home, so loadCollections
+		// skipped it. Without its roster the offer can't be checked again and is lost; without its
+		// records, accepting it shows an empty list.
+		if d.collections[string(o.collection())] == nil {
+			empty, err := tandem.NewRecord(pin.Hub, o.collection(), o.collection())
+			if err != nil {
+				return nil, err
+			}
+			if d.collections[string(o.collection())], err = loadCollection(store, pin.Hub, o.collection(), empty, d.inventories); err != nil {
+				return nil, err
+			}
+		}
 		d.collection(o.collection()).offer(k, o.epoch())
 	}
 	return d, nil

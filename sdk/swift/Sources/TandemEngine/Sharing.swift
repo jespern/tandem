@@ -187,11 +187,17 @@ extension Device {
         guard let me, let o = validOffers(cid, me: me).first(where: { answer(to: $0) == nil }), let c = collections[cid], let owner = c.owner,
               case let .id(at)? = o.grant.fields["at"], let member = c.statements[at]?.statement.members.first(where: { $0.uid == me.participant })
         else { throw TandemError.invalid("accept: no valid offer for that list") }
+        try await rotateHomeIfNeeded()
+        // Home writes are local first, so all four land even if the hub can't be reached; healing publishes them (§12.2).
+        // The answer goes last: it closes the offer, so a crash before it leaves the offer open to accept again.
         let membership = "membership:" + B64u.encode(cid)
-        try await addHome(membership, field: "answers", element: o.admission + [UInt8(ascii: "a")])
         try await setHome(membership, field: "owner", value: owner)
         try await setHome(membership, field: "role", value: Bytes(member.role.rawValue.utf8))
         try await addHome(membership, field: "keys", element: Self.keyElement(epoch: o.epoch, key: o.key))
-        try await sendAnswer(cid, admission: o.admission, answer: UInt8(ascii: "a"), me: me)
+        try crash("accept:keys")
+        try await addHome(membership, field: "answers", element: o.admission + [UInt8(ascii: "a")])
+        // A lost answer only leaves the owner seeing "pending"; the list works either way.
+        do { try await sendAnswer(cid, admission: o.admission, answer: UInt8(ascii: "a"), me: me) }
+        catch { changed(.syncFailed("\(error)")); flushEvents() }
     }
 }

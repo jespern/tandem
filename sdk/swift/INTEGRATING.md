@@ -90,13 +90,20 @@ for item in await device.items(list: list) {                   // not deleted, b
     item.createdBy; item.lastModifiedBy                        // participant IDs, for attribution
 }
 try await device.rename(list: list, to: "Food")                // owner only
+
+// Several fields at once: one call, one message on the hub.
+try await device.write(list: list, record: id, [.set("title", Bytes("Milk".utf8)), .add("tags", Bytes("dairy".utf8))])
+// The app's own list properties live in `_meta` beside the name; only the owner writes them.
+try await device.write(list: list, record: Device.metaRecord, [.set("icon", Bytes("cart".utf8))])
+await device.item(list: list, id: Device.metaRecord)?.text("icon")
 ```
 
 - **Writes are local first.** A write is saved and merged before it goes out. If the hub can't be reached it is kept, reported as `.syncFailed`, and published by the next sync. There is nothing like CloudKit's dirty fields or system fields to track.
 - **Merge is per field and needs no code in the app.** Concurrent edits of different fields both stay. Concurrent edits of one field leave every value (`item.values(field)`), the displayed one first; writing the field again settles it. That replaces Liszto's `notesBase`/`notesSent`: show a conflict when `values("notes").count > 1`, and the user's next edit resolves it. Set fields (tags) merge as add-wins sets; that replaces `tagsBase`/`tagsSent`.
 - **Field values are bytes.** Pick one encoding per field and keep it: UTF-8 for text, a single byte for flags, the record ID's 16 bytes for a parent, your sort key's bytes for order. Unknown fields from newer app versions are kept and synced.
 - **Moving an item between lists** is create in the target, delete in the source, as Liszto does today.
-- Coalesce rapid edits (typing) before calling `setField`; every call is one message on the hub.
+- Coalesce rapid edits (typing) before calling `setField`; every call is one message on the hub. `write(list:record:_:)` takes several changes (`ItemWriter.Change`) of one record and sends them as one message.
+- **Offline:** `createList`, `accept` and home writes (`setHome`, `addHome`) don't throw when the hub can't be reached. They save everything, and the next sync's healing publishes it, as with `setField`; a failure is reported as `.syncFailed`. The exception: right after one of the participant's devices is revoked, home must be rekeyed first, and that needs the hub.
 
 ### Default lists (Inbox, Later)
 
