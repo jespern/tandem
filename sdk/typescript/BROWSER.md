@@ -244,6 +244,90 @@ Individual writes still obey the protocol's 1 MiB maximum. Private application
 storage is separate from this SDK journal. Cancel/await the device and close its
 keychain/journal when finished; no background watcher is needed.
 
+## Files
+
+**A slow link for a narrow purpose** (DESIGN §17). A file attached to a record
+stays among the hub's devices and never leaves the hub's mailbox: chunks go to
+the mail server and come back the same way, nothing is mailed, and the server
+holds only ciphertext. It is not a file service. The measurements in
+`BLOBS.md` and `sdk/swift/INTEGRATING.md` (Files) were taken over IMAP; JMAP
+speeds have not been measured.
+
+```typescript
+const folder = await JMAPBlobFolder.open(config);          // Tandem-Blobs beside Tandem, created if missing
+await device.useBlobs(folder, {chunkSize: 1 << 20});       // once per device; pending uploads resume
+await device.attach(list, record, 'photo', file);          // any Blob or File; works offline
+const info = device.blob(list, record, 'photo');           // {name, state, size, hash, chunks, done}
+const content = await device.fetchBlob(list, record, 'photo', signal);   // a verified Blob
+```
+
+- **Attaching.** A file is the field `_blob:<name>` of a record. Up to 16 KiB
+  goes into the record at once. Anything larger is copied into the Origin
+  Private File System, described in one pass and signed as a pending write in
+  the same journal transaction that reserves its dot. It shows as `uploading`
+  at once, survives a reload, and reaches other devices only when every chunk
+  is verified on the hub (§17.6); the rest of the record goes out at once, as
+  always. A write whose epoch was replaced meanwhile is signed again by the
+  rules for late writes (§11.6). `cancelAttach` drops a pending write; attaching
+  again under the same name replaces it; a deleted record drops it.
+- **Reading.** `blob` answers at once: `here`, `remote`, `downloading` (`done`
+  of `chunks`), `unavailable` (a chunk was missing from the hub at the last
+  look; a device that holds the file puts it back), `unreadable`, or
+  `uploading`. `fetchBlob` checks every chunk's address, key and length and
+  the whole hash before anything is visible, and an interrupted download
+  resumes from the chunks already here. The returned `File` is the SDK's: one
+  that is evicted or replaced later can no longer be read through it, so copy
+  it if the app needs to keep it. An inline file comes back as a `Blob`.
+- **Events.** An update's `blobs` lists the records whose files started, moved
+  or ended an upload or download since that consumer's last update, in every
+  tab of the profile. A committed file arrives with its record as an ordinary
+  revision. `blobProblem` says why uploads or clean-up stopped (a full hub, a
+  chunk over the server's limit, the network, a server that damaged the
+  escaped form) until the worker gets through again.
+- **Settings,** at runtime: `setBlobSettings({chunkSize, inline, orphanGrace,
+  storeLimit, unasked})`. The store keeps up to `storeLimit` (2 GiB) and drops
+  what was opened longest ago, never the file just opened; `keepFiles(list,
+  true)` fetches a list's files unasked, up to `unasked` (25 MiB) each.
+- **Housekeeping** runs after each sync, in one tab at a time under a Web Lock:
+  chunks of replaced, deleted and cancelled files are removed from the hub,
+  orphans after the grace (7 days, on this device's clock), and missing chunks
+  of files this device holds are put back. `checkBlobs()` asks for that check
+  now, for instance when the page becomes visible. Downloaded files no record
+  names are deleted. `blobQuota()` is `{kind: 'unknown'}` where the server
+  reports no quota, never zero.
+
+Storage: content, staged copies and partly downloaded chunks are files in the
+Origin Private File System under `tandem-blobs/<journal>/<hub>/`. A content
+file is written with `createWritable`, which commits on close, after its hash
+was checked; a crash leaves an empty file, which reads as absent. Journal
+schema 3 adds the blob store (pending writes sealed under a local keychain
+key, markers, the folder cursor) and the chunk index, with the claimed
+address, channel, first-seen time and verification of every message in the
+folder. A device given another folder (another account, mailbox or server)
+rebuilds its index from nothing. Clearing site data loses files that have not
+finished uploading.
+
+The worker wakes on an attach, a sync, `useBlobs`, `checkBlobs` or the
+browser's `online` event, and stops when there is nothing to do. A transfer
+that fails is not retried on a timer: it resumes at the next of those events.
+
+`JMAPBlobFolder` lists the folder from `Email/changes` or a paged
+`Email/query`, reading the two header claims alone. A chunk goes up as an
+uploaded message (8-bit escaped, or base64 once the server was seen to damage
+it), stored with one `Email/import` per batch, and comes back as the raw
+message from the session's download URL, decoded by the reading rule of
+§17.4.2. Up to four transfers run at once (`transfers`, 1 to 8). The download
+URL's origin must be trusted like the API's: where the session names a
+download host other than the API's, add it to `trustedOrigins`. The folder has
+been tried against Stalwart only, not Fastmail. JMAP message IDs carry no order shared with IMAP
+devices, so a browser leaves duplicate copies of a chunk for IMAP devices to
+collect (§17.7). `MemoryBlobFolder` is an in-memory folder for tests, with the
+faults of Swift's `MemoryBlobHub`.
+
+Not yet: sealing and hashing run on the page's thread, between awaits, rather
+than in a worker; a requested download does not overtake one fetched unasked
+(§17.8, Order); the Go engine notes the same gap.
+
 ## Build and checks
 
 ```sh
@@ -283,6 +367,13 @@ member removal, home cutoff, a late edit across an interrupted rotation, key
 envelope repair after reload, and browser administration accepted by Swift. Only that fixture accepts self-signed TLS;
 production SDK checks stay enabled.
 It explicitly enables browser CORS and publishes real loopback URLs, with no proxy.
+
+`test/browser/files.spec.mjs` runs two browser devices on an in-memory hub and
+blob folder; under `check_browser.py` it also moves files through a real JMAP
+blob folder, and with `--native` between the Swift engine (IMAP) and the
+browser (JMAP) both ways, with a chunk destroyed on the hub restored by the
+browser. Arguments after `--` go to Playwright, for instance
+`python3 -B sdk/check_browser.py --native -- test/browser/files.spec.mjs`.
 
 ## Remaining acceptance gates
 
