@@ -202,7 +202,7 @@ func (d *Device) applyHome(m tandem.Message, epoch, key []byte, me *Me) (outcome
 			if start == nil {
 				return waiting, nil
 			}
-			if err := d.store.SetValue("fragmsg."+m.ID, append(bytes.Clone(epoch), tandem.H(frag.Bytes)...)); err != nil {
+			if err := d.store.SetValue("fragmsg."+m.ID, fragmentReceipt(epoch, frag.Part, frag.Parts, frag.Bytes)); err != nil {
 				return ignored, err
 			}
 			done, err := d.receiveFragment(frag, epoch, fid(start, "snapshot"))
@@ -344,9 +344,13 @@ func (d *Device) homeWriteValidity(w *tandem.Write, epoch []byte, me *Me) Validi
 	if start == nil {
 		return pending(epoch)
 	}
-	ok := d.registry.Authorizes(w.Authorization, w.Certificate)
+	source := d.homeEpochs[string(w.Ref)]
+	if source == nil {
+		return pending(w.Ref)
+	}
+	ok := allValid(d.registry.Authorizes(w.Authorization, w.Certificate), d.registry.Extends(w.Authorization, fid(source, "auth")))
 	if bytes.Equal(w.Ref, epoch) {
-		ok = allValid(ok, d.registry.Extends(w.Authorization, fid(start, "auth")), d.lateness(w, epoch))
+		ok = allValid(ok, d.lateness(w, epoch))
 	} else {
 		inv, has := d.inventories[string(epoch)]
 		if !has {

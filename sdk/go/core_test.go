@@ -307,7 +307,15 @@ func TestCrossSDK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, language := range []string{"go", "python", "typescript", "swift"} {
+	senders, err := os.ReadDir(os.Getenv("TANDEM_INTEROP_DIR"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sender := range senders {
+		if sender.IsDir() || !strings.HasSuffix(sender.Name(), ".json") {
+			continue
+		}
+		language := strings.TrimSuffix(sender.Name(), ".json")
 		data, err := os.ReadFile(os.Getenv("TANDEM_INTEROP_DIR") + "/" + language + ".json")
 		if err != nil {
 			t.Fatal(err)

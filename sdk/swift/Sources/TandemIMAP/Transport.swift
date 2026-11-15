@@ -14,11 +14,11 @@ public enum Security: Sendable, Equatable {
 }
 
 /// One TCP (TLS) connection. Pending sends and receives fail once it is cancelled.
-final class Transport: Sendable {
+package final class Transport: Sendable {
     private let connection: NWConnection
     private let queue = DispatchQueue(label: "tandem.imap.transport")
 
-    init(host: String, port: UInt16, security: Security) {
+    package init(host: String, port: UInt16, security: Security) {
         let tcp = NWProtocolTCP.Options()
         tcp.enableKeepalive = true          // finds a dead peer while idling, without a timer of ours
         tcp.keepaliveIdle = 60
@@ -41,7 +41,7 @@ final class Transport: Sendable {
     }
 
     /// Returns once the connection is ready. Waiting for a usable path counts as failure.
-    func open() async throws {
+    package func open() async throws {
         let once = Mutex(false)
         let connection = self.connection
         try await withTaskCancellationHandler {
@@ -65,7 +65,7 @@ final class Transport: Sendable {
         } onCancel: { connection.cancel() }
     }
 
-    func send(_ bytes: Bytes) async throws {
+    package func send(_ bytes: Bytes) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
             connection.send(content: Data(bytes), completion: .contentProcessed { error in
                 if let error { continuation.resume(throwing: IMAPError.connection("\(error)")) } else { continuation.resume() }
@@ -74,7 +74,7 @@ final class Transport: Sendable {
     }
 
     /// The next bytes from the server. Throws when the connection ends.
-    func receive() async throws -> Bytes {
+    package func receive() async throws -> Bytes {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bytes, any Error>) in
             connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { data, _, complete, error in
                 if let data, !data.isEmpty { continuation.resume(returning: Bytes(data)) }
@@ -85,5 +85,5 @@ final class Transport: Sendable {
         }
     }
 
-    func cancel() { connection.cancel() }
+    package func cancel() { connection.cancel() }
 }

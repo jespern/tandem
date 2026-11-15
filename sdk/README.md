@@ -8,11 +8,19 @@ production device engines: `TandemEngine` ([INTEGRATING.md](swift/INTEGRATING.md
 every pairing. The v1
 implementations on `testbed` are separate.
 
+The [browser target](typescript/BROWSER.md) adds direct JMAP push, an IndexedDB
+journal, remembered browser keys and worker-based admin capsules for Liszto.
+Its durable controller supports pairing, verified reads/edits, sharing and
+home/collection rotation, removal and healing. Browser administration and pairing/invitation creation are implemented. Browser-first
+founding/join/recovery and Liszto’s web workspace still need integration. All four SDKs also offer an
+[optional JMAP transport](JMAP.md); native applications keep IMAP as the default.
+
 | Language | Runtime | Changes arrive as | Runtime dependencies |
 | --- | --- | --- | --- |
 | [Go](go/README.md) | Go 1.26.4+ | A channel, scoped by `context.Context` | Go's `x/crypto` for ChaCha20-Poly1305 |
 | [Python](python/README.md) | Python 3.15+ | An async iterator under an async context manager | `cryptography` |
 | [TypeScript](typescript/README.md) | Node.js 26+ | An async iterator, with `AbortSignal` cancellation | None; TypeScript and Node types are build dependencies |
+| [TypeScript browser](typescript/BROWSER.md) | Current secure-context browsers | Async iterators; JMAP SSE, Web Locks and BroadcastChannel | Noble hashes/curves/ciphers, `buffer`; optional Argon2 worker |
 | [Swift](swift/README.md) | Swift 6.4, iOS/macOS 27+ | A bounded `AsyncSequence`, with task cancellation | None; CryptoKit supplies the native primitives |
 
 ## Device and recovery policy
@@ -33,8 +41,8 @@ There is no separate offline recovery key. The hub password recovers the creator
 home and its list keys, never another member's private home. If the management key
 is compromised, create a new hub and migrate readable data. If the password is
 forgotten, a device retaining the management seed can set a new one; without such
-a device, management recovery also requires a new hub. These workflows are the
-target of the forthcoming controller, not operations implemented by this core.
+a device, management recovery also requires a new hub. Swift and Go device engines implement these management/recovery workflows; the
+browser controller currently implements a subset.
 
 The selected password profile is Argon2id v0x13 with 1 GiB, three passes and one
 lane (§6.7), as checked by the [v2 capsule vector](../conformance/fixtures/tandem-v2-capsule.json).
@@ -132,7 +140,8 @@ the session tests; it is not a proof that a third-party transport never polls.
 
 ## What comes next
 
-Python and TypeScript have the cores only: no IMAP binding and no device engine. The
+Python has a protocol core, sessions and JMAP transport, with no device engine.
+TypeScript adds the browser controller described above; it has no IMAP binding. The
 Lean proofs and the core interoperability checks don't substitute for an engine's own
 scenario tests.
 

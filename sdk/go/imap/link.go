@@ -620,8 +620,6 @@ func (l *link) restartPeriod() time.Duration {
 		return refresh
 	case r > 0:
 		return min(time.Duration(r), refresh)
-	case l.caps["X-GM-EXT-1"]:
-		return 3 * time.Second
 	default:
 		return refresh
 	}

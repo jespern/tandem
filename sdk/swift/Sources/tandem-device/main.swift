@@ -48,8 +48,12 @@ actor Driver {
             let d = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try Store(path: ":memory:"),
                                     hub: try await store())
             try await d.publish(f)
+            if let password = c["hubPassword"] as? String { try await d.changePassword(to: password, ms: f.managementSeed) }
             device = d; ms = f.managementSeed
             return ["participant": B64u.encode(f.participant)]
+        case "unlock":
+            ms = try await dev().unlock(password: try s("password"))
+            return [:]
         case "invite":
             guard let ms else { throw Failure(message: "not the hub's admin") }
             let link = try await dev().invite(label: try s("label"), account: account!, ms: ms)

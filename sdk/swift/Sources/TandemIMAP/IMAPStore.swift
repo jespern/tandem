@@ -9,7 +9,7 @@ import Tandem
 /// decoded envelopes, leaving out messages that are too large or don't decode (§10.4).
 public actor IMAPStore: PushStore {
     public enum IdleRestart: Sendable, Equatable {
-        /// Every 3 s on Gmail (X-GM-EXT-1), which otherwise delays pushes by ~30 s; else only the 29-minute refresh.
+        /// Only the 29-minute protocol renewal; no automatic short restart on Gmail.
         case automatic
         case never
         /// End and restart IDLE this often while watching.

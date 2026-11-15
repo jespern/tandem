@@ -85,16 +85,18 @@ extension Device {
         guard let inv = inventory(epoch) else { return }
         var present = Set<Bytes>()
         for m in try store.messages(channel: tag) {
-            if let v = try store.value("fragmsg." + m), v.count == 64, Array(v.prefix(32)) == epoch { present.insert(Array(v.suffix(32))) }
+            if let v = try store.value("fragmsg." + m), v.count == 72, Array(v.prefix(32)) == epoch { present.insert(v) }
         }
         let slices = try Self.slices(inv), payloads = try Self.fragments(inv, epoch: epoch)
-        for (slice, fragment) in zip(slices, payloads) where !present.contains(H(slice)) {
+        for (part, fragment) in payloads.enumerated() {
+            let receipt = Self.fragmentReceipt(epoch: epoch, part: part, parts: slices.count, slice: slices[part])
+            if present.contains(receipt) { continue }
             let envelope = try Envelope.seal(key: key, hub: pin.hub, kind: 1, tag: tag, plaintext: fragment)
             let id = try await hub.append(channel: tag, body: envelope)
             try store.transaction {
                 try store.noteMessage(id: id, channel: tag, hash: H(envelope))
                 try store.markApplied(id)
-                try store.setValue("fragmsg." + id, epoch + H(slice))
+                try store.setValue("fragmsg." + id, receipt)
             }
         }
     }

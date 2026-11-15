@@ -407,3 +407,94 @@ func TestSecondReviewAHomeWriteFirstRekeysAnExposedHome(t *testing.T) {
 		t.Fatal("not written")
 	}
 }
+
+// An inventory cannot make a stale source authorization valid in another epoch.
+func TestInventoryCannotBypassTheOriginalHomeFloor(t *testing.T) {
+	w := newSecondWorld(t, true)
+	oldAuth := bytes.Clone(me(t, w.tablet).Auth)
+	syncAll(t, w.phone)
+	m := me(t, w.phone)
+	w.phone.mu.Lock()
+	defer w.phone.mu.Unlock()
+	parent := bytes.Clone(w.phone.homeHeads()[0])
+	bad := &tandem.Write{Hub: w.f.Pin.Hub, Certificate: m.Certificate, Authorization: oldAuth, Scope: tandem.HomeScope(w.f.Pin.Hub, m.Participant), Record: tandem.NamedID("settings:floor"), Field: "v", Op: tandem.OpAssign, Value: []byte{9}, Author: m.Participant, Dot: tandem.Dot{Device: m.Installation, Millis: 1}, Ref: parent}
+	must(t, bad.Sign(m.Keys.Signing))
+	if v := w.phone.homeWriteValidity(bad, parent, m); v.State != Invalid {
+		t.Fatal("stale source accepted", v)
+	}
+	inv := tandem.Inventory{string(bad.Record): [][]byte{writeID(bad)}}
+	next := try(HomeEpochStart(w.f.Pin, m.Participant, w.phone.epochNumber(parent)+1, [][]byte{parent}, bytes.Repeat([]byte{7}, 32), [][]byte{m.Certificate}, m.Certificate, m.Auth, inv, m.Keys))
+	_, err := w.phone.acceptHomeEpoch(next, m)
+	must(t, err)
+	must(t, w.phone.keepInventory(inv, oid(next)))
+	if v := w.phone.homeWriteValidity(bad, oid(next), m); v.State != Invalid {
+		t.Fatal("inventory import bypassed the source floor", v)
+	}
+}
+
+func TestInventoryCannotBypassTheOriginalCollectionFloor(t *testing.T) {
+	w := newSecondWorld(t, true)
+	oldAuth := bytes.Clone(me(t, w.tablet).Auth)
+	must(t, w.bob.Rekey(bg, w.list))
+	syncAll(t, w.phone)
+	m, owner := me(t, w.phone), me(t, w.bob)
+	w.phone.mu.Lock()
+	defer w.phone.mu.Unlock()
+	c := w.phone.collections[string(w.list)]
+	parent := c.head()
+	epoch := c.epochOf(parent)
+	bad := &tandem.Write{Hub: w.f.Pin.Hub, Certificate: m.Certificate, Authorization: oldAuth, Scope: w.list, Record: NewRecordID(), Field: "title", Op: tandem.OpAssign, Value: []byte{9}, Author: m.Participant, Dot: tandem.Dot{Device: m.Installation, Millis: 1}, Ref: parent}
+	must(t, bad.Sign(m.Keys.Signing))
+	if v := w.phone.dataWriteValidity(bad, w.list, epoch); v.State != Invalid {
+		t.Fatal("stale source accepted", v)
+	}
+	inv := tandem.Inventory{string(bad.Record): [][]byte{writeID(bad)}}
+	next := c.statements[string(parent)].s.clone()
+	next.N++
+	next.KeyN++
+	next.Nonce = nil
+	next.Prev = bytes.Clone(next.Commit)
+	next.Commit = tandem.Commit(bytes.Repeat([]byte{6}, 32))
+	next.Snapshot = tandem.H(try(inv.Bytes()))
+	statement := &tandem.Write{Hub: w.f.Pin.Hub, Certificate: owner.Certificate, Authorization: owner.Auth, Scope: w.list, Record: rosterRecord, Field: rosterField, Op: tandem.OpAssign, Value: next.JSON(), Author: owner.Participant, Dot: tandem.Dot{Device: owner.Installation, Millis: 2}, Ref: parent}
+	must(t, statement.Sign(owner.Keys.Signing))
+	_, err := w.phone.acceptStatement(statement, w.list, epoch)
+	must(t, err)
+	id := writeID(statement)
+	must(t, w.phone.keepInventory(inv, id))
+	if v := w.phone.dataWriteValidity(bad, w.list, id); v.State != Invalid {
+		t.Fatal("inventory import bypassed the member source floor", v)
+	}
+}
+
+// Correct slice bytes with the wrong index/count cannot satisfy inventory healing.
+func TestInventoryHealingChecksFragmentIndex(t *testing.T) {
+	w := newBobAndCarol(t)
+	must(t, w.bob.SetField(bg, w.list, NewRecordID(), "title", []byte("Kept")))
+	must(t, w.bob.Rekey(bg, w.list))
+	epoch, key := epochKey(w.bob, w.list)
+	tag := tandem.CollectionTag(key, w.f.Pin.Hub, epoch)
+	var fragments []string
+	var inventory []byte
+	for _, m := range w.hub.Messages() {
+		if m.Channel != tag {
+			continue
+		}
+		_, pt := try2(tandem.Open(key, w.f.Pin.Hub, tag, m.Body))
+		if _, frag, err := tandem.ParseKind1(pt, w.f.Pin.Hub, w.list); err == nil && frag != nil {
+			fragments = append(fragments, m.ID)
+			inventory = bytes.Clone(frag.Bytes)
+		}
+	}
+	if len(fragments) == 0 {
+		t.Fatal("no fragments")
+	}
+	w.hub.Drop(fragments)
+	bogus := tandem.NewJSONObject().Raw("inventory", tandem.NewJSONObject().B64u("epoch", epoch).Int("part", 1).Int("parts", 2).
+		B64u("bytes", inventory).Bytes()).Bytes()
+	rawAppend(t, w.hub, tag, try(tandem.Seal(key, w.f.Pin.Hub, tandem.KindRecord, tag, bogus)))
+	syncAll(t, w.bob, w.carol)
+	if got := titles(w.carol, w.list); !sameSet(got, set("Kept")) {
+		t.Fatal("Carol moves over through the restored inventory:", got)
+	}
+}

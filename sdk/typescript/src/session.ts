@@ -1,5 +1,6 @@
+import {Buffer} from "buffer";
 export interface Message {id: string; channel: string; body: Uint8Array}
-export interface ChangeBatch {added: readonly Message[]; removed: readonly string[]; cursor: string}
+export interface ChangeBatch {added: readonly Message[]; removed: readonly string[]; cursor: string; more?: boolean}
 
 /** watch resolves once subscribed. Buffer invalidations until read, including reconnect.
  * An IMAP adapter serializes commands with IDLE/DONE, then resumes IDLE. */
@@ -75,8 +76,11 @@ export class Session {
     try { return await result; } finally { this.#pending.delete(request); signal?.removeEventListener('abort', abort); }
   }
   async #reconcile(): Promise<void> {
-    const batch = await this.#store.changes(this.#cursor, this.#abort.signal);
-    await this.#updates.push(batch); this.#cursor = batch.cursor;
+    let more: boolean;
+    do {
+      const batch = await this.#store.changes(this.#cursor, this.#abort.signal);
+      await this.#updates.push(batch); this.#cursor = batch.cursor; more = batch.more === true;
+    } while (more);
   }
   async #closeTransport(): Promise<void> { if (!this.#transportClosed) { this.#transportClosed = true; await this.#store.close(); } }
   async #run(ready: () => void, failStart: (e: unknown) => void): Promise<void> {

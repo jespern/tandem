@@ -6,7 +6,7 @@ A sync protocol whose only server is somebody else's mail server.
 
 Tandem keeps collections of records in sync across devices and people, end-to-end
 encrypted. Its relay is an ordinary mailbox: devices append encrypted messages,
-listen for changes over IMAP, and merge edits locally. There is no Tandem server
+listen for pushed changes over IMAP or JMAP, and merge edits locally. There is no Tandem server
 to run and no application backend to trust with the contents.
 
 A collection can be a private list, a shared shopping list, or an application's
@@ -33,8 +33,10 @@ event-driven session API for push updates and submitting local changes, with
 bounded buffers and cancellation. They contain no polling loop.
 
 The four implementations share vectors and check every sender/receiver pairing.
-They are development SDKs: the complete device engine, durable storage, IMAP
-adapters and remaining control formats are still being built.
+Swift and Go include durable device engines and IMAP adapters. All four offer
+[optional JMAP push](sdk/JMAP.md), and the [browser controller](sdk/typescript/BROWSER.md)
+adds durable pairing, editing, sharing, key rotation and healing. These remain
+development SDKs; browser-first founding/recovery and Liszto’s UI remain open.
 
 ## Not `sorry`
 

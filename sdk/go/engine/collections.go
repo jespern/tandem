@@ -756,7 +756,7 @@ func (d *Device) applyCollection(m tandem.Message, cid, epoch, key []byte) (outc
 			return waiting, nil
 		}
 		// Which part each message carries, for healing (§12.2).
-		if err := d.store.SetValue("fragmsg."+m.ID, append(bytes.Clone(epoch), tandem.H(frag.Bytes)...)); err != nil {
+		if err := d.store.SetValue("fragmsg."+m.ID, fragmentReceipt(epoch, frag.Part, frag.Parts, frag.Bytes)); err != nil {
 			return ignored, err
 		}
 		done, err := d.receiveFragment(frag, epoch, s.s.Snapshot)
@@ -985,9 +985,9 @@ func (d *Device) dataWriteValidity(w *tandem.Write, cid, epoch []byte) Validity 
 	if member == nil || member.Role == Reader || (bytes.Equal(w.Record, metaRecord) && member.Role != Owner) {
 		return invalid("not a writer here")
 	}
-	checks := []Validity{d.registry.Authorizes(w.Authorization, w.Certificate)}
+	checks := []Validity{d.registry.Authorizes(w.Authorization, w.Certificate), d.registry.Extends(w.Authorization, member.Floor)}
 	if bytes.Equal(source, epoch) {
-		checks = append(checks, d.registry.Extends(w.Authorization, member.Floor), d.dataLateness(w, c, epoch))
+		checks = append(checks, d.dataLateness(w, c, epoch))
 	} else {
 		if !c.precedes(w.Ref, epoch) && !bytes.Equal(w.Ref, epoch) {
 			return invalid("not from an earlier epoch of this chain")

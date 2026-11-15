@@ -8,6 +8,16 @@ extension Device {
     /// Fragments stay under the 64 KiB a message should keep to.
     static let fragmentSize = 48 * 1024
 
+    /// Bind the coordinates as well as the slice hash. Old hash-only receipts
+    /// cannot establish that the correct part is still on the hub.
+    static func fragmentReceipt(epoch: ID, part: Int, parts: Int, slice: Bytes) -> Bytes {
+        var receipt = epoch
+        for value in [part, parts] {
+            for shift in stride(from: 24, through: 0, by: -8) { receipt.append(UInt8(truncatingIfNeeded: value >> shift)) }
+        }
+        return receipt + H(slice)
+    }
+
     /// The inventory's bytes cut into fragment-sized parts.
     static func slices(_ inventory: Inventory) throws -> [Bytes] {
         let bytes = try inventory.bytes()

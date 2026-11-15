@@ -66,3 +66,14 @@ check builds the Swift `MessageFormat` and compares messages both ways:
 TANDEM_IMAP_STALWART=1 go test -race -run Stalwart ./imap
 TANDEM_IMAP_SWIFT=1 go test -run SwiftInterop ./imap
 ```
+
+## Optional JMAP
+
+`sdk/go/jmap` implements `tandem.PushStore` over HTTPS and persistent SSE.
+See [JMAP setup, limits and provider behavior](../JMAP.md). Native transport
+selection stays explicit; IMAP defaults are unchanged.
+
+IDLE stays open by default on Gmail too; only the required 29-minute protocol
+renewal is automatic. The former three-second Gmail workaround is disabled to
+avoid timer-driven change discovery. Explicit restart configuration remains
+available, but applications using the no-polling default should leave it alone.

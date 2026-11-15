@@ -423,10 +423,10 @@ func TestAppendChangesAndDestroyCleanUpAllMailAndTrash(t *testing.T) {
 	}
 }
 
-func TestGmailRestartsIdleEveryThreeSeconds(t *testing.T) {
+func TestExplicitIdleRestartEveryThreeSeconds(t *testing.T) {
 	f := newGmailFixture(t)
 	ctx := testContext(t)
-	store := f.store(t, "pass word", IdleRestartAutomatic)
+	store := f.store(t, "pass word", IdleRestart(3*time.Second))
 	wakes, err := store.Watch(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -447,9 +447,9 @@ func TestGmailRestartsIdleEveryThreeSeconds(t *testing.T) {
 	}
 }
 
-func TestIdleRestartCanBeTurnedOff(t *testing.T) {
+func TestAutomaticKeepsIdleOpenOnGmail(t *testing.T) {
 	f := newGmailFixture(t)
-	store := f.store(t, "pass word", IdleRestartNever)
+	store := f.store(t, "pass word", IdleRestartAutomatic)
 	if _, err := store.Watch(testContext(t)); err != nil {
 		t.Fatal(err)
 	}

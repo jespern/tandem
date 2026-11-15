@@ -391,7 +391,7 @@ extension Device {
         guard case let .record(state) = parsed else {
             guard case let .inventory(f) = parsed else { return .ignored }
             guard let s = collections[cid]?.statements[epoch]?.statement, let commitment = s.snapshot else { return .waiting }
-            try store.setValue("fragmsg." + m.id, epoch + H(f.bytes))   // which part each message carries, for healing (§12.2)
+            try store.setValue("fragmsg." + m.id, Self.fragmentReceipt(epoch: epoch, part: f.part, parts: f.parts, slice: f.bytes))   // which part each message carries, for healing (§12.2)
             guard try receiveFragment(f, epoch: epoch, commitment: commitment) else { return .ignored }
             try moveCollection(cid)
             return .applied
@@ -509,9 +509,9 @@ extension Device {
         guard c.counts(w.ref), c.counts(source) else { return .pending([source]) }
         guard let member = s.statement.members.first(where: { $0.uid == w.author }), member.role != .reader,
               w.record != Self.meta || member.role == .owner else { return .invalid("not a writer here") }
-        var checks = [registry.authorizes(snapshot: w.authorization, certificate: w.certificate)]
+        var checks = [registry.authorizes(snapshot: w.authorization, certificate: w.certificate),
+                      registry.extends(w.authorization, floor: member.floor)]
         if source == epoch {
-            checks.append(registry.extends(w.authorization, floor: member.floor))
             checks.append(dataLateness(w, c: c, epoch: epoch))
         } else {
             guard c.precedes(w.ref, epoch) || w.ref == epoch else { return .invalid("not from an earlier epoch of this chain") }

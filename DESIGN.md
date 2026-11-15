@@ -657,7 +657,7 @@ The roster does not merge. Two different successors of one statement, both signe
 
 ### 8.3 Valid data writes and snapshots
 
-A data write names a valid roster statement in a valid chain from genesis (§8.2), and is signed by the exact device certificate/snapshot bound in its input. The certificate must bind its participant author, device public keys and hub; the write signature also binds the installation’s dot namespace. That roster must list the participant as owner or writer. Its immutable source authorization is checked against the certificate/root chain and revocation sets referenced by that snapshot (§6.9), not whatever registry facts happened to arrive first. A missing ancestor holds the write; an invalid one rejects it. A draft authorizes nothing (§9.4). Its source epoch is the first statement, going back from the one it names, that carries the same epoch commitment. In a channel identified by epoch-start ID `E`, it is eligible iff:
+A data write names a valid roster statement in a valid chain from genesis (§8.2), and is signed by the exact device certificate/snapshot bound in its input. The certificate must bind its participant author, device public keys and hub; the write signature also binds the installation’s dot namespace. That roster must list the participant as owner or writer. Its immutable source authorization is checked against the certificate/root chain and revocation sets referenced by that snapshot (§6.9), not whatever registry facts happened to arrive first. A missing ancestor holds the write; an invalid one rejects it. A draft authorizes nothing (§9.4). Its source epoch is the first statement, going back from the one it names, that carries the same epoch commitment. Carrying a write does not waive its original authorization floor: check the source roster member's floor (or the source home epoch's authorization snapshot), even when the new channel's inventory lists it. In a channel identified by epoch-start ID `E`, it is eligible iff:
 
 1. its source epoch ID is **exactly `E`**, and its source authorization snapshot extends that epoch's pinned floor for its participant (including the retained-certificate rule of §6.9); or
 2. its write ID and record ID occur in the snapshot inventory committed by `E`, and the roster statement it names is an ancestor of `E`.
@@ -788,14 +788,15 @@ The core needs six operations:
 
 **All channels share one folder.** Each message carries its channel tag in a header (§10.4), so a client could skip bodies of channels it doesn't follow; the Swift and Go bindings fetch them with `changes`, which keeps one round trip per batch, and a binding may do either. One folder means one IDLE connection on IMAP, one change cursor, no folder-creation races and no folder-count limits. More folders would hide nothing: the hub sees the tags either way.
 
-### 10.2 JMAP: set aside
+### 10.2 JMAP browser binding
 
-This protocol uses IMAP. JMAP is outside this revision for two reasons:
+JMAP is available again for the browser Liszto client (Jesper's decision, 2026-11-13); IMAP remains the native default. Browsers connect directly to the provider over HTTPS, without a Tandem proxy/backend. The provider must allow the app's origin through CORS and supply browser-compatible authentication. Additional API/upload/push origins are explicitly trusted before receiving credentials; an IMAP password is not automatically sent to discovered JMAP hosts. Native setup links still need an explicit browser endpoint/credential mapping.
 
-- **One push stream per credential.** Fastmail, the main JMAP provider, keeps one EventSource connection per API token: a second connection with the same token closes the first within half a second. Every device then needs a token of its own, which only someone who can sign in to the mail account can make. IMAP has no such limit there.
-- **Reach.** Nearly every mail provider speaks IMAP. JMAP is today mostly Fastmail, Stalwart and Cyrus.
+The binding uses RFC 8620/8621: one `Tandem` Mailbox; MIME uploaded then stored through `Email/import`; `Email/get` for bodies; `Email/set` destroy; and `Email/changes` plus membership metadata for added/removed delivery. SSE is a persistent authenticated fetch with `types=Email` and `closeafter=no`. Startup subscribes before scanning. Query pagination checks one `queryState` across pages, captures an Email state before the scan and replays changes from it afterwards. An expired change state starts a full resync. No periodic queries or polling fallback exist. A suspended or closed page catches up on reopening.
 
-The two can't be mixed on one hub either: on Fastmail a message appended over JMAP reaches an IMAP device only after about a minute. What JMAP did better was batching: hundreds of messages in one request. Live updates are about as fast either way, about half a second from one device to another. The abstract store (§10.1) would still admit a JMAP binding later.
+The TypeScript [browser guide](sdk/typescript/BROWSER.md) specifies the implementation's durability, resource limits and verification boundary. Its direct browser-to-Stalwart tests cover CORS, push, pagination, replay, deletion and a lost append answer. They do not establish compatibility or latency on every provider.
+
+**Earlier measurements remain a provider caveat.** Fastmail previously kept one EventSource connection per API token, closing a second connection with the same token, and a JMAP append reached an IMAP device only after about a minute. These findings originally set JMAP aside. Browser multi-tab ownership avoids duplicate connections in one profile, but separate profiles may still need separate tokens. Mixed JMAP/IMAP latency and credential provisioning must be retested on the selected provider before promising immediate browser/native sync. JMAP's batching remains useful; provider reach is narrower than IMAP.
 
 ### 10.3 IMAP binding (RFC 9051 / RFC 3501)
 
