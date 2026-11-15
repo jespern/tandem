@@ -1,6 +1,6 @@
 # Proposal: garbage collection beyond what the specification allows today
 
-Status: **recommendations agreed** by Jesper, 2026-11-15. Section 2's rule is proved (`proofs/TandemProofs/Drop.lean`), on one condition about §11.6 (section 2.3). Answers so far are in section 8. Nothing here is implemented yet. References with § are to
+Status: **recommendations agreed** by Jesper, 2026-11-15. Section 2's rule is proved (`proofs/TandemProofs/Drop.lean`), on one condition about §11.6 (section 2.3). Every open question is answered (section 8). Nothing here is implemented yet. References with § are to
 `DESIGN.md`. Decisions left for Jesper are marked **Open**.
 
 Step 1 of the clean-up work, on branch `gc`, implements what `DESIGN.md` already allows and the
@@ -116,8 +116,10 @@ themselves, so a dropped write that arrives again is merged again and dropped ag
   device "chooses the data state to preserve". If the specification means the owner may leave out
   the writes of a member being removed, to restore what that member overwrote, the owner's devices
   need the overwritten writes, and this rule would have dropped them. The engines list every kept
-  write today. **Open:** is that rollback meant to be possible? If it is, the owner's devices keep
-  §9.3's rule and only other devices use this one.
+  write today. **Decided** (G1, Jesper, 2026-11-15): no. A key change carries every kept write, and
+  §11.6 step 1 now says so. Undoing a member's edits is an explicit act of the app that writes the
+  old values again as ordinary writes, which everyone sees and which merge like any other. So the
+  owner's devices use this rule like every other device.
 
 **Proved** in `proofs/TandemProofs/Drop.lean` (2026-11-15). After any history of receiving
 writes, dropping under section 2.2 and §9.3, and key changes, a device holds the state of a device
@@ -188,11 +190,13 @@ So after a key change a tombstone needs to be only a mark that the record is del
 to be of one record, so a pack of a thousand tombstones dominates each single tombstone message and
 the hub converges to a few packs. Devices publish a pack, after the usual random delay (§10.7),
 when an epoch holds more than some number of tombstone messages (64, say). A pack is limited by the
-message size like any message: about 1,900 tombstones in 1 MiB once sealed and carried as base64. **Needs a proof:** `gc_safe` and
-`gc_no_write_lost` in `proofs/TandemProofs/GC.lean` should be checked to hold over messages with
-writes of several records; the model may already be record-agnostic. Packing small live records,
-not only tombstones, would cut the message count of a large list too. That is a larger change,
-noted here and not proposed.
+message size like any message: about 1,900 tombstones in 1 MiB once sealed and carried as base64. **Already proved** (G3,
+checked 2026-11-15): `gc_safe` and `gc_no_write_lost` in `proofs/TandemProofs/GC.lean` take a
+message to be any set of writes and never look at records, so they hold for packs as they stand.
+What remains is engine work: a pack's contents are noted per record. **Only tombstones are packed**
+(Jesper, 2026-11-15). A tombstone never changes, so a pack of them stays dominant; a pack of live
+records is never dominated by one record's new message, since that covers none of the other
+records, so it would stay on the hub until someone packed everything again.
 
 **Marks.** At a key change, the owner's device lists a deleted record as an entry with a write count
 of zero: the record is deleted in that epoch. It carries neither the tombstone nor the writes kept
@@ -240,8 +244,9 @@ it ignores such forks, and the checkpoint has chosen one branch, which §8.2 rul
 chain length or ranking selects a winning history"); or it must still keep and check everything.
 Ignoring forks below a checkpoint is in fact the owner-control design §9.4 says is needed against a
 revoked owner device forking old history, and it needs that design's care: what makes a checkpoint
-itself unforkable, and what happens to members who followed the other branch. **Open**, and not
-for this round.
+itself unforkable, and what happens to members who followed the other branch. **Parked** (G5,
+Jesper, 2026-11-15): no checkpoint, unless that owner-control design is ever taken up. Section 4.3's
+cut covers the cost that matters.
 
 ### 4.3 Recommendation: cut old channels' copies down
 
@@ -307,9 +312,8 @@ roster only in current channels already.
    collected lists (`GoneLists`, `goneLists`).
 2. **§12.3 overstates what the tombstone does in a later epoch** (section 3.1): replays from earlier
    epochs are already stopped by eligibility. Harmless, but it hides that a mark would do.
-3. **§11.6 step 1, "choose the data state to preserve"**, reads as if the owner may leave writes
-   out. The rest of §11.6 and the engines assume it lists its whole kept state. It should say which
-   (section 2.4).
+3. **§11.6 step 1, "choose the data state to preserve"**, read as if the owner may leave writes
+   out. **Fixed** (G1): step 1 now says the inventory carries every kept write.
 4. **§11.7, finishing another device's change,** copies a missing listed write "from the old
    channel". That message may already have been destroyed by §10.7, if a late write that the
    inventory does not list dominated it. Devices that kept the write under §9.3 restore it when they
@@ -322,9 +326,9 @@ roster only in current channels already.
 
 | # | Question |
 |---|---|
-| G1 | Open. Section 2.4: may the owner leave a removed member's writes out of the inventory to undo their damage? It decides whether owner devices may use the narrower rule. |
+| G1 | **No** (Jesper, 2026-11-15): a key change carries every kept write (§11.6 step 1); undoing a member's edits is an explicit app action that writes the old values again. |
 | G2 | **Done** (2026-11-15): `proofs/TandemProofs/Drop.lean`, given §11.6 amended (section 2.3, F6 in `proofs/README.md`). |
-| G3 | Open. Section 3.3: does `gc_safe` hold for messages holding several records? Should small live records be packed too? |
+| G3 | **Yes, already** (2026-11-15): `gc_safe` is record-agnostic. Only tombstones are packed (Jesper). |
 | G4 | **Yes** (Jesper, 2026-11-15): the inventory format may change before v2 ships. Packing first, then the marks. |
-| G5 | Open. The checkpoint of section 4.2, as part of the owner-control design §9.4 mentions. |
+| G5 | **Parked** (Jesper, 2026-11-15): no checkpoint; section 4.3's cut instead. |
 | G6 | **The owner's devices pack** (Jesper, 2026-11-15). The threshold is open: about 50 tombstone messages in a channel is the proposal. |
