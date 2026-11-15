@@ -293,6 +293,26 @@ test('real JMAP: browser CORS, persistent push, explicit pages, cursor replay an
   expect(result.count).toBe(5);expect(result.pages).toBeGreaterThanOrEqual(3);expect(result.replay).toBe(true);expect(result.removed).toBe(true);
 });
 
+test('real JMAP: destroying a message another device destroyed meanwhile is not an error', async ({page}) => {
+  test.skip(!process.env.TANDEM_JMAP_FIXTURE, 'run sdk/check_browser.py for disposable Stalwart');
+  const cfg=JSON.parse(process.env.TANDEM_JMAP_FIXTURE);
+  const result=await page.evaluate(async cfg=>{
+    const t=window.t, abort=new AbortController(), mine=await t.JMAPStore.open(cfg), theirs=await t.JMAPStore.open(cfg), real=window.fetch;
+    try {
+      const hub=new Uint8Array(32).fill(4),key=new Uint8Array(32).fill(5),tag=t.collectionTag(key,hub,new Uint8Array(32).fill(6));
+      const id=await mine.append(tag,t.seal(key,hub,tag,new TextEncoder().encode('superseded')),abort.signal);
+      // Another device's clean-up lands between this one's check and its Email/set.
+      let raced=false;
+      window.fetch=async(input,init)=>{
+        if(!raced&&typeof init?.body==='string'&&init.body.includes('Email/set')&&init.body.includes('destroy')){raced=true;await theirs.destroy([id],abort.signal);}
+        return real(input,init);
+      };
+      try{await mine.destroy([id],abort.signal);return {raced,error:null};}catch(error){return {raced,error:String(error)};}
+    }finally{window.fetch=real;abort.abort();await mine.close();await theirs.close();}
+  },cfg);
+  expect(result.raced).toBe(true);expect(result.error).toBe(null);
+});
+
 test('real JMAP and IndexedDB: lost acknowledgement recovers without resending the envelope', async ({page}) => {
   test.skip(!process.env.TANDEM_JMAP_FIXTURE,'run sdk/check_browser.py');const cfg=JSON.parse(process.env.TANDEM_JMAP_FIXTURE);
   const result=await page.evaluate(async cfg=>{

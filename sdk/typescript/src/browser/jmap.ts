@@ -121,7 +121,9 @@ export class JMAPStore implements PushStore {
     const [name, body] = rows[0]; if (name === 'error') throw new JMAPError(state(object(body).type));
     if (name !== method) throw new Error('JMAP response method mismatch');
     const result = object(body);
-    for (const key of ['notCreated', 'notUpdated', 'notDestroyed']) if (result[key] && Object.keys(result[key]).length) throw new JMAPError(`${method} refused`);
+    for (const key of ['notCreated', 'notUpdated']) if (result[key] && Object.keys(result[key]).length) throw new JMAPError(`${method} refused`);
+    // Another device's clean-up may destroy the same message first: gone is destroyed.
+    if (Object.values(object(result.notDestroyed ?? {})).some(e => (e as ObjectValue)?.type !== 'notFound')) throw new JMAPError(`${method} refused`);
     return result;
   }
   async watch(signal: AbortSignal): Promise<AsyncIterable<void>> {
@@ -268,7 +270,7 @@ export class JMAPStore implements PushStore {
     if (ids.length > this.#deleteSize) throw new Error('destroy exceeds page limit'); if (!ids.length) return;
     const checked = await this.#objects([...ids], signal, false);
     if (checked.rows.some(row => !object(row.mailboxIds)[this.#folder])) throw new Error('refusing to destroy mail outside Tandem');
-    if(!checked.rows.length)return;const result=await this.#call('Email/set',{destroy:checked.rows.map(row=>row.id)},signal);if(result.notDestroyed&&Object.keys(object(result.notDestroyed)).length)throw new JMAPError('Email/set refused destruction');
+    if(!checked.rows.length)return;await this.#call('Email/set',{destroy:checked.rows.map(row=>row.id)},signal);
   }
   async close(): Promise<void> { this.#abort.abort(); this.#wakes.end(); await this.#running?.catch(() => {}); }
 }
