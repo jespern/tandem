@@ -1,7 +1,7 @@
 # Proposal: blobs (files in the mailbox)
 
 Status: **proposal**, 2026-11-15. Nothing here is implemented. How chunks travel was measured on
-Fastmail and Stalwart (section 12); Gmail was not. It extends `DESIGN.md` (v2) and removes its
+Fastmail, Gmail and Stalwart (section 12). It extends `DESIGN.md` (v2) and removes its
 non-goal "Large binary attachments" (§1.2). References with § are to `DESIGN.md`; this document's
 own parts are called sections. Decisions Jesper made on 2026-11-15 are marked **Decided**; what is
 still open is in section 13.
@@ -13,7 +13,8 @@ grace trusted a time a client can set (section 7). A second review found six mor
 4.3, 5, 7, 8 and 9: clean-up and healing now share one definition of a live manifest, and a device
 that cannot know what a chunk is needed for collects nothing. A third found three, fixed in sections
 4.2, 7 and 8: a version stays protected until its replacement is on the feed, healing never discards
-a good local file, and a refused binary append falls back to text.
+a good local file, and a refused binary append falls back to text. A fourth found that the guard for
+unknown manifest versions missed manifests protected only by the feed rule (section 7).
 
 ## 1. Summary
 
@@ -53,8 +54,10 @@ Costs, accepted on purpose:
 - **A larger message limit in the blob folder.** §10.6's limit of 1 MiB stays for the feed folder.
 - **The hub learns file sizes** and which channel a file belongs to, as it does for records (§14).
 - **Provider ceilings.** Google documents 500 MB of IMAP upload and 2500 MB of download per day and
-  account for Workspace; a hub is one account, so all its participants share that. This design
-  suits documents and photos, not a media library.
+  account for Workspace; a hub is one account, so all its participants share that. Gmail is also
+  slow: about 0.2 MiB per second up and 0.5 down on one connection, against 8 to 12 on Fastmail
+  (section 12). This design suits documents and photos, not a media library, and on Gmail a photo
+  of 10 MB takes about a minute to upload.
 
 ## 3. Terms
 
@@ -201,11 +204,15 @@ restoring it.
 feed folder would wake every idling device five hundred times. And the feed's bound of about 100,000
 messages (Q3) stays about records.
 
-**Connections.** Chunks move on a second connection that exists only while there is something to
-transfer, so the feed connection stays in IDLE and edits keep arriving during a long upload. Where
-the server refuses a second connection (§10.3 lists the caps), the device uses its one connection
-and transfers one chunk between returns to IDLE. That is a per-hub setting with the automatic
-choice as default.
+**Connections.** Chunks move on **transfer connections** that exist only while there is something
+to transfer, so the feed connection stays in IDLE and edits keep arriving during a long upload. A
+device uses up to two of them by default, a per-hub setting from 0 to 8, and shares the chunks of a
+transfer among them. Two is what Fastmail rewards: with batching a second connection added about
+40% to uploads and more added nothing, while without batching every further connection helped
+(section 12). Servers cap connections per account or address (§10.3 lists the caps), and every one a
+device holds is one another device cannot. Where the server refuses a further connection the device
+goes on with those it has. With none, or with the setting at 0, it uses its feed connection and
+transfers one chunk between returns to IDLE.
 
 **Batching.** An implementation MUST send chunks in batches of a few MiB, by the first of these the
 server offers, in either form:
@@ -351,11 +358,13 @@ merged. A pending replacement changes nothing here: the version it will replace 
 **When a device cannot know.** Every rule of this section decides from the manifests a device can
 read, so a device that knows it cannot read them all holds back:
 
-- It collects nothing in a scope, by any rule here, while a kept or held `_blob:` write of that
-  scope has a manifest of a version it does not know: a JSON object whose `blob` is an integer other
-  than 1. Such a manifest may list chunks, among them chunks an older, superseded manifest also
-  lists, and the device cannot tell which. A value that is no manifest at all lists nothing and
-  blocks nothing.
+- It collects nothing in a scope, by any rule here, while any protected manifest of that scope is
+  of a version it does not know: a JSON object whose `blob` is an integer other than 1. That means
+  every way of being protected, the feed rule above included: a device that has superseded such a
+  manifest in its replica but not yet on the feed still cannot read it, and every other device
+  still shows it. Such a manifest may list chunks, among them chunks an older, superseded manifest
+  also lists, and the device cannot tell which. A value that is no manifest at all lists nothing
+  and blocks nothing.
 - It collects no orphans in a scope while the current epoch's inventory is not assembled, or lists a
   write the device neither holds nor has seen replaced (§8.3). Such a write may be a manifest that
   devices holding it will publish again (§12.2), and until then its chunks look like orphans.
@@ -480,19 +489,21 @@ A writer may reuse an entry only from a kept manifest of the same scope.
 
 `probes/blob_probe.py` appends chunks of 256 KiB, 1 MiB and 4 MiB in both forms, fetches them back
 and compares every one byte for byte. Each chunk begins with NUL bytes, bare CR and LF, a lone dot
-and a line of 2,000 bytes. Reports are in `probes/results/*-blobs-*.json`. Fastmail was run twice.
-Stalwart is the disposable test server on the same machine, so its speeds mean nothing and are left
-out. Gmail was not run: the keychain item for it could not be read from the session that ran these.
+and a line of 2,000 bytes. Reports are in `probes/results/*-blobs-*.json`. Fastmail was run twice
+and Gmail once, from the same machine. Stalwart is the disposable test server on that machine, so
+its speeds mean nothing and are left out.
 
 | | Fastmail | Stalwart 1.1.0 | Gmail |
 |---|---|---|---|
-| `BINARY` | yes | yes | no (probed 2026-11-13) |
+| `BINARY` | yes | yes | no; `BINARY.PEEK` is refused as unparsable |
+| Text chunks intact | 126 of 126, both runs | 126 of 126 | 21 of 21 |
 | Binary chunks intact through `BINARY.PEEK[1]` | 126 of 126, both runs | 126 of 126 | |
 | How a binary chunk is stored | as base64, header rewritten to `Content-Transfer-Encoding: base64`, quota charged at 1.37 times the bytes sent | raw | |
 | `BODY.PEEK[TEXT]` of a binary chunk | base64 | the raw bytes | |
 | `LITERAL+` and `MULTIAPPEND` | both | both | neither |
 | `APPENDLIMIT` | 200 MB | not advertised | 35 MB |
-| Quota (RFC 9208) | reported | advertised, none set | not read |
+| Quota (RFC 9208) | reported | advertised, none set | reported; the figure did not move after 30 MB |
+| A feed append reaching an idling connection | 0.53 s | | 29.8 s, as §10.3 found |
 
 Fastmail, MiB of chunk content per second, first run / second run:
 
@@ -521,13 +532,43 @@ What follows from it:
   an idling connection in 0.53 s with nothing else going on, and in 1.0 to 1.2 s while another
   connection uploaded 1 MiB chunks.
 - **The chunk index scan works as specified**: one command returned the ID and both headers of all
-  126 messages in 0.32 s. Scale is unmeasured (B11).
+  126 messages in 0.32 s on Fastmail, and of 21 in 0.70 s on Gmail. Scale is unmeasured (B11).
+
+Gmail, text form, one append and one fetch at a time, which is all it offers:
+
+| Chunk | Append, MiB per second | Seconds per append | Fetch, MiB per second | Seconds per fetch |
+|---|---|---|---|---|
+| 256 KiB | 0.09 | 2.7 | 0.24 | 1.0 |
+| 1 MiB | 0.17 | 5.7 | 0.47 | 2.1 |
+| 4 MiB | 0.22 | 18.3 | 0.61 | 6.6 |
+
+- **Gmail limits the rate, not the count.** An append costs about 1.5 s plus about 4 s per MiB, so a
+  larger chunk gains little: 4 MiB is 1.3 times as fast as 1 MiB, not the three times that a fixed
+  cost alone would give. A 4 MiB chunk takes 18 s, and a lost connection costs that much.
+- **1 MiB is the default everywhere.** That closes the chunk-size question.
+- Whether Gmail's rate is per connection is not known (B1).
+
+Fastmail, 16 binary chunks of 1 MiB spread over several connections at once, MiB per second:
+
+| Connections | Append, one at a time | Append, batched | Fetch, one at a time | Fetch, one command each |
+|---|---|---|---|---|
+| 1 | 1.5 | 7.4 | 2.5 | 10.9 |
+| 2 | 2.6 | 10.5 | 4.4 | 13.6 |
+| 4 | 4.7 | 12.7 | 6.6 | 8.7 |
+| 8 | 7.3 | 11.7 | 8.9 | 13.5 |
+
+- **Connections and batching buy the same thing.** Unbatched, speed grows with every connection,
+  five times from one to eight. Batched, a second connection adds about 40% to uploads and a quarter
+  to downloads, and a ceiling of 11 to 13 MiB per second follows, on this line at least.
+- **Two transfer connections is the default** (section 4.3). Eight unbatched connections are no
+  faster than one batched one, so connections do not replace batching where batching exists.
+- One run; the fetch at four connections (8.7) is out of line and unexplained.
 
 ## 13. Open questions
 
 | # | Question |
 |---|---|
-| B1 | **Chunk size where appends cannot be batched.** 1 MiB holds on Fastmail (section 12). Gmail offers neither `LITERAL+` nor `MULTIAPPEND` and is unmeasured; if an append there costs what one costs on Fastmail, 4 MiB chunks would move about three times as fast. Should the default depend on the server? |
+| B1 | **Parallel connections on Gmail.** Gmail has no batching and moves 0.2 MiB per second up on one connection (section 12). If that rate is per connection, several transfer connections are the only way to go faster there, and the default of two may be too low for Gmail. `blob_probe.py --parallel` measures it (about 90 MB, of a documented 500 MB a day). |
 | B2 | **Storage of binary chunks.** `BINARY` works on Fastmail and Stalwart (section 12), but Fastmail stores the chunk as base64, so it saves transfer and no quota there. No way to store raw bytes on Fastmail is known. |
 | B3 | **Provider limits and terms.** Gmail's append limit was probed at about 35 MB and its daily IMAP volumes are documented for Workspace only. Fastmail advertises an append limit of 200 MB; its behaviour with large folders of large messages is unmeasured, and no provider's terms were checked for use as file storage. |
 | B4 | **Orphan grace.** Is 7 days right, and should the uploader's app show an upload that has waited that long? The grace runs on each device's own first sight of a chunk (section 7), so a device that opens the blob folder rarely collects late. |
