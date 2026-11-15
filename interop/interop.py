@@ -1,75 +1,26 @@
-"""Two engines, one hub: Tandem devices built on different SDKs share a hub on a disposable Stalwart.
+"""Go/Swift end-to-end scenarios on disposable Stalwart or isolated Fastmail folders.
 
-Each engine has a driver that reads one JSON command per line and answers one line (sdk/swift/Sources/tandem-device,
-sdk/go/engine/cmd/tandem-device). This script starts Stalwart in Docker, then runs every scenario for every pair of
-engines, the founder on one and the other people's devices on the other, each in its own IMAP folder.
+    python3 -B interop/interop.py --files
+    python3 -B interop/interop.py swift go --files --provider fastmail
 
-    python3 interop/interop.py                 # every engine pair that is available
-    python3 interop/interop.py swift go        # just this pair, founder first
+See interop/README.md for credential setup, coverage and fault boundaries.
 """
-import base64
+import argparse
+from contextlib import ExitStack
 import itertools
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
-import uuid
+import tempfile
+import time
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, 'conformance'))
-from stalwart import Stalwart  # noqa: E402
+from harness import ENGINES, ROOT, Device, Failed, b64u, unb64u, titles, check
+from providers import Mailbox, fastmail, isolated
 
-
-def b64u(b):
-    return base64.urlsafe_b64encode(b).rstrip(b'=').decode()
-
-
-def unb64u(s):
-    return base64.urlsafe_b64decode(s + '=' * (-len(s) % 4))
-
-
-ENGINES = {
-    'swift': dict(build=['swift', 'build', '--product', 'tandem-device'], cwd=ROOT,
-                  argv=[os.path.join(ROOT, '.build/out/Products/Debug/tandem-device')]),
-    'go': dict(build=['go', 'build', '-o', os.path.join(ROOT, '.build/tandem-device-go'), './engine/cmd/tandem-device'],
-               cwd=os.path.join(ROOT, 'sdk/go'), argv=[os.path.join(ROOT, '.build/tandem-device-go')]),
-}
-
-
-class Failed(Exception):
-    pass
-
-
-class Device:
-    """One driver process: call it with an op and arguments, get the reply's fields."""
-
-    def __init__(self, engine, name):
-        self.engine, self.name = engine, name
-        self.process = subprocess.Popen(ENGINES[engine]['argv'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-
-    def __call__(self, op, **args):
-        self.process.stdin.write(json.dumps(dict(op=op, **args)) + '\n')
-        self.process.stdin.flush()
-        line = self.process.stdout.readline()
-        if not line:
-            raise Failed(f'{self.name} ({self.engine}) exited during {op}')
-        reply = json.loads(line)
-        if not reply.pop('ok'):
-            raise Failed(f'{self.name} ({self.engine}) {op}: {reply["error"]}')
-        return reply
-
-    def close(self):
-        self.process.stdin.close()
-        self.process.wait(timeout=30)
-
-
-def titles(device, lst):
-    return sorted(unb64u(i['values']['title']).decode() for i in device('items', list=lst)['items'] if 'title' in i['values'])
-
-
-def check(what, got, want):
-    if got != want:
-        raise Failed(f'{what}: got {got!r}, want {want!r}')
+sys.path.insert(0, str(ROOT / 'conformance'))
+from stalwart import Stalwart
 
 
 # Scenarios: `a` is the founder and admin on the first engine, `others` start devices on the second.
@@ -321,42 +272,91 @@ def packing(new, hub):
 SCENARIOS = [sharing, pairing, key_change, copying, blobs, collecting, packing]
 
 
-def run(server, first, second):
-    failures = 0
-    for scenario in SCENARIOS:
-        devices = []
-        hub = dict(host='127.0.0.1', port=server.ports[993], user=server.username, password=server.password,
-                   folder='Tandem-interop-' + uuid.uuid4().hex[:8], insecure=True)
-
-        def new(side, name):
-            d = Device(first if side == 'a' else second, name)
-            d('hub', **hub)
-            devices.append(d)
-            return d
-        try:
-            scenario(new, hub)
-            print(f'ok    {first:>5} → {second:<5} {scenario.__name__}')
-        except Failed as e:
-            failures += 1
-            print(f'FAIL  {first:>5} → {second:<5} {scenario.__name__}: {e}')
-        finally:
-            for d in devices:
+def run(config, provider, first, second, scenarios, timeout):
+    results = []
+    for scenario in scenarios:
+        devices, hub = [], isolated(config)
+        started = time.monotonic()
+        error = None
+        with tempfile.TemporaryDirectory(prefix='tandem-interop-') as temporary:
+            def new(side, name):
+                directory = Path(temporary) / str(len(devices))
+                directory.mkdir(mode=0o700)
+                d = Device(first if side == 'a' else second, name, directory, timeout)
+                devices.append(d)
+                d('hub', **hub)
+                return d
+            try:
+                scenario(new, hub)
+            except Exception as exc:
+                error = str(exc)
+            finally:
+                for d in devices:
+                    try:
+                        d.close()
+                    except Exception as exc:
+                        error = error or f'driver cleanup failed: {type(exc).__name__}'
                 try:
-                    d.close()
-                except Exception:
-                    d.process.kill()
-    return failures
+                    Mailbox(hub).cleanup()
+                except Exception as exc:
+                    error = (error + '; ' if error else '') + f'mailbox cleanup failed: {type(exc).__name__}: {exc}; folder {hub["folder"]}'
+        result = dict(provider=provider, sender=first, receiver=second, scenario=scenario.__name__,
+                      seconds=round(time.monotonic() - started, 3), ok=error is None)
+        if error:
+            for secret in (hub['user'], hub['password']):
+                error = error.replace(secret, '[redacted]')
+            result['error'] = error
+        results.append(result)
+        print(f'{"FAIL" if error else "ok  "}  {provider} {first} → {second} {scenario.__name__} ({result["seconds"]:.1f}s)' +
+              (f': {error}' if error else ''), flush=True)
+    return results
 
 
 def main():
-    wanted = sys.argv[1:]
-    engines = [e for e in ENGINES if not wanted or e in wanted]
-    for e in engines:
-        subprocess.run(ENGINES[e]['build'], cwd=ENGINES[e]['cwd'], check=True, stdout=subprocess.DEVNULL)
-    pairs = [tuple(wanted)] if len(wanted) == 2 else list(itertools.product(engines, repeat=2))
-    with Stalwart() as server:
-        failures = sum(run(server, a, b) for a, b in pairs)
-    sys.exit(1 if failures else 0)
+    from files import FILE_SCENARIOS
+    parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
+    parser.add_argument('engines', nargs='*', choices=list(ENGINES))
+    parser.add_argument('--provider', action='append', choices=['stalwart', 'fastmail'], help='repeat for both; default Stalwart')
+    parser.add_argument('--race', action='store_true', help='build the Go driver with the race detector')
+    parser.add_argument('--files', action='store_true', help='only file scenarios')
+    parser.add_argument('--scenario', action='append', choices=[s.__name__ for s in SCENARIOS + FILE_SCENARIOS])
+    parser.add_argument('--timeout', type=float, default=120, help='deadline per driver command, seconds')
+    parser.add_argument('--report', type=Path, help='write a credential-free JSON report')
+    args = parser.parse_args()
+    if len(args.engines) > 2:
+        parser.error('choose one engine or an ordered pair')
+    if args.timeout <= 0:
+        parser.error('--timeout must be positive')
+    engines = list(dict.fromkeys(args.engines)) or list(ENGINES)
+    pairs = [tuple(args.engines)] if len(args.engines) == 2 else list(itertools.product(engines, repeat=2))
+    scenarios = ([blobs] + FILE_SCENARIOS) if args.files else SCENARIOS + FILE_SCENARIOS
+    if args.scenario:
+        scenarios = [s for s in SCENARIOS + FILE_SCENARIOS if s.__name__ in args.scenario]
+    (ROOT / '.build').mkdir(exist_ok=True)
+    for engine in engines:
+        command = list(ENGINES[engine]['build'])
+        if engine == 'go' and args.race:
+            binary = str(ROOT / '.build/tandem-device-go-race')
+            command[command.index('-o') + 1] = binary
+            command.insert(2, '-race')
+            ENGINES[engine]['argv'] = [binary]
+        subprocess.run(command, cwd=ENGINES[engine]['cwd'], check=True, stdout=subprocess.DEVNULL)
+    results = []
+    for provider in dict.fromkeys(args.provider or ['stalwart']):
+        with ExitStack() as stack:
+            if provider == 'stalwart':
+                server = stack.enter_context(Stalwart())
+                config = dict(host='127.0.0.1', port=server.ports[993], user=server.username, password=server.password, insecure=True)
+            else:
+                config = fastmail()
+            for first, second in pairs:
+                results += run(config, provider, first, second, scenarios, args.timeout)
+    if args.report:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(json.dumps(dict(date=time.strftime('%Y-%m-%d'), results=results), indent=2) + '\n')
+    failed = sum(not r['ok'] for r in results)
+    print(f'{len(results) - failed}/{len(results)} scenarios passed; every test folder was checked during cleanup.', flush=True)
+    sys.exit(bool(failed))
 
 
 if __name__ == '__main__':

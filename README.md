@@ -66,6 +66,7 @@ out the boundary.
 | [DESIGN.md](DESIGN.md) | The protocol, threat model, wire rules, everyday flows and open questions. |
 | [proofs/](proofs/README.md) | Lean proofs, the executable oracle and model comparisons. |
 | [sdk/](sdk/README.md) | Native Go, Python, Node.js/TypeScript and Swift protocol cores, async session APIs and cross-language checks. |
+| [interop/](interop/README.md) | Go/Swift end-to-end scenarios on isolated Stalwart and Fastmail folders, including file failures and recovery. |
 | [model/](model/README.md) | Small Python models and regression tests; older designs are identified in the README. |
 | [conformance/](conformance/README.md) | Real-crypto checks in Python and Apple CryptoKit, mail probes and process-crash tests. Much of the harness targets v1; selected tests cover v2. |
 | [site/](site/README.md) | The public website, built from the specification with Pandoc. |

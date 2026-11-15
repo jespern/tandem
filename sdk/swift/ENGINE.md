@@ -47,15 +47,15 @@ Built by the Liszto session at Jesper's request, from its handover; tests in `Ap
 its address), signed as a **pending write** kept in the store's `uploads` table and out of the replica, uploaded by a
 worker on the `BlobHub`'s own connections, and merged and published only once every chunk is verified on the hub. The
 store's `chunks` table is the blob folder's index (claim, tag, first seen by this device's clock, verified or rejected);
-content lives in files in `Store.blobDirectory`, never in SQLite. After each sync the worker collects what nothing protects
+content lives in files in `Store.blobDirectory`, never in SQLite. Pending uploads crossing an epoch retain their original causal history. Committing the write and consuming the upload journal is atomic; durable `blobs.staged.*` markers retain its staged source until feed confirmation, so cache eviction cannot lose unpublished content. Collection copying currently refuses attachments before creating a destination; re-encryption into the new scope is not implemented. After each sync the worker collects what nothing protects
 (live, held, pending, or the version still on the feed while its replacement isn't), keeps the lowest verified copy,
 collects orphans after a grace on this device's clock, and heals chunks of live manifests it holds. It refreshes the
 index for that only when the local index shows something to collect, when it should check content it holds (once after
 `useBlobs`, or on `checkBlobs()`), or when what it lists or protects changed; so a chunk orphaned by another device's
 dead upload is found the next time something changes. The worker, downloads and quota count as users of the blob hub; the
 last to finish lets the connections go (found by interop: a download broke when the worker released under it).
-`BlobTests` (18 scenarios, one per review finding among them) and `BlobReleaseTests`; `interop/interop.py`'s `blobs`
-scenario runs both engines on Stalwart. Not done: a one-batch transfer on the feed connection (`IMAPStore.appendChunks`
+`BlobTests` and `BlobReleaseTests` cover the engine; [the native end-to-end harness](../../interop/README.md)
+adds real IMAP file lifecycle, restart and fault scenarios on Stalwart and Fastmail. Not done: a one-batch transfer on the feed connection (`IMAPStore.appendChunks`
 exists, the engine doesn't use it yet); requested downloads ahead of unasked ones; pipelined appends for a server with
 `LITERAL+` but no `MULTIAPPEND`.
 
@@ -90,7 +90,7 @@ The Liszto session asked for two things, decided with Jesper, now done (`SharedS
 1. ~~Registry~~.
 2. ~~`MemoryHub` and `Store`; a `Device` that founds a hub, with its capsule, and another that reads it and unlocks management~~.
 3. ~~Home on one participant's two installations; collections on them: create a list, write records, see them on the other device~~.
-4. ~~Invitations: a second participant joins; sharing, grants, accepting~~. Declining and leaving still to do.
+4. ~~Invitations: a second participant joins; sharing, grants, accepting, declining and leaving~~.
 5. ~~Pairing with approval and rejection~~; ~~revocation (`revoke`) with the home rekey~~; ~~list rekeys~~.
 6. ~~Rotation with the journal and crash points~~; ~~late writes signed again~~; ~~garbage collection; healing~~.
 7. The IMAP binding in place of `MemoryHub`: ~~the invite → join → share → accept → edit path on Stalwart~~ (`EngineOverStalwartTests`, with `TANDEM_IMAP_STALWART=1`); then Fastmail and Gmail.

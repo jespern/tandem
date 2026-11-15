@@ -58,23 +58,25 @@ The logic is proved: merge rules, roster rules, garbage collection, encodings. T
   - registers are otherwise (record, field) for `assign`, (record, field, element) for `add`/`remove`.
 - **What the Lean model does:** `Write.slot` is unchanged; `Write.governs` adds a delete's reach over its record, and `sup` uses it. A malformed delete is invalid (`malformed_delete_rejected`).
 - **What is proved:** supersession is still a strict partial order for any vectors (`sup_strict`), so merge is still a join; tombstones are sticky (`deleted_sticky`, `kept_delete_stays`); a delete built over the record's state leaves only itself (`delete_built_over_state`, `state_only_deletes`), the "one small message per deleted record" of §12.3; a write concurrent with the delete stays kept under it (`concurrent_write_survives_delete`); records without deletes merge exactly as before (`state_of_undeleted`), so display and sets are unaffected.
-- **Still to do outside `proofs/`:** the §9.2 text and the Go `slotOf`.
+- **Implementation:** §9.2 and the current v2 cores implement this rule; native deletion and file-cleanup scenarios exercise it.
 
 **F2. Our plan, not the design, was wrong about signing again.**
 - **The plan's claim:** "a re-signed write never supersedes a write the snapshot kept". It is false.
 - **Why it's false, and why that's right:** a late write that replaced a snapshot write in the old epoch replaces it again once signed in the new one (`late_write_replaces_snapshot_again`). That is correct behaviour, and §11.6 never claimed otherwise.
 - **What holds instead:** the theorems in `Reissue`.
 
-**F3. Inventory entries with no writes (§8.3) — resolved: §8.3 now says every entry lists at least one write and a zero count is invalid.**
+**F3. Inventory entries with no writes (§8.3) — the original ambiguity is resolved; zero counts now explicitly encode deletion marks (2026-11-15).**
+
+The history below concerns inventories before marks. Current canonical bytes commit both the write pairs and the marked-record set (`inventory_marks_inj`); zero is valid only with that deletion meaning.
 - **The gap:** the byte format allows a record with a write count of zero, and `model/owner_model.py` emits one for `{rec: []}`. The bytes are then not a function of the set of (record, write) pairs: `{a: [x]}` and `{a: [x], b: []}` list the same writes under different commitments.
 - **Why it's harmless:** every device judges against the committed bytes.
 - **The cost:** the bytes stop being canonical. A device resuming from its journal must reuse the exact bytes, as §11.6 already requires.
 - **What the Lean model does:** `Enc.canon` never emits an empty entry. `difftest.py` doesn't generate empty entries, so it doesn't test this case.
-- **Suggested fix:** say in §8.3 that every entry lists at least one write.
+- **Original fix:** require a write in every entry. The subsequent deletion-mark extension gives empty entries an explicit meaning instead.
 
 **F4. Two slips in §5.5 — fixed on `design/admin-key` (6da1f4b).**
 - The `sigInput` comment called `hubID` the "pinned recovery public key"; it is `pub(MKs)` (§5.3).
-- §5.5 said the other signed objects' `TANDEM-…-V2` prefixes are "given where they're defined"; none is defined yet. They are part of Q28, and `Enc.signedTags` holds only the two fixed so far (`TANDEM-WRITE-V2`, `TANDEM-ADMIN-CAPSULE-V2`).
+- At that revision, §5.5 referred to signed prefixes that were not yet fixed (then Q28). The current formats are specified in §10.8 and covered by shared SDK vectors; the proof's signed-domain table covers only the write and admin-capsule prefixes.
 - The same stale recovery-key description of `hubID` in §13.1 was corrected to `pub(MKs)` in `2447186` on `design/admin-key` (also applied on this branch).
 
 **F5. May a member's display name change? (§8.2) — open.**

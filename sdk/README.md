@@ -5,7 +5,8 @@ control-object formats (DESIGN §10.8), checked against shared vectors. Swift an
 bindings ([`TandemIMAP`](swift/README.md#imap), [`sdk/go/imap`](go/README.md)). Swift and Go have
 development device engines: `TandemEngine` ([INTEGRATING.md](swift/INTEGRATING.md)) and
 [`sdk/go/engine`](go/engine/README.md). `interop/interop.py` runs Swift and Go devices on one hub, in
-every pairing. The v1
+every pairing; [the harness guide](../interop/README.md) covers Stalwart, Fastmail
+and file recovery tests. The v1
 implementations on `testbed` are separate.
 
 The [browser target](typescript/BROWSER.md) adds direct JMAP push, an IndexedDB
@@ -146,7 +147,8 @@ All four cores implement the file encodings and manifests of DESIGN §17. Go and
 Swift also upload, fetch, resume and heal files over IMAP. Browser file transport
 is not implemented. Files are optional; clients without them still merge their
 manifest fields. Replacing a file uploads it whole; delta sync and version history
-remain future work. See [BLOBS.md](../BLOBS.md) for measured provider costs and
+remain future work. Copying a collection with attachments is refused until files
+can be re-encrypted into the new scope. See [BLOBS.md](../BLOBS.md) for measured provider costs and
 [the file rules](../DESIGN.md#17-extension-files) for durability and cleanup limits.
 
 ## What comes next

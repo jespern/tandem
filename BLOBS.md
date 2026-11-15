@@ -35,6 +35,15 @@ a good local file, and a refused binary append falls back to text. A fourth foun
 unknown manifest versions missed manifests protected only by the feed rule (§17.7). Two of
 those findings concern a binary form of the chunk message that was dropped afterwards (§17.4.2).
 
+## End-to-end validation
+
+The [native harness](interop/README.md) exercises the real Go/Swift engines and
+IMAP bindings, including upload interruption, process loss, publication failures,
+malformed manifests, healing and cleanup. It also documents four implementation
+findings and the fixes or explicit limitations they led to. These lifecycle runs
+are separate from the transfer measurements below; their elapsed times include
+setup and cleanup.
+
 ## Measurements (2026-11-15)
 
 `probes/blob_probe.py` appends chunks of 256 KiB, 1 MiB and 4 MiB in both forms, fetches them back

@@ -1,7 +1,7 @@
-# Proposal: garbage collection beyond what the specification allows today
+# Garbage collection: decisions, implementation and proofs
 
 Status: **implemented**, 2026-11-15, in `DESIGN.md` and the Go, Swift and browser devices: section 2's rule (proved in `proofs/TandemProofs/Drop.lean`; a write is dropped only once no message holds it), packs and deletion marks (section 3), and old channels' rosters cut to their epoch's statements (section 4.3; the whole epoch is kept, not only the announcement and its parent, since a device away from the middle of an epoch needs its later statements). Every open question is answered (section 8). That clean-up gets done is proved too (`proofs/TandemProofs/Progress.lean`), and what file clean-up, healing, pending writes and the feed rule guarantee (`BlobGC.lean`, which answers B9). References with § are to
-`DESIGN.md`. Decisions left for Jesper are marked **Open**.
+`DESIGN.md`. The remaining text preserves the proposal and rationale that led to those implemented rules.
 
 Step 1 of the clean-up work, on branch `gc`, implements what `DESIGN.md` already allows and the
 engines did not do: purging a deleted list after its retention, its file chunks included (§11.9,
@@ -331,4 +331,4 @@ roster only in current channels already.
 | G3 | **Yes, already** (2026-11-15): `gc_safe` is record-agnostic. Only tombstones are packed (Jesper). |
 | G4 | **Yes** (Jesper, 2026-11-15): the inventory format may change before v2 ships. Packing first, then the marks. |
 | G5 | **Parked** (Jesper, 2026-11-15): no checkpoint; section 4.3's cut instead. |
-| G6 | **The owner's devices pack** (Jesper, 2026-11-15). The threshold is open: about 50 tombstone messages in a channel is the proposal. |
+| G6 | **The owner's devices pack** (Jesper, 2026-11-15). The engines default to 50 tombstone messages, configurable with `SetPackThreshold` / `setPackThreshold`. |

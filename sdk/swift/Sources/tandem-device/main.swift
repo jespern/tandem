@@ -15,9 +15,38 @@ actor Driver {
     var blobs: BlobStore?
     /// The device's own store, for writeCount.
     var local: Store?
+    var directory: String?, keys: DeviceKeys?
+    var feed: FixtureFeed?, faultBlobs: FixtureBlobs?
+    var runner: Task<Void, any Error>?
+
+    func deviceKeys() throws -> DeviceKeys {
+        if let keys { return keys }
+        let result: DeviceKeys
+        if let directory {
+            try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            let url = URL(fileURLWithPath: directory).appendingPathComponent("keys")
+            if FileManager.default.fileExists(atPath: url.path) {
+                let raw = Bytes(try Data(contentsOf: url))
+                guard raw.count == 64 else { throw Failure(message: "invalid fixture keys") }
+                result = try DeviceKeys(signingSeed: Array(raw.prefix(32)), agreementPrivate: Array(raw.suffix(32)))
+            } else {
+                result = DeviceKeys()
+                try Data(result.signing.rawRepresentation + result.agreement.rawRepresentation).write(to: url, options: .atomic)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            }
+        } else { result = DeviceKeys() }
+        keys = result; return result
+    }
+
+    func stop() async {
+        runner?.cancel()
+        await feed?.close()
+        _ = try? await runner?.value
+        await blobs?.close()
+    }
 
     func newLocal() throws -> Store {
-        let s = try Store(path: ":memory:")
+        let s = try Store(path: directory.map { $0 + "/device.sqlite" } ?? ":memory:")
         local = s
         return s
     }
@@ -45,12 +74,12 @@ actor Driver {
         return m
     }
 
-    func store() async throws -> IMAPStore {
+    func store() async throws -> FixtureFeed {
         guard let account else { throw Failure(message: "no hub: send {\"op\":\"hub\",…} first") }
         let imap = IMAPStore(.init(host: account.host, port: account.port, username: account.user, password: account.password,
                                    security: insecure ? .tlsTrustingAnyCertificateForTesting : .tls, folder: folder))
         try await imap.ensureFolder()
-        return imap
+        let f = FixtureFeed(imap); feed = f; return f
     }
 
     func dev() throws -> Device {
@@ -73,15 +102,26 @@ actor Driver {
                                      password: try s("password"))
             folder = c["folder"] as? String ?? "Tandem"
             insecure = c["insecure"] as? Bool ?? false
+ directory = c["directory"] as? String
+            return [:]
+        case "reopen":
+            let keys = try deviceKeys()
+            device = try await Device.reopen(store: newLocal(), keys: keys, hub: store())
+            guard device != nil else { throw Failure(message: "no durable device") }
+            if let directory { ms = try? Bytes(Data(contentsOf: URL(fileURLWithPath: directory + "/manager"))) }
             return [:]
         case "found":
-            let keys = DeviceKeys()
+            let keys = try deviceKeys()
             let f = try Founder.found(account: account!, keys: keys, label: try s("label"))
             let d = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try newLocal(),
                                     hub: try await store())
             try await d.publish(f)
             if let password = c["hubPassword"] as? String { try await d.changePassword(to: password, ms: f.managementSeed) }
             device = d; ms = f.managementSeed
+            if let directory {
+                try Data(f.managementSeed).write(to: URL(fileURLWithPath: directory + "/manager"), options: .atomic)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: directory + "/manager")
+            }
             return ["participant": B64u.encode(f.participant)]
         case "unlock":
             ms = try await dev().unlock(password: try s("password"))
@@ -91,14 +131,14 @@ actor Driver {
             let link = try await dev().invite(label: try s("label"), account: account!, ms: ms)
             return ["link": B64u.encode(try link.json())]
         case "join":
-            device = try await Device.join(link: try InvitationLink.parse(try b("link")), keys: DeviceKeys(), label: try s("label"),
+            device = try await Device.join(link: try InvitationLink.parse(try b("link")), keys: try deviceKeys(), label: try s("label"),
                                            store: try newLocal(), hub: try await store())
             return [:]
         case "startPairing":
             let link = try await dev().startPairing(label: try s("label"), account: account!)
             return ["link": B64u.encode(link.json())]
         case "pair":
-            device = try await Device.pair(link: try PairingLink.parse(try b("link")), keys: DeviceKeys(), label: try s("label"),
+            device = try await Device.pair(link: try PairingLink.parse(try b("link")), keys: try deviceKeys(), label: try s("label"),
                                            store: try newLocal(), hub: try await store())
             return [:]
         case "claims":
@@ -116,6 +156,29 @@ actor Driver {
             guard let me = try await dev().me else { return ["me": NSNull()] }
             return ["participant": B64u.encode(me.participant), "certificate": B64u.encode(me.certificate),
                     "awaitingApproval": try await dev().awaitingApproval]
+        case "offline":
+            await feed!.setOffline(c["value"] as? Bool ?? false)
+            return [:]
+        case "run":
+            guard runner == nil else { throw Failure(message: "already running") }
+            let d = try dev()
+            runner = Task { try await d.run() }
+            await feed!.waitForWatch()
+            return [:]
+        case "awaitBlob":
+            let d = try dev(), list = try b("list"), record = try b("record"), name = try s("name"), state = try s("state")
+            let names: [BlobState: String] = [.here: "here", .remote: "remote", .downloading: "downloading", .unavailable: "unavailable", .unreadable: "unreadable", .uploading: "uploading"]
+            var events = await d.events().makeAsyncIterator()
+            while true {
+                if let info = await d.blob(list: list, record: record, name: name), names[info.state] == state { return ["state": state] }
+                guard let event = await events.next() else { throw Failure(message: "events ended") }
+                if case let .syncFailed(message) = event { throw Failure(message: message) }
+            }
+        case "manifest":
+            return ["value": try await dev().value(list: b("list"), record: b("record"), field: "_blob:" + s("name")).map(B64u.encode) ?? NSNull()]
+        case "fieldValues":
+            let item = try await dev().item(list: b("list"), id: b("record"))
+            return ["values": item?.values(try s("field")).map { B64u.encode($0.value) } ?? []]
         case "sync":
             return ["applied": try await dev().sync()]
         case "setName":
@@ -192,10 +255,22 @@ actor Driver {
         case "copyOf":
             return ["from": try await dev().copyOf(list: try b("list")).map(B64u.encode) ?? NSNull()]
         case "useBlobs":
-            let store = BlobStore(try configuration(), options: .init(folder: folder + "-blobs"))
+ guard blobs == nil else {throw Failure(message: "blobs already enabled")}
+            let store = BlobStore(try configuration(), options: .init(folder: folder + "-blobs", transferConnections: c["connections"] as? Int))
             blobs = store
-            try await dev().useBlobs(store, settings: BlobSettings(chunkSize: c["chunkSize"] as? Int ?? Blob.defaultChunk))
+            let fixture = FixtureBlobs(store); faultBlobs = fixture
+            try await dev().useBlobs(fixture, settings: BlobSettings(chunkSize: c["chunkSize"] as? Int ?? Blob.defaultChunk))
             return [:]
+        case "blobFault":
+ guard (c["after"] as? Int ?? 0)>=0 else {throw Failure(message: "negative fault boundary")}
+            await faultBlobs!.fault(after: c["after"] as? Int ?? 0, lostAck: c["lostAck"] as? Bool ?? false)
+            return [:]
+        case "clearBlobFault":
+            await faultBlobs!.clear(); return [:]
+        case "blobFaultStatus":
+            return ["stored": await faultBlobs!.stored]
+        case "cancelAttach":
+            try await dev().cancelAttach(list: b("list"), record: b("record"), name: s("name")); return [:]
         case "settleBlobs":
             try await dev().settleBlobs()
             return [:]
@@ -244,3 +319,5 @@ for try await line in FileHandle.standardInput.bytes.lines {
     let data = try JSONSerialization.data(withJSONObject: reply, options: [.sortedKeys])
     FileHandle.standardOutput.write(data + Data("\n".utf8))
 }
+
+await driver.stop()

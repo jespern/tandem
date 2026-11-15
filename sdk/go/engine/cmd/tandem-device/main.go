@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	tandem "github.com/jespern/tandem/sdk/go"
@@ -19,13 +20,19 @@ import (
 )
 
 type driver struct {
-	account  engine.MailboxAccount
-	folder   string
-	insecure bool
-	device   *engine.Device
-	ms       []byte
-	blobs    *imap.BlobStore
-	local    *engine.Store // the device's own store, for writeCount
+	account    engine.MailboxAccount
+	folder     string
+	insecure   bool
+	device     *engine.Device
+	ms         []byte
+	blobs      *imap.BlobStore
+	local      *engine.Store // the device's own store, for writeCount
+	directory  string
+	keys       *tandem.DeviceKeys
+	feed       *fixtureFeed
+	faultBlobs *fixtureBlobs
+	runCancel  context.CancelFunc
+	runDone    chan error
 }
 
 func (d *driver) imapConfig() imap.Config {
@@ -43,13 +50,49 @@ var blobStates = map[engine.BlobState]string{engine.BlobHere: "here", engine.Blo
 // blobOp handles the blob commands; ok is false for any other op.
 func (d *driver) blobOp(ctx context.Context, dev *engine.Device, op string, a args) (map[string]any, bool, error) {
 	if op == "useBlobs" {
+		if d.blobs != nil {
+			return nil, true, errors.New("blobs already enabled")
+		}
 		size, _ := a["chunkSize"].(float64)
-		b, err := imap.NewBlobStore(d.imapConfig(), imap.BlobOptions{Folder: d.folder + "-blobs"})
+		connections, _ := a["connections"].(float64)
+		opts := imap.BlobOptions{Folder: d.folder + "-blobs"}
+		if connections > 0 {
+			n := int(connections)
+			opts.TransferConnections = n
+		}
+		b, err := imap.NewBlobStore(d.imapConfig(), opts)
 		if err != nil {
 			return nil, true, err
 		}
 		d.blobs = b
-		return nil, true, dev.UseBlobs(b, engine.BlobSettings{ChunkSize: int(size)})
+		d.faultBlobs = &fixtureBlobs{BlobHub: b}
+		return nil, true, dev.UseBlobs(d.faultBlobs, engine.BlobSettings{ChunkSize: int(size)})
+	}
+	if op == "blobFault" {
+		n, _ := a["after"].(float64)
+		if n < 0 {
+			return nil, true, errors.New("negative fault boundary")
+		}
+		lost, _ := a["lostAck"].(bool)
+		d.faultBlobs.fault(int(n), lost)
+		return nil, true, nil
+	}
+	if op == "clearBlobFault" {
+		d.faultBlobs.clear()
+		return nil, true, nil
+	}
+	if op == "blobFaultStatus" {
+		return map[string]any{"stored": d.faultBlobs.count()}, true, nil
+	}
+	if op == "cancelAttach" {
+		list, e1 := a.b("list")
+		record, e2 := a.b("record")
+		name, e3 := a.s("name")
+		if err := errors.Join(e1, e2, e3); err != nil {
+			return nil, true, err
+		}
+		dev.CancelAttach(list, record, name)
+		return nil, true, nil
 	}
 	if op == "settleBlobs" {
 		return nil, true, dev.SettleBlobs(ctx)
@@ -100,7 +143,7 @@ func (d *driver) blobOp(ctx context.Context, dev *engine.Device, op string, a ar
 		return nil, true, err
 	}
 	if op == "chunkCounts" {
-		var counts []int
+		counts := []int{}
 		for _, e := range m.Chunks {
 			n := 0
 			for _, r := range refs {
@@ -167,7 +210,8 @@ func (d *driver) store() (tandem.PushStore, error) {
 	if err := s.EnsureFolder(context.Background()); err != nil {
 		return nil, err
 	}
-	return s, nil
+	d.feed = &fixtureFeed{PushStore: s, ready: make(chan struct{})}
+	return d.feed, nil
 }
 
 func (d *driver) dev() (*engine.Device, error) {
@@ -177,7 +221,25 @@ func (d *driver) dev() (*engine.Device, error) {
 	return d.device, nil
 }
 
-func memoryStore() (*engine.Store, error) { return engine.OpenStore(":memory:") }
+func (d *driver) newLocal() (*engine.Store, error) {
+	if d.directory == "" {
+		keys, err := tandem.NewDeviceKeys()
+		if err != nil {
+			return nil, err
+		}
+		d.keys = keys
+		return engine.OpenStore(":memory:")
+	}
+	if err := os.MkdirAll(d.directory, 0700); err != nil {
+		return nil, err
+	}
+	keys, err := engine.LoadOrCreateDeviceKeys(filepath.Join(d.directory, "keys"))
+	if err != nil {
+		return nil, err
+	}
+	d.keys = keys
+	return engine.OpenStore(filepath.Join(d.directory, "device.sqlite"))
+}
 
 func (d *driver) handle(ctx context.Context, a args) (map[string]any, error) {
 	op, err := a.s("op")
@@ -192,6 +254,27 @@ func (d *driver) handle(ctx context.Context, a args) (map[string]any, error) {
 		d.account = engine.MailboxAccount{Host: str(a["host"]), Port: uint16(port), User: str(a["user"]), Password: str(a["password"])}
 		d.folder = str(a["folder"])
 		d.insecure, _ = a["insecure"].(bool)
+		d.directory = str(a["directory"])
+		return nil, nil
+	}
+	if op == "reopen" {
+		hub, err := d.store()
+		if err != nil {
+			return nil, err
+		}
+		local, err := d.newLocal()
+		if err != nil {
+			return nil, err
+		}
+		d.local = local
+		d.device, err = engine.Reopen(local, d.keys, hub)
+		if err != nil {
+			return nil, err
+		}
+		if d.device == nil {
+			return nil, errors.New("no durable device")
+		}
+		d.ms, _ = os.ReadFile(filepath.Join(d.directory, "manager"))
 		return nil, nil
 	}
 	if op == "found" || op == "join" || op == "pair" {
@@ -199,15 +282,12 @@ func (d *driver) handle(ctx context.Context, a args) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		store, err := memoryStore()
+		store, err := d.newLocal()
 		if err != nil {
 			return nil, err
 		}
 		d.local = store
-		keys, err := tandem.NewDeviceKeys()
-		if err != nil {
-			return nil, err
-		}
+		keys := d.keys
 		label, _ := a.s("label")
 		switch op {
 		case "found":
@@ -219,6 +299,11 @@ func (d *driver) handle(ctx context.Context, a args) (map[string]any, error) {
 				return nil, err
 			}
 			d.ms = f.ManagementSeed
+			if d.directory != "" {
+				if err := os.WriteFile(filepath.Join(d.directory, "manager"), d.ms, 0600); err != nil {
+					return nil, err
+				}
+			}
 			return map[string]any{"participant": tandem.B64u(f.Participant)}, d.device.Publish(ctx, f)
 		case "join":
 			raw, err := a.b("link")
@@ -302,6 +387,59 @@ func (d *driver) handle(ctx context.Context, a args) (map[string]any, error) {
 		}
 		return map[string]any{"participant": tandem.B64u(me.Participant), "certificate": tandem.B64u(me.Certificate),
 			"awaitingApproval": dev.AwaitingApproval()}, nil
+	case "offline":
+		value, _ := a["value"].(bool)
+		d.feed.setOffline(value)
+		return nil, nil
+	case "run":
+		if d.runCancel != nil {
+			return nil, errors.New("already running")
+		}
+		runCtx, cancel := context.WithCancel(context.Background())
+		d.runCancel = cancel
+		d.runDone = make(chan error, 1)
+		go func() { d.runDone <- dev.Run(runCtx) }()
+		select {
+		case <-d.feed.ready:
+			return nil, nil
+		case err := <-d.runDone:
+			return nil, err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	case "awaitBlob":
+		events, stop := dev.Events()
+		defer stop()
+		for {
+			if b, ok := dev.Blob(list, record, str(a["name"])); ok && blobStates[b.State] == str(a["state"]) {
+				return map[string]any{"state": blobStates[b.State]}, nil
+			}
+			select {
+			case e, ok := <-events:
+				if !ok {
+					return nil, errors.New("device event stream ended")
+				}
+				if e.Kind == engine.EventSyncFailed {
+					return nil, errors.New(e.Message)
+				}
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+	case "manifest":
+		value, ok := dev.Value(list, record, engine.BlobPrefix+str(a["name"]))
+		if !ok {
+			return map[string]any{"value": nil}, nil
+		}
+		return map[string]any{"value": tandem.B64u(value)}, nil
+	case "fieldValues":
+		values := []string{}
+		if item, ok := dev.Item(list, record); ok {
+			for _, v := range item.Values(field) {
+				values = append(values, tandem.B64u(v.Value))
+			}
+		}
+		return map[string]any{"values": values}, nil
 	case "sync":
 		n, err := dev.Sync(ctx)
 		return map[string]any{"applied": n}, err
@@ -452,17 +590,38 @@ func main() {
 		reply := map[string]any{}
 		if err := json.Unmarshal(in.Bytes(), &a); err != nil {
 			reply = map[string]any{"ok": false, "error": err.Error()}
-		} else if r, err := d.handle(context.Background(), a); err != nil {
-			reply = map[string]any{"ok": false, "error": err.Error()}
 		} else {
-			for k, v := range r {
-				reply[k] = v
+			seconds, _ := a["deadlineSeconds"].(float64)
+			if seconds <= 0 {
+				seconds = 120
 			}
-			reply["ok"] = true
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(seconds*float64(time.Second)))
+			r, err := d.handle(ctx, a)
+			cancel()
+			if err != nil {
+				reply = map[string]any{"ok": false, "error": err.Error()}
+			} else {
+				for k, v := range r {
+					reply[k] = v
+				}
+				reply["ok"] = true
+			}
 		}
 		out.Encode(reply)
 	}
+	if d.runCancel != nil {
+		d.runCancel()
+	}
 	if d.device != nil {
 		d.device.Close()
+	}
+	if d.feed != nil {
+		d.feed.Close()
+	}
+	if d.blobs != nil {
+		d.blobs.Release()
+	}
+	if d.local != nil {
+		d.local.Close()
 	}
 }
