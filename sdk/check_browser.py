@@ -15,6 +15,7 @@ from mail_transport import JMAP
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--native', action='store_true', help='also verify browser pairing with the real Swift engine over IMAP')
+parser.add_argument('playwright', nargs='*', help='passed to playwright test, e.g. test/browser/files.spec.mjs or -g pattern (after --)')
 args = parser.parse_args()
 if args.native:
     subprocess.run(['swift', 'build', '--product', 'tandem-device'], cwd=ROOT, check=True)
@@ -31,4 +32,4 @@ with Stalwart(browser=True) as server:
     if args.native:
         environment['TANDEM_NATIVE_FIXTURE'] = json.dumps(dict(binary=str(ROOT / '.build/out/Products/Debug/tandem-device'),
             host='127.0.0.1', port=server.ports[993], user=server.username, password=server.password, insecure=True))
-    subprocess.run(['npm', 'run', 'test:browser'], cwd=ROOT / 'sdk/typescript', env=environment, check=True)
+    subprocess.run(['npm', 'run', 'test:browser', *(['--', *args.playwright] if args.playwright else [])], cwd=ROOT / 'sdk/typescript', env=environment, check=True)

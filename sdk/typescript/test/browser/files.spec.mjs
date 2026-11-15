@@ -1,6 +1,10 @@
 import {test, expect} from '@playwright/test';
 import {createServer} from 'node:http';
 import {readFile} from 'node:fs/promises';
+import {spawn} from 'node:child_process';
+import {createInterface} from 'node:readline';
+import {once} from 'node:events';
+import {randomBytes} from 'node:crypto';
 
 // Files between browser devices (DESIGN.md §17) on an in-memory hub and blob folder, in a real browser: IndexedDB,
 // the Origin Private File System, Web Locks and BroadcastChannel are the browser's own.
@@ -183,6 +187,23 @@ test('cancelling a partly uploaded file drops its write, and the chunks it had u
   expect(result).toEqual({partly: {state: 'uploading', chunks: true}, after: null, chunks: 0, other: null});
 });
 
+test('a device moved to another blob folder rebuilds its index, and a device holding a file restores it there', async ({page}) => {
+  const result = await page.evaluate(async () => {
+    const {h, t} = window, house = await h.household({chunkSize: 65536}), {a, b, list} = house, record = t.randomBytes(16), content = h.random(200_000);
+    try {
+      await a.device.attach(list, record, 'f', new Blob([content])); await a.device.settleBlobs(); await a.sent();
+      // A new folder whose message IDs overlap the old one's: nothing verified there may count here.
+      const fresh = new t.MemoryBlobFolder();
+      await a.device.useBlobs(new h.DeviceFolder(fresh), {chunkSize: 65536}); await b.device.useBlobs(new h.DeviceFolder(fresh), {chunkSize: 65536});
+      await a.device.settleBlobs();
+      await b.until(d => d.blob(list, record, 'f')?.state === 'remote');
+      const read = await h.bytesOf(await b.device.fetchBlob(list, record, 'f'));
+      return {same: h.same(read, content), counts: h.counts(fresh, h.manifest(a.device, list, record, 'f'))};
+    } finally { await house.stop(); }
+  });
+  expect(result).toEqual({same: true, counts: [1, 1, 1, 1]});
+});
+
 test('a list kept on a device fetches its files unasked up to a size, and the store evicts what was opened longest ago', async ({page}) => {
   const result = await page.evaluate(async () => {
     const {h, t} = window, house = await h.household({chunkSize: 65536}), {a, b, list} = house, [one, two, three] = [t.randomBytes(16), t.randomBytes(16), t.randomBytes(16)];
@@ -243,4 +264,117 @@ test('another tab of the same device sees a download finish, and the quota is un
     } finally { await tab?.stop(); await house.stop(); }
   });
   expect(result).toEqual({ok: true, other: 'here', unknown: {kind: 'unknown'}, known: {kind: 'known', used: 1200, limit: 10_000}});
+});
+
+const b64u = bytes => Buffer.from(bytes).toString('base64url');
+function nativeDriver(config) {
+  const driver = spawn(config.binary, [], {stdio: ['pipe', 'pipe', 'inherit']}), lines = createInterface({input: driver.stdout})[Symbol.asyncIterator]();
+  return {
+    command: async (op, args = {}) => { driver.stdin.write(JSON.stringify({op, ...args}) + '\n'); const line = await lines.next(); if (line.done) throw new Error('native driver ended'); const result = JSON.parse(line.value); if (!result.ok) throw new Error(`native ${op}: ${result.error}`); return result; },
+    close: async () => { driver.stdin.end(); if (driver.exitCode === null) await once(driver, 'exit'); },
+  };
+}
+
+test('real JMAP: the blob folder lists claims from headers, carries both forms, and two devices move a file through it', async ({page}) => {
+  test.skip(!process.env.TANDEM_JMAP_FIXTURE, 'run sdk/check_browser.py for disposable Stalwart');
+  const cfg = JSON.parse(process.env.TANDEM_JMAP_FIXTURE);
+  const result = await page.evaluate(async cfg => {
+    const {h, t} = window, signal = new AbortController().signal, folderName = `Tandem-Blobs-${Date.now()}`;
+    const folder = await t.JMAPBlobFolder.open(cfg, {folderName}), channel = t.b32(t.randomBytes(20));
+    const envelope = n => Uint8Array.from([84, 78, 68, 77, 2, 4, 0, 13, 10, 61, 46, 70, 32, ...h.random(n)]), e1 = envelope(100_000), e2 = envelope(50_000);
+    try {
+      const [escaped] = await folder.append([{channel, envelope: e1}], 'escaped', signal), [base64] = await folder.append([{channel, envelope: e2}], 'base64', signal);
+      let cursor = '', refs = [], page;
+      do { page = await folder.changes(cursor, signal); cursor = page.cursor; refs.push(...page.added); } while (page.more);
+      const claims = refs.map(r => [r.id, r.channel === channel, t.b64u(r.address)]).sort();
+      const fetched = await folder.fetch([base64, escaped, 'no-such-id'], signal);
+      await folder.destroy([escaped], signal);
+      const removed = []; do { page = await folder.changes(cursor, signal); cursor = page.cursor; removed.push(...page.removed); } while (page.more);
+      const quota = (await folder.quota(signal)).kind;
+      // Two devices on an in-memory feed with the real blob folder between them.
+      const house = await h.household({chunkSize: 65536}), {a, b, list} = house, record = t.randomBytes(16), content = h.random(200_000);
+      const fa = await t.JMAPBlobFolder.open(cfg, {folderName}), fb = await t.JMAPBlobFolder.open(cfg, {folderName});
+      try {
+        await a.device.useBlobs(fa, {chunkSize: 65536}); await b.device.useBlobs(fb, {chunkSize: 65536});
+        await a.device.attach(list, record, 'f', new Blob([content])); await a.device.settleBlobs(); await a.sent();
+        await b.until(d => d.blob(list, record, 'f')?.state === 'remote');
+        const read = await h.bytesOf(await b.device.fetchBlob(list, record, 'f'));
+        return {claims: claims.length === 2 && claims.every(c => c[1]) && claims.some(c => c[0] === escaped && c[2] === t.b64u(t.chunkAddress(e1))) && claims.some(c => c[0] === base64 && c[2] === t.b64u(t.chunkAddress(e2))),
+          fetched: fetched.map(c => [c.id === base64 ? 'base64' : 'escaped', h.same(c.envelope, c.id === base64 ? e2 : e1)]), removed: removed.includes(escaped), quota: ['known', 'unknown'].includes(quota),
+          state: a.device.blob(list, record, 'f').state, same: h.same(read, content), problem: a.device.update.blobProblem ?? null};
+      } finally { await house.stop(); }
+    } finally { await folder.close(); }
+  }, cfg);
+  expect(result).toEqual({claims: true, fetched: [['base64', true], ['escaped', true]], removed: true, quota: true, state: 'here', same: true, problem: null});
+});
+
+test('files between the Swift engine and the browser over Stalwart, both ways, with a chunk restored across engines', async ({page}) => {
+  test.skip(!process.env.TANDEM_NATIVE_FIXTURE, 'run sdk/check_browser.py --native'); test.setTimeout(180_000);
+  const native = JSON.parse(process.env.TANDEM_NATIVE_FIXTURE), cfg = JSON.parse(process.env.TANDEM_JMAP_FIXTURE), driver = nativeDriver(native), command = driver.command;
+  // A feed folder of its own, so the account's Tandem folder stays as the other tests expect it; the Swift driver's
+  // blob folder is its feed folder's name with "-blobs" (sdk/swift/Sources/tandem-device).
+  const feed = `Tandem-Files-${Date.now()}`, folderName = `${feed}-blobs`, jmap = {...cfg, folderName: feed};
+  try {
+    await command('hub', {...native, folder: feed}); await command('found', {label: 'Mac with files'});
+    const list = (await command('createList', {name: 'Shared files'})).list, {link} = await command('startPairing', {label: 'Browser with files'});
+    await page.evaluate(async ({cfg, link}) => {
+      const {h, t} = window, id = Date.now();
+      window.files = await h.start('Browser', {store: () => t.JMAPStore.open(cfg)}, `files-native-${id}`, `files-native-keys-${id}`, (journal, keys) => t.BrowserDevice.pair(link, 'Browser with files', journal, keys));
+      await window.files.until(d => d.update.status === 'approval'); await window.files.sent();
+    }, {cfg: jmap, link});
+    await command('sync'); const claims = (await command('claims')).claims; await command('approve', {claim: claims[0].id});
+    await page.evaluate(async ({cfg, list, folderName}) => {
+      const {t} = window, f = window.files, cid = t.unb64u(list);
+      await f.until(d => d.update.status === 'ready'); await f.until(d => d.state.collectionStatus(cid).ready && d.state.lists().some(l => t.b64u(l.id) === list));
+      await f.device.useBlobs(await t.JMAPBlobFolder.open(cfg, {folderName}), {chunkSize: 65536});
+    }, {cfg: jmap, list, folderName});
+    await command('useBlobs', {chunkSize: 65536});
+
+    // Swift attaches; the browser reads it over JMAP.
+    const photo = b64u(randomBytes(16)), data = randomBytes(200_000);
+    await command('attach', {list, record: photo, name: 'photo', content: b64u(data)}); await command('settleBlobs');
+    expect((await command('blob', {list, record: photo, name: 'photo'})).state).toBe('here');
+    const fromSwift = await page.evaluate(async ({list, photo}) => {
+      const {h, t} = window, f = window.files, cid = t.unb64u(list), rid = t.unb64u(photo);
+      await f.until(d => d.blob(cid, rid, 'photo')?.state === 'remote');
+      return t.b64u(await h.bytesOf(await f.device.fetchBlob(cid, rid, 'photo')));
+    }, {list, photo});
+    expect(fromSwift).toBe(b64u(data));
+
+    // The browser attaches; Swift reads it over IMAP. And an inline file.
+    const doc = b64u(randomBytes(16)), text = randomBytes(150_000), note = b64u(randomBytes(16));
+    await page.evaluate(async ({list, doc, text, note}) => {
+      const {t} = window, f = window.files, cid = t.unb64u(list);
+      await f.device.attach(cid, t.unb64u(doc), 'file', new Blob([t.unb64u(text)])); await f.device.attach(cid, t.unb64u(note), 'note', new Blob([new TextEncoder().encode('inline, so no chunk')]));
+      await f.device.settleBlobs(); await f.sent();
+      if (f.device.blob(cid, t.unb64u(doc), 'file').state !== 'here') throw new Error('browser upload did not commit');
+    }, {list, doc, text: b64u(text), note});
+    await command('sync');
+    expect((await command('fetchBlob', {list, record: doc, name: 'file'})).content).toBe(b64u(text));
+    expect(Buffer.from((await command('fetchBlob', {list, record: note, name: 'note'})).content, 'base64url').toString()).toBe('inline, so no chunk');
+    expect((await command('chunkCounts', {list, record: doc, name: 'file'})).counts).toEqual([1, 1, 1]);
+
+    // A credential holder destroys a chunk of the browser's file; the browser, which holds it, puts it back.
+    await command('dropChunk', {list, record: doc, name: 'file', index: 1});
+    expect((await command('chunkCounts', {list, record: doc, name: 'file'})).counts[1]).toBe(0);
+    await page.evaluate(async () => { window.files.device.checkBlobs(); await window.files.device.settleBlobs(); });
+    expect((await command('chunkCounts', {list, record: doc, name: 'file'})).counts).toEqual([1, 1, 1]);
+    // And a chunk of Swift's file, which both hold: the browser restores that too.
+    await command('dropChunk', {list, record: photo, name: 'photo', index: 0});
+    await page.evaluate(async () => { window.files.device.checkBlobs(); await window.files.device.settleBlobs(); });
+    expect((await command('chunkCounts', {list, record: photo, name: 'photo'})).counts).toEqual([1, 1, 1, 1]);
+
+    // Swift replaces its file; the browser reads the new version.
+    const newer = randomBytes(140_000);
+    await command('attach', {list, record: photo, name: 'photo', content: b64u(newer)}); await command('settleBlobs');
+    const replaced = await page.evaluate(async ({list, photo, size}) => {
+      const {h, t} = window, f = window.files, cid = t.unb64u(list), rid = t.unb64u(photo);
+      await f.until(d => d.blob(cid, rid, 'photo')?.size === size);
+      return t.b64u(await h.bytesOf(await f.device.fetchBlob(cid, rid, 'photo')));
+    }, {list, photo, size: newer.length});
+    expect(replaced).toBe(b64u(newer));
+  } finally {
+    await page.evaluate(async () => { await window.files?.stop(); });
+    await driver.close();
+  }
 });
