@@ -13,6 +13,8 @@ export function randomBytes(size: number): Buffer {
   return Buffer.from(out);
 }
 export const hash256 = sha256, hash512 = sha512;
+/** Incremental SHA-256, for content too large to hold at once. */
+export function hashStream(): {update(data: Uint8Array): void; digest(): Uint8Array} { const h = sha256.create(); return {update: data => { h.update(data); }, digest: () => h.digest()}; }
 export const hmac256 = (key: Uint8Array, data: Uint8Array): Uint8Array => hmac(sha256, key, data);
 export const hkdf = (key: Uint8Array, salt: Uint8Array, info: Uint8Array, size: number): Uint8Array => derive(sha256, key, salt, info, size);
 export function privateKey(raw: Uint8Array, algorithm: PrivateKey['algorithm']): PrivateKey {
