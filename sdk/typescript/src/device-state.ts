@@ -558,4 +558,85 @@ export class DeviceState {
     const writes=this.#edit(cid,record,head,epoch,BigInt(s.keyN),previous,changes,reserve,identity);
     return [...identity.messages,...this.#sealRecord(cid,record,writes,key,collectionTag(key,this.#registry.pin.hub,epoch)).map(message=>({...message,guard:{type:'collection' as const,collection:b64u(cid),epoch:b64u(epoch)}}))];
   }
+
+  // Files (DESIGN.md §17). A blob write is pending until its chunks are on the hub (§17.6): it is signed here but not
+  // merged, kept by the controller, and merged and sealed only at its commit.
+  #writableCollection(cid:Uint8Array,record:Uint8Array):{c:Collection;head:Uint8Array;s:import('./roster.js').Statement;epoch:Uint8Array;key:Uint8Array}{
+    const c=this.#collections.get(b64u(cid)),head=c?.policy.head,s=head&&c?.policy.statement(head),epoch=head&&c?.policy.epoch(head);
+    if(!c||!head||!s||!epoch||c.policy.dead||s.deleted||!c.policy.inventoriesReady())throw new Error('collection is not ready to write');
+    const role=s.members.find(m=>eq(m.uid,this.#participant))?.role,key=c.policy.key(epoch);
+    if(!key||!role||role==='reader'||eq(record,ROSTER_RECORD)||eq(record,META_RECORD))throw new Error('this participant may not write this record');
+    if(s.members.some(member=>!this.#registry.snapshot(member.floor)))throw new Error('member policy proofs are missing');
+    if(c.policy.exposed().length)throw new Error('waiting for the owner to replace an exposed collection key');
+    return{c,head,s,epoch,key};
+  }
+  /** The signed assign of a pending blob write, with the context it would have if it were published now (§17.6,
+   * step 3). It is not merged: until its commit the device acts as if it had not been made. */
+  prepareBlobWrite(cid:Uint8Array,record:Uint8Array,field:string,value:Uint8Array,reserve:()=>Dot):{write:Write;epoch:Uint8Array;messages:OutgoingMessage[]}{
+    const identity=this.#identity(),{head,s,epoch}=this.#writableCollection(cid,record),state=new RecordState(this.#registry.pin.hub,cid,record),previous=this.record(cid,record);
+    if(previous)state.merge(...previous.kept);
+    const write=signWrite({hub:this.#registry.pin.hub,scope:bytes(cid,16),record:bytes(record,16),ref:head,author:this.#participant,certificate:identity.certificate.id,authorization:identity.auth,
+      dot:reserve(),field,op:1,value:bytes(value),element:null,...state.vectors(1,field,null,epoch,BigInt(s.keyN)),signature:new Uint8Array(64)},this.#keys.signing);
+    return{write,epoch:bytes(epoch),messages:identity.messages};
+  }
+  /** Merges a pending blob write whose chunks are all on the hub and seals the record's state (§17.6, step 5).
+   * `drop`: the record or list was deleted, or this participant may no longer write; `wait`: no key, inventory or
+   * proof for the current epoch yet. A write whose epoch was replaced is signed again by the rules for late writes
+   * (§11.6): its dot kept, an empty context and a base that covers what it had seen. */
+  prepareBlobCommit(cid:Uint8Array,record:Uint8Array,write:Write):{kind:'drop'}|{kind:'wait'}|{kind:'publish';messages:OutgoingMessage[]}{
+    const c=this.#collections.get(b64u(cid)),head=c?.policy.head,s=head&&c?.policy.statement(head);
+    if(!c||!head||!s||c.policy.dead||s.deleted||this.record(cid,record)?.deleted)return{kind:'drop'};
+    const role=s.members.find(m=>eq(m.uid,this.#participant))?.role;if(!role||role==='reader')return{kind:'drop'};
+    let ready;try{ready=this.#writableCollection(cid,record);}catch{return{kind:'wait'};}
+    if(!this.certificate)return{kind:'wait'};
+    const identity=this.#identity(),{epoch,key}=ready,source=c.policy.epoch(write.ref);if(!source)return{kind:'drop'};
+    let w=write;
+    if(!eq(source,epoch)){
+      const ref=c.policy.chain(head).find(id=>eq(c.policy.epoch(id)!,epoch)&&!!c.policy.statement(id)?.members.some(m=>eq(m.uid,this.#participant)&&m.role!=='reader'));
+      const base=join(write.base,write.context,[write.dot]);if(!ref||base.length>MAX_VECTOR)return{kind:'drop'};
+      w=signWrite({...write,certificate:identity.certificate.id,authorization:identity.auth,ref,context:[],base,signature:new Uint8Array(64)},this.#keys.signing);
+    }
+    const validity=c.policy.dataValidity(w,epoch);if(validity.kind==='pending')return{kind:'wait'};if(validity.kind!=='valid')return{kind:'drop'};
+    const state=new RecordState(this.#registry.pin.hub,cid,record),previous=this.record(cid,record);if(previous)state.merge(...previous.kept);state.merge(c.policy.entry(w));
+    return{kind:'publish',messages:[...identity.messages,...this.#sealRecord(cid,record,state.kept.map(entry=>entry.write),key,collectionTag(key,this.#registry.pin.hub,epoch)).map(message=>({...message,guard:{type:'collection' as const,collection:b64u(cid),epoch:b64u(epoch)}}))]};
+  }
+  /** The tag of a list's current channel, where chunks are appended (§17.4.2). */
+  currentTag(cid:Uint8Array):string|undefined{const c=this.#collections.get(b64u(cid))?.policy,head=c?.head,epoch=head&&c!.epoch(head),key=epoch&&c!.key(epoch);return key?collectionTag(key,this.#registry.pin.hub,epoch):undefined;}
+  /** What clean-up and healing of chunks decide from (§17.7, §17.8), per list this device knows: every channel tag
+   * it holds a key for, the current one where the list is followed and alive, and the values of `_blob:` assigns
+   * that are kept in records not deleted, that would be kept if only writes on the feed counted, and that any valid
+   * write it holds ever assigned. `collect` is false where a held write may be a manifest this device can't see;
+   * `orphans` is false while the current inventory is missing or lists a write this device doesn't hold. */
+  blobScopes(presence:readonly MailboxPresence[]):{collection:Buffer;tags:string[];current?:string;collect:boolean;orphans:boolean;kept:{id:Buffer;record:Buffer;value:Buffer}[];feed:Buffer[];listed:Buffer[]}[]{
+    const hub=this.#registry.pin.hub,followed=new Set(this.lists().filter(l=>!l.dead).map(l=>b64u(l.id))),out=[];
+    const blob=(w:Write)=>w.op===1&&w.field.startsWith('_blob:');
+    for(const c of this.#collections.values()){
+      const p=c.policy,head=p.head,epoch=head&&p.epoch(head),s=head&&p.statement(head),key=epoch&&p.key(epoch);
+      const tags=p.readableKeys().filter(k=>{const known=p.key(k.epoch);return !!known&&eq(known,k.key);}).map(k=>collectionTag(k.key,hub,k.epoch));
+      const current=key&&s&&!s.deleted&&!p.dead&&followed.has(b64u(p.id))?collectionTag(key,hub,epoch):undefined;
+      let collect=!!current;const held=new Set<string>(),listed:Buffer[]=[],kept:{id:Buffer;record:Buffer;value:Buffer}[]=[],feed:Buffer[]=[];
+      for(const payload of c.payloads){if(!('writes'in payload.parsed)||eq(payload.parsed.record,ROSTER_RECORD))continue;
+        for(const w of payload.parsed.writes){held.add(b64u(writeID(w)));if(this.#writeValidity.get(w)?.pending)collect=false;
+          if(blob(w)&&(this.#sourceVerified.has(w)||p.sourceValidity(w).kind==='valid'))listed.push(bytes(w.value));}
+      }
+      const onFeed=new Map<string,Map<string,Entry>>();
+      for(const row of presence){const packet=this.#packets.get(JSON.stringify([row.channel,row.hash]));if(!packet||!('writes'in packet.parsed)||!tags.includes(row.channel)||eq(packet.parsed.record,ROSTER_RECORD))continue;
+        const record=b64u(packet.parsed.record),entries=onFeed.get(record)??new Map<string,Entry>();
+        for(const w of packet.parsed.writes){if(!p.eligible(w)||p.dataValidity(w,packet.epoch).kind!=='valid')continue;entries.set(b64u(writeID(w)),p.entry(w));}
+        onFeed.set(record,entries);
+      }
+      for(const [id,r]of c.records){
+        if(!r.deleted)for(const e of r.kept)if(blob(e.write))kept.push({id:bytes(e.id),record:bytes(e.write.record),value:bytes(e.write.value)});
+        const entries=onFeed.get(id)??new Map<string,Entry>();
+        if(r.kept.every(e=>entries.has(b64u(e.id)))||!entries.size)continue;
+        // The replica is ahead of the hub here: what other devices see is what is on the feed, and that stays
+        // protected until what replaces it is on the feed too.
+        const fr=new RecordState(hub,p.id,unb64u(id));fr.merge(...entries.values());if(!fr.deleted)for(const e of fr.kept)if(blob(e.write))feed.push(bytes(e.write.value));
+      }
+      let orphans=collect;
+      if(collect&&epoch&&p.genesis&&!eq(epoch,p.genesis)){const inv=p.inventory(epoch);if(!inv)orphans=false;else for(const ids of inv.values())for(const wid of ids)if(!held.has(b64u(wid)))orphans=false;}
+      out.push({collection:bytes(p.id),tags,...(current?{current}:{}),collect,orphans,kept,feed,listed});
+    }
+    return out.sort((a,b)=>Buffer.compare(a.collection,b.collection));
+  }
 }
