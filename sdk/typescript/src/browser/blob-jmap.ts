@@ -56,6 +56,7 @@ export class JMAPBlobFolder implements BlobFolder {
     try { await folder.#connect(signal); return folder; } catch (error) { await folder.close(); throw error; }
   }
   get folderName(): string { return this.#name; }
+  get identity(): string { return `jmap:${JSON.stringify([new URL(this.#api).origin, this.#account, this.#folder])}`; }
   #url(value: string): string {
     const url = new URL(value);
     const fastmail = this.#cfg.provider === 'fastmail' && !url.port && (url.hostname === 'api.fastmail.com' || url.hostname.endsWith('.api.fastmail.com'));

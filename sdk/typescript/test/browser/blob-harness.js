@@ -40,7 +40,7 @@ class MemoryStore {
 /** A blob folder of one device over a shared one: counts what it fetched, and can be cut off as a network can. */
 export class DeviceFolder {
   fetched = []; offline = false; onFetch = undefined;
-  constructor(inner) { this.inner = inner; this.compare = inner.compare; }
+  constructor(inner) { this.inner = inner; this.compare = inner.compare; this.identity = inner.identity; }
   #check() { if (this.offline) throw new TypeError('Failed to fetch'); }
   async changes(cursor, signal) { this.#check(); return this.inner.changes(cursor, signal); }
   async append(chunks, form, signal) { this.#check(); return this.inner.append(chunks, form, signal); }

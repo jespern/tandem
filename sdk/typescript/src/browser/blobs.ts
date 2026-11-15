@@ -59,7 +59,7 @@ export interface BlobHost {
 }
 
 interface Upload {write: string; scope: Buffer; record: Buffer; field: string; epoch: Buffer; payload: Buffer; r: Buffer; staged: string; w: Write; m: Manifest}
-interface Scope {cid: Buffer; tags: Set<string>; current?: string; collect: boolean; orphans: boolean; protected: Set<string>; listed: Set<string>; live: {id: Buffer; record: Buffer; m: Manifest}[]; named: Set<string>}
+interface Scope {cid: Buffer; tags: Set<string>; current?: string; collect: boolean; orphans: boolean; ready: boolean; protected: Set<string>; listed: Set<string>; live: {id: Buffer; record: Buffer; m: Manifest}[]; named: Set<string>}
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex');
 const SEAL_LABEL = 'TANDEM-LOCAL-BLOB-V1';
 const FIELD = '_blob:';
@@ -331,6 +331,12 @@ export class BlobRuntime {
 
   async #refreshIndex(): Promise<void> {
     await navigator.locks.request(this.#lock('index'), {signal: this.#signal}, async () => {
+      // Another folder, or the same one rebuilt: the index starts over, first-seen times and verification with it.
+      const identity = this.#folder.identity ?? '';
+      if (await this.#host.journal.blobValue(this.#hub, 'folder') !== identity) {
+        await this.#host.journal.forgetChunkIndex(this.#hub);
+        await this.#set([{key: 'folder', value: identity}, {key: 'cursor', value: null}, {key: 'formchecked', value: null}, {key: 'form', value: null}]);
+      }
       const seen = new Set<string>();
       while (true) {
         const cursor = (await this.#host.journal.blobValue(this.#hub, 'cursor') as string | undefined) ?? '';
@@ -552,7 +558,7 @@ export class BlobRuntime {
   async #scopes(view: DeviceState): Promise<Scope[]> {
     const dropped = await this.#host.journal.blobValues(this.#hub, 'dropped:'), out: Scope[] = [];
     for (const v of view.blobScopes(this.#host.presence())) {
-      const s: Scope = {cid: v.collection, tags: new Set(v.tags), ...(v.current ? {current: v.current} : {}), collect: v.collect, orphans: v.orphans, protected: new Set(), listed: new Set(), live: [], named: new Set()};
+      const s: Scope = {cid: v.collection, tags: new Set(v.tags), ...(v.current ? {current: v.current} : {}), collect: v.collect, orphans: v.orphans, ready: v.ready, protected: new Set(), listed: new Set(), live: [], named: new Set()};
       const protect = (value: Uint8Array, live?: {id: Buffer; record: Buffer}) => {
         const p = parseManifest(value);
         if (p.kind === 'unknown') s.collect = false;   // it may list chunks this device can't tell (§17.7)
@@ -638,8 +644,10 @@ export class BlobRuntime {
   }
   /** Removes content no record names any more, downloaded or half downloaded: a deleted record's, a replaced
    * version's, and what was kept about it. A gone list's files stay as long as its records do. Staged copies no
-   * pending write names go too, unless an attach is staging one now. */
+   * pending write names go too, unless an attach is staging one now. Nothing goes while a list's records can't be
+   * built yet (a new epoch without its inventory): they may name what is here. */
   async #dropUnnamed(scopes: readonly Scope[]): Promise<void> {
+    if (scopes.some(s => !s.ready)) return;
     const named = new Set<string>(), writes = new Set<string>();
     for (const s of scopes) { for (const n of s.named) named.add(n); for (const l of s.live) writes.add(b64u(l.id)); }
     for (const u of this.#uploads.values()) named.add(hex(u.m.hash));

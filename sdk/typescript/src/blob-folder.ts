@@ -20,6 +20,9 @@ export type BlobQuota = {kind: 'unknown'} | {kind: 'known'; used: number; limit:
 export class BlobFolderFull extends Error { constructor(readonly reason: 'over-quota' | 'too-large') { super(reason === 'over-quota' ? 'the hub is full' : 'a chunk is over the server\'s message limit'); } }
 
 export interface BlobFolder {
+  /** Names the folder (account, mailbox, and its UIDVALIDITY where IMAP has one); a device whose index was built
+   * from another rebuilds it (§17.4.3). */
+  readonly identity?: string;
   /** Present only where message IDs have one order for every device of the hub, in which a later append is never
    * lower (IMAP UIDs). Clean-up of copies (§17.7) needs it; without it a device leaves copies alone. */
   readonly compare?: (a: string, b: string) => number;
@@ -158,6 +161,7 @@ export class MemoryBlobFolder implements BlobFolder {
   /** Fetches fail, as a lost connection does. */
   failFetches = false;
   readonly compare = (a: string, b: string): number => Number(a) - Number(b);
+  readonly identity = `memory:${randomBytes(16).toString('hex')}`;
 
   async changes(cursor: string): Promise<BlobChanges> {
     const start = cursor === '' ? 0 : Number(cursor);

@@ -606,8 +606,9 @@ export class DeviceState {
    * it holds a key for, the current one where the list is followed and alive, and the values of `_blob:` assigns
    * that are kept in records not deleted, that would be kept if only writes on the feed counted, and that any valid
    * write it holds ever assigned. `collect` is false where a held write may be a manifest this device can't see;
-   * `orphans` is false while the current inventory is missing or lists a write this device doesn't hold. */
-  blobScopes(presence:readonly MailboxPresence[]):{collection:Buffer;tags:string[];current?:string;collect:boolean;orphans:boolean;kept:{id:Buffer;record:Buffer;value:Buffer}[];feed:Buffer[];listed:Buffer[]}[]{
+   * `orphans` is false while the current inventory is missing or lists a write this device doesn't hold; `ready`
+   * is false for a followed list whose current records can't be built yet, so they may be missing here. */
+  blobScopes(presence:readonly MailboxPresence[]):{collection:Buffer;tags:string[];current?:string;collect:boolean;orphans:boolean;ready:boolean;kept:{id:Buffer;record:Buffer;value:Buffer}[];feed:Buffer[];listed:Buffer[]}[]{
     const hub=this.#registry.pin.hub,followed=new Set(this.lists().filter(l=>!l.dead).map(l=>b64u(l.id))),out=[];
     const blob=(w:Write)=>w.op===1&&w.field.startsWith('_blob:');
     for(const c of this.#collections.values()){
@@ -635,7 +636,7 @@ export class DeviceState {
       }
       let orphans=collect;
       if(collect&&epoch&&p.genesis&&!eq(epoch,p.genesis)){const inv=p.inventory(epoch);if(!inv)orphans=false;else for(const ids of inv.values())for(const wid of ids)if(!held.has(b64u(wid)))orphans=false;}
-      out.push({collection:bytes(p.id),tags,...(current?{current}:{}),collect,orphans,kept,feed,listed});
+      out.push({collection:bytes(p.id),tags,...(current?{current}:{}),collect,orphans,ready:!followed.has(b64u(p.id))||p.inventoriesReady(),kept,feed,listed});
     }
     return out.sort((a,b)=>Buffer.compare(a.collection,b.collection));
   }

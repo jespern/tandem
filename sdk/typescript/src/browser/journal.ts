@@ -233,6 +233,11 @@ export class BrowserJournal {
       tx.objectStore('blobs').put({hub, key: 'cursor', value: cursor}, [hub, 'cursor']); await done;
     } catch (error) { try { tx.abort(); } catch {} await done.catch(() => {}); throw error; }
   }
+  /** Forgets the whole chunk index of a hub, for a blob folder that is not the one it was built from. */
+  async forgetChunkIndex(hub: string): Promise<void> {
+    const tx = this.#db.transaction('chunks', 'readwrite', {durability: 'strict'}), done = finished(tx);
+    tx.objectStore('chunks').delete(IDBKeyRange.bound([hub, ''], [hub, '\uffff'])); await done;
+  }
   async chunks(hub: string, address?: string): Promise<ChunkRow[]> {
     const store = this.#db.transaction('chunks').objectStore('chunks');
     const rows = await request(address === undefined ? store.getAll(IDBKeyRange.bound([hub, ''], [hub, '\uffff'])) : store.index('address').getAll([hub, address])) as (ChunkRow & {hub: string})[];
