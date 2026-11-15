@@ -436,6 +436,130 @@ func TestBlobLengthMismatchIsUnreadable(t *testing.T) {
 	}
 }
 
+func TestBlobMalformedManifestCannotPoisonSameHash(t *testing.T) {
+	w := newBlobWorld(t)
+	good, bad, data := NewRecordID(), NewRecordID(), content(5500)
+	must(t, w.bob.AttachBytes(bg, w.list, good, "photo", data))
+	settle(t, w.bob)
+	m := manifestOf(t, w.bob, w.list, good, "photo")
+	m.Chunks[0], m.Chunks[1] = m.Chunks[1], m.Chunks[0]
+	must(t, w.bob.Write(bg, w.list, bad, Set(BlobPrefix+"photo", try(tandem.EncodeManifest(m)))))
+	syncAll(t, w.alice)
+	if _, err := w.alice.FetchBlob(bg, w.list, bad, "photo"); !errors.Is(err, ErrBlobUnreadable) {
+		t.Fatalf("malformed order: %v", err)
+	}
+	if got := fetched(t, w.alice, w.list, good, "photo"); !bytes.Equal(got, data) {
+		t.Fatal("a malformed sibling poisoned valid content with the same hash")
+	}
+}
+
+func TestBlobInlineHashCannotPoisonContentCache(t *testing.T) {
+	w := newBlobWorld(t)
+	good, bad, data := NewRecordID(), NewRecordID(), content(2500)
+	must(t, w.bob.AttachBytes(bg, w.list, good, "photo", data))
+	settle(t, w.bob)
+	m := manifestOf(t, w.bob, w.list, good, "photo")
+	poison := []byte("wrong bytes under an existing file's hash")
+	inline := &tandem.Manifest{Size: int64(len(poison)), Hash: m.Hash, Data: poison}
+	must(t, w.bob.Write(bg, w.list, bad, Set(BlobPrefix+"photo", try(tandem.EncodeManifest(inline)))))
+	syncAll(t, w.alice)
+	if _, err := w.alice.FetchBlob(bg, w.list, bad, "photo"); !errors.Is(err, ErrBlobUnreadable) {
+		t.Fatalf("false inline hash accepted: %v", err)
+	}
+	if got := fetched(t, w.alice, w.list, good, "photo"); !bytes.Equal(got, data) {
+		t.Fatal("inline data poisoned the shared content cache")
+	}
+}
+
+func TestBlobRemovalDropsBlockedUpload(t *testing.T) {
+	w := newBlobWorld(t)
+	w.blobs.SetFailAppends(true)
+	photo := NewRecordID()
+	must(t, w.alice.AttachBytes(bg, w.list, photo, "photo", content(2500)))
+	settle(t, w.alice)
+	must(t, w.bob.RemoveMember(bg, me(t, w.alice).Participant, w.list))
+	syncAll(t, w.alice)
+	settle(t, w.alice)
+	if len(try(w.alice.store.Uploads())) != 0 {
+		t.Fatal("an observed removal left its blocked upload resumable")
+	}
+}
+
+func TestBlobDowngradeDropsBlockedUpload(t *testing.T) {
+	w := newBlobWorld(t)
+	w.blobs.SetFailAppends(true)
+	photo := NewRecordID()
+	must(t, w.alice.AttachBytes(bg, w.list, photo, "photo", content(2500)))
+	settle(t, w.alice)
+	participant := me(t, w.alice).Participant
+	must(t, w.bob.SetRole(bg, Reader, participant, w.list))
+	syncAll(t, w.alice)
+	settle(t, w.alice)
+	if len(try(w.alice.store.Uploads())) != 0 {
+		t.Fatal("a writer-to-reader downgrade left its blocked upload resumable")
+	}
+	must(t, w.bob.SetRole(bg, Writer, participant, w.list))
+	w.blobs.SetFailAppends(false)
+	clean(t, w.alice, w.bob)
+	if _, ok := w.bob.Blob(w.list, photo, "photo"); ok {
+		t.Fatal("promotion revived the discarded upload")
+	}
+}
+
+func TestBlobFetchLargerThanCacheReturnsExistingFile(t *testing.T) {
+	w := newBlobWorld(t)
+	photo, data := NewRecordID(), content(2500)
+	must(t, w.bob.AttachBytes(bg, w.list, photo, "photo", data))
+	settle(t, w.bob)
+	syncAll(t, w.alice)
+	w.alice.SetBlobSettings(BlobSettings{StoreLimit: 1})
+	if got := fetched(t, w.alice, w.list, photo, "photo"); !bytes.Equal(got, data) {
+		t.Fatal("explicit fetch evicted its own return value")
+	}
+}
+
+// Done is evaluated when the second fetch waits on the first download. This
+// handshake makes the shared-download failure path deterministic, without sleeps.
+type waitingBlobContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (c *waitingBlobContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Done()
+}
+
+func TestBlobConcurrentLayoutsDoNotShareFailure(t *testing.T) {
+	w := newBlobWorld(t)
+	good, bad, data := NewRecordID(), NewRecordID(), content(5500)
+	must(t, w.bob.AttachBytes(bg, w.list, good, "photo", data))
+	settle(t, w.bob)
+	m := manifestOf(t, w.bob, w.list, good, "photo")
+	m.Chunks[0], m.Chunks[1] = m.Chunks[1], m.Chunks[0]
+	must(t, w.bob.Write(bg, w.list, bad, Set(BlobPrefix+"photo", try(tandem.EncodeManifest(m)))))
+	syncAll(t, w.alice)
+	gated := &gatedBlobs{MemoryBlobHub: w.blobs, entered: make(chan struct{}, 1), gate: make(chan struct{})}
+	w.alice.blobs.hub = gated
+	badResult, goodResult := make(chan error, 1), make(chan error, 1)
+	go func() { _, err := w.alice.FetchBlob(bg, w.list, bad, "photo"); badResult <- err }()
+	<-gated.entered
+	ctx := &waitingBlobContext{Context: bg, entered: make(chan struct{})}
+	go func() { _, err := w.alice.FetchBlob(ctx, w.list, good, "photo"); goodResult <- err }()
+	<-ctx.entered
+	close(gated.gate)
+	if err := <-badResult; !errors.Is(err, ErrBlobUnreadable) {
+		t.Fatalf("malformed download: %v", err)
+	}
+	if err := <-goodResult; err != nil {
+		t.Fatalf("valid waiter inherited a different manifest's failure: %v", err)
+	}
+	if !bytes.Equal(fetched(t, w.alice, w.list, good, "photo"), data) {
+		t.Fatal("concurrent valid download differs")
+	}
+}
+
 // The second review: a manifest of an unknown version stops every kind of clean-up in its list.
 func TestBlobUnknownVersionStopsCleanup(t *testing.T) {
 	w := newBlobWorld(t)

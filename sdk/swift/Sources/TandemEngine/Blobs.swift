@@ -37,7 +37,8 @@ public struct BlobSettings: Sendable, Equatable {
     public var inline: Int
     /// How long this device must have known an orphan chunk before it collects it.
     public var orphanGrace: Duration
-    /// Content kept on this device; what was opened longest ago goes first.
+    /// Content-cache budget; oldest content goes first. The file just fetched
+    /// is retained even if it alone exceeds the budget.
     public var storeLimit: Int
     /// The largest file fetched without being asked, in lists set to keep files.
     public var unasked: Int
@@ -80,11 +81,12 @@ final class BlobRuntime {
 
     final class Download {
         let chunks: Int
+        let layout: Bytes
         var done = 0
         var waiters: [CheckedContinuation<Void, Never>] = []
         var error: (any Error)?
         var finished = false
-        init(chunks: Int) { self.chunks = chunks }
+        init(chunks: Int, layout: Bytes) { self.chunks = chunks; self.layout = layout }
     }
 
     var staged: URL { directory.appendingPathComponent("staged") }
@@ -153,10 +155,26 @@ extension Device {
     }
 
     /// Asks the worker for a clean-up and healing pass; after every sync.
-    func afterSync() {
+    func afterSync() throws {
+        try discardInvalidUploads()
         guard let b = blobs else { return }
         b.hygiene = true
         wakeBlobs()
+    }
+
+    /// Cancel when revocation is learned, before waiting for chunks or an
+    /// unavailable key. Later re-admission cannot revive the pending write.
+    func discardInvalidUploads() throws {
+        for u in try store.uploads() {
+            guard let me, let c = collections[u.scope], !c.dead, c.records[u.record]?.deleted != true else {
+                try dropUpload(u); continue
+            }
+            if case .invalid = registry.activity(me.certificate) { try dropUpload(u); continue }
+            guard let head = c.head, let st = c.statements[head]?.statement else { continue }
+            if st.deleted || !st.members.contains(where: { $0.uid == me.participant && $0.role != .reader }) {
+                try dropUpload(u)
+            }
+        }
     }
 
     /// Notes a transfer starting on the hub's connections; `doneUsing` ends it, and the last to end lets them go.
@@ -189,6 +207,7 @@ extension Device {
 
     /// One round of work; whether there was any that calls for another.
     func blobRound(_ b: BlobRuntime) async throws -> Bool {
+        try discardInvalidUploads()
         let ups = try store.uploads()
         if !ups.isEmpty {
             try await uploadAll(b, ups)
@@ -511,6 +530,7 @@ extension Device {
         guard case let .manifest(m) = Blob.parse(top.write.value) else { return BlobInfo(name: name, state: .unreadable, size: 0, hash: nil, path: nil, chunks: 0, done: 0) }
         var info = BlobInfo(name: name, state: .remote, size: m.size, hash: m.hash, path: nil, chunks: m.chunks?.count ?? 0, done: 0)
         if (try? store.value("blobs.unreadable." + top.id.hex)) != nil { info.state = .unreadable; return info }
+        if let data = m.data, H(data) != m.hash { info.state = .unreadable; return info }
         guard let b = blobs else { if m.chunks == nil { info.state = .here }; return info }
         if m.chunks == nil { info.state = .here; info.path = b.content(m.hash); return info }
         if FileManager.default.fileExists(atPath: b.content(m.hash).path) { info.state = .here; info.path = b.content(m.hash); info.done = info.chunks }
@@ -533,31 +553,36 @@ extension Device {
     func fetchManifest(_ b: BlobRuntime, list cid: Bytes, record: Bytes, id: Bytes, _ m: Blob.Manifest) async throws -> URL {
         let path = b.content(m.hash)
         if let data = m.data {
+            guard H(data) == m.hash else { throw BlobError.unreadable }
             if !FileManager.default.fileExists(atPath: path.path) { try Data(data).write(to: path, options: .atomic) }
             return path
         }
-        if FileManager.default.fileExists(atPath: path.path) { try touch(m.hash); return path }
-        if let d = b.downloads[m.hash] {
-            if !d.finished { await withCheckedContinuation { d.waiters.append($0) } }
+        let layout = H(try Blob.encode(m))
+        while true {
+            if FileManager.default.fileExists(atPath: path.path) { try touch(m.hash); return path }
+            if let d = b.downloads[m.hash] {
+                if !d.finished { await withCheckedContinuation { d.waiters.append($0) } }
+                if d.layout != layout { continue } // a different manifest's failure is not ours
+                if let e = d.error { throw e }
+                return path
+            }
+            let d = BlobRuntime.Download(chunks: m.chunks!.count, layout: layout)
+            b.downloads[m.hash] = d
+            b.unavailable.remove(id)
+            changed(.blobs(list: cid, records: [record])); flushEvents()
+            useBlobHub(b)
+            do { try await download(b, d, id: id, m, to: path) } catch { d.error = error }
+            await doneUsing(b)
+            b.downloads[m.hash] = nil
+            if d.error as? BlobError == .unavailable { b.unavailable.insert(id) }
+            d.finished = true
+            for w in d.waiters { w.resume() }
+            d.waiters.removeAll()
+            changed(.blobs(list: cid, records: [record])); flushEvents()
             if let e = d.error { throw e }
+            evict(b, keeping: m.hash.hex)
             return path
         }
-        let d = BlobRuntime.Download(chunks: m.chunks!.count)
-        b.downloads[m.hash] = d
-        b.unavailable.remove(id)
-        changed(.blobs(list: cid, records: [record])); flushEvents()
-        useBlobHub(b)
-        do { try await download(b, d, id: id, m, to: path) } catch { d.error = error }
-        await doneUsing(b)
-        b.downloads[m.hash] = nil
-        if d.error as? BlobError == .unavailable { b.unavailable.insert(id) }
-        d.finished = true
-        for w in d.waiters { w.resume() }
-        d.waiters.removeAll()
-        changed(.blobs(list: cid, records: [record])); flushEvents()
-        if let e = d.error { throw e }
-        evict(b)
-        return path
     }
 
     /// Fetches every chunk not yet in the partial file, checks each against its address, its key and its length before
@@ -565,8 +590,18 @@ extension Device {
     func download(_ b: BlobRuntime, _ d: BlobRuntime.Download, id: Bytes, _ m: Blob.Manifest, to path: URL) async throws {
         let entries = m.chunks!
         let partial = b.partial.appendingPathComponent(m.hash.hex)
-        if !FileManager.default.fileExists(atPath: partial.path) { FileManager.default.createFile(atPath: partial.path, contents: nil) }
         let doneKey = "blobs.partial." + m.hash.hex
+        let layoutKey = "blobs.layout." + m.hash.hex
+        // The hash names plaintext; it does not bind this manifest's offsets,
+        // keys or chunk order. A missing partial also invalidates its bitmap.
+        if try store.value(layoutKey) != d.layout || !FileManager.default.fileExists(atPath: partial.path) {
+            if FileManager.default.fileExists(atPath: partial.path) { try FileManager.default.removeItem(at: partial) }
+            try store.transaction {
+                try store.removeValue(doneKey)
+                try store.setValue(layoutKey, d.layout)
+            }
+        }
+        if !FileManager.default.fileExists(atPath: partial.path) { FileManager.default.createFile(atPath: partial.path, contents: nil) }
         var have = try store.value(doneKey) ?? []
         if have.count < (entries.count + 7) / 8 { have += Bytes(repeating: 0, count: (entries.count + 7) / 8 - have.count) }
         var todo: [(entry: Blob.ChunkEntry, offset: Int, index: Int)] = [], offset = 0
@@ -616,6 +651,7 @@ extension Device {
         try? FileManager.default.removeItem(at: path)
         try FileManager.default.moveItem(at: partial, to: path)
         try store.removeValue(doneKey)
+        try store.removeValue(layoutKey)
         try touch(m.hash)
     }
 
@@ -643,7 +679,7 @@ extension Device {
     }
 
     /// Removes content opened longest ago while the store is over its limit; it becomes remote again.
-    func evict(_ b: BlobRuntime) {
+    func evict(_ b: BlobRuntime, keeping: String) {
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: b.directory.path) else { return }
         var files: [(name: String, size: Int, opened: UInt64)] = [], total = 0
         for name in names where name.count == 64 {
@@ -652,6 +688,7 @@ extension Device {
             files.append((name, size, opened)); total += size
         }
         for f in files.sorted(by: { $0.opened < $1.opened }) where total > b.settings.storeLimit {
+            if f.name == keeping { continue } // an explicit fetch must return a readable file
             if (try? FileManager.default.removeItem(at: b.directory.appendingPathComponent(f.name))) != nil {
                 total -= f.size
                 try? store.removeValue("blobs.opened." + f.name)

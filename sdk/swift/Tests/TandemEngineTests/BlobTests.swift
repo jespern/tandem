@@ -94,6 +94,82 @@ final class BlobTests: XCTestCase {
         XCTAssertEqual(after, before)
     }
 
+    func testMalformedManifestCannotPoisonSameHash() async throws {
+        let w = try await world()
+        let good = w.bob.newRecordID(), bad = w.bob.newRecordID(), data = content(5500)
+        try await w.bob.attach(list: w.list, record: good, name: "photo", content: data)
+        await w.bob.settleBlobs()
+        var m = try await manifest(w.bob, w.list, good, "photo")
+        m.chunks!.swapAt(0, 1)
+        try await w.bob.setField(list: w.list, record: bad, field: "_blob:photo", value: Blob.encode(m))
+        try await w.alice.sync()
+        do {
+            _ = try await fetched(w.alice, w.list, bad, "photo")
+            XCTFail("malformed order was accepted")
+        } catch BlobError.unreadable {}
+        let got = try await fetched(w.alice, w.list, good, "photo")
+        XCTAssertEqual(got, data, "a malformed manifest cannot poison valid content with the same hash")
+    }
+
+    func testInlineHashCannotPoisonContentCache() async throws {
+        let w = try await world()
+        let good = w.bob.newRecordID(), bad = w.bob.newRecordID(), data = content(2500)
+        try await w.bob.attach(list: w.list, record: good, name: "photo", content: data)
+        await w.bob.settleBlobs()
+        let m = try await manifest(w.bob, w.list, good, "photo")
+        let poison = Bytes("wrong bytes under an existing file's hash".utf8)
+        let inline = Blob.Manifest(size: poison.count, hash: m.hash, data: poison)
+        try await w.bob.setField(list: w.list, record: bad, field: "_blob:photo", value: Blob.encode(inline))
+        try await w.alice.sync()
+        do {
+            _ = try await fetched(w.alice, w.list, bad, "photo")
+            XCTFail("false inline hash was accepted")
+        } catch BlobError.unreadable {}
+        let got = try await fetched(w.alice, w.list, good, "photo")
+        XCTAssertEqual(got, data)
+    }
+
+    func testRemovalDropsBlockedUpload() async throws {
+        let w = try await world()
+        await w.blobs.set(failAppends: true)
+        let photo = w.alice.newRecordID()
+        try await w.alice.attach(list: w.list, record: photo, name: "photo", content: content(2500))
+        await w.alice.settleBlobs()
+        let participant = try some(await w.alice.me?.participant)
+        try await w.bob.remove(participant, from: w.list)
+        try await w.alice.sync(); await w.alice.settleBlobs()
+        let pending = try await w.alice.store.uploads()
+        XCTAssertTrue(pending.isEmpty, "an observed removal left its blocked upload resumable")
+    }
+
+    func testDowngradeDropsBlockedUpload() async throws {
+        let w = try await world()
+        await w.blobs.set(failAppends: true)
+        let photo = w.alice.newRecordID()
+        try await w.alice.attach(list: w.list, record: photo, name: "photo", content: content(2500))
+        await w.alice.settleBlobs()
+        let participant = try some(await w.alice.me?.participant)
+        try await w.bob.setRole(.reader, for: participant, in: w.list)
+        try await w.alice.sync(); await w.alice.settleBlobs()
+        let pending = try await w.alice.store.uploads()
+        XCTAssertTrue(pending.isEmpty)
+        try await w.bob.setRole(.writer, for: participant, in: w.list)
+        await w.blobs.set(failAppends: false)
+        try await clean(w.alice, w.bob)
+        let revived = await w.bob.blob(list: w.list, record: photo, name: "photo")
+        XCTAssertNil(revived, "promotion revived the discarded upload")
+    }
+
+    func testFetchLargerThanCacheReturnsExistingFile() async throws {
+        let w = try await world()
+        let photo = w.bob.newRecordID(), data = content(2500)
+        try await w.bob.attach(list: w.list, record: photo, name: "photo", content: data)
+        await w.bob.settleBlobs(); try await w.alice.sync()
+        await w.alice.setBlobSettings(BlobSettings(storeLimit: 1))
+        let got = try await fetched(w.alice, w.list, photo, "photo")
+        XCTAssertEqual(got, data)
+    }
+
     /// Review 1: a pending replacement leaves the published version whole.
     func testPendingReplacementKeepsThePublishedVersion() async throws {
         let w = try await world()
@@ -145,7 +221,7 @@ final class BlobTests: XCTestCase {
         await bob.settleBlobs()
         let m2 = try await manifest(bob, list, photo, "photo")
         XCTAssertNotEqual(m1.hash, m2.hash, "the replacement committed")
-        await bob.afterSync()
+        try await bob.afterSync()
         await bob.settleBlobs()
         let kept = await onHub(blobs, m1)
         XCTAssertEqual(kept, m1.chunks!.count, "collected before the replacement was on the feed")
@@ -565,7 +641,7 @@ final class BlobReleaseTests: XCTestCase {
         let fetch = Task { try await w.alice.fetchBlob(list: w.list, record: photo, name: "photo") }
         await gated.entered()
         gated.armed.withLock { $0 = true }
-        await w.alice.afterSync()
+        try await w.alice.afterSync()
         await w.alice.settleBlobs()
         gated.open()
         let url = try await fetch.value

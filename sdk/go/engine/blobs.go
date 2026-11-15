@@ -65,7 +65,8 @@ type BlobSettings struct {
 	Inline int
 	// OrphanGrace is how long this device must have known an orphan chunk before it collects it, default 7 days.
 	OrphanGrace time.Duration
-	// StoreLimit bounds the content kept on this device, default 2 GiB; what was opened longest ago goes first.
+	// StoreLimit is the content-cache budget, default 2 GiB; oldest content goes first.
+	// The file just fetched is retained even when it alone exceeds the budget.
 	StoreLimit int64
 	// Unasked is the largest file fetched without being asked, in lists set to keep files; default 25 MiB.
 	Unasked int64
@@ -119,6 +120,7 @@ type download struct {
 	done        chan struct{}
 	chunks, got int
 	err         error
+	layout      []byte // normalized manifest: offsets and keys are not identified by the content hash
 }
 
 // UseBlobs turns blobs on: hub is the blob folder of this device's hub. Pending uploads resume.
@@ -186,12 +188,44 @@ func (b *blobs) current() BlobSettings {
 
 // afterSync asks the worker for a clean-up and healing pass.
 func (d *Device) afterSync() {
-	if b := d.blobState(); b != nil {
+	defer d.begin()()
+	if err := d.discardInvalidUploads(); err != nil {
+		d.changed(Event{Kind: EventSyncFailed, Message: err.Error()})
+	}
+	if b := d.blobs; b != nil {
 		b.mu.Lock()
 		b.hygiene = true
 		b.mu.Unlock()
 		b.wake()
 	}
+}
+
+// Discard while the learned revocation is current, not after a transfer or a
+// missing epoch key becomes available. Later re-admission cannot revive it.
+// The caller holds the device state lock.
+func (d *Device) discardInvalidUploads() error {
+	ups, err := d.store.Uploads()
+	if err != nil {
+		return err
+	}
+	for _, u := range ups {
+		c := d.collections[string(u.Scope)]
+		invalid := c == nil || d.me == nil
+		if !invalid {
+			invalid = c.dead() || d.registry.Activity(d.me.Certificate).IsInvalid()
+			if r := c.records[string(u.Record)]; r != nil && r.Deleted() {
+				invalid = true
+			}
+			if st, ok := c.headStatement(); ok {
+				member := st.member(d.me.Participant)
+				invalid = invalid || st.Deleted || member == nil || member.Role == Reader
+			}
+		}
+		if invalid {
+			d.dropUpload(u)
+		}
+	}
+	return nil
 }
 
 // BlobsIdle returns a channel that is closed when the blob worker next has nothing to do: for
@@ -270,6 +304,10 @@ func (d *Device) blobWorker(b *blobs) {
 // blobRound is one round of work; it reports whether there was any.
 func (d *Device) blobRound(ctx context.Context, b *blobs) (bool, error) {
 	d.mu.Lock()
+	if err := d.discardInvalidUploads(); err != nil {
+		d.mu.Unlock()
+		return false, err
+	}
 	ups, err := d.store.Uploads()
 	d.mu.Unlock()
 	if err != nil {
@@ -880,6 +918,10 @@ func (d *Device) blobOf(name string, r *tandem.Record, field string, value []byt
 	}
 	b := d.blobs
 	if m.Inline() {
+		if !bytes.Equal(tandem.H(m.Data), m.Hash) {
+			out.State = BlobUnreadable
+			return out
+		}
 		out.State = BlobHere
 		if b != nil {
 			out.Path = filepath.Join(b.dir, hex.EncodeToString(m.Hash))
@@ -936,6 +978,9 @@ func (d *Device) FetchBlob(ctx context.Context, list, record []byte, name string
 func (d *Device) fetchManifest(ctx context.Context, b *blobs, list, record, id []byte, m *tandem.Manifest) (string, error) {
 	path := filepath.Join(b.dir, hex.EncodeToString(m.Hash))
 	if m.Inline() {
+		if !bytes.Equal(tandem.H(m.Data), m.Hash) {
+			return "", ErrBlobUnreadable
+		}
 		if _, err := os.Stat(path); err != nil {
 			if err := writeAtomically(path, m.Data); err != nil {
 				return "", err
@@ -943,44 +988,54 @@ func (d *Device) fetchManifest(ctx context.Context, b *blobs, list, record, id [
 		}
 		return path, nil
 	}
-	if _, err := os.Stat(path); err == nil {
-		d.touch(m.Hash)
-		return path, nil
-	}
-	b.mu.Lock()
-	if dl := b.downloads[string(m.Hash)]; dl != nil {
-		b.mu.Unlock()
-		select {
-		case <-dl.done:
-		case <-ctx.Done():
-			return "", ctx.Err()
-		}
-		if dl.err != nil {
-			return "", dl.err
-		}
-		return path, nil
-	}
-	dl := &download{done: make(chan struct{}), chunks: len(m.Chunks)}
-	b.downloads[string(m.Hash)] = dl
-	delete(b.unavailable, string(id))
-	b.mu.Unlock()
-	defer b.use()()
-	d.blobEvent(list, record)
-	err := d.download(ctx, b, dl, id, m, path)
-	b.mu.Lock()
-	delete(b.downloads, string(m.Hash))
-	if errors.Is(err, ErrBlobUnavailable) {
-		b.unavailable[string(id)] = true
-	}
-	b.mu.Unlock()
-	dl.err = err
-	close(dl.done)
-	d.blobEvent(list, record)
+	encoded, err := tandem.EncodeManifest(m)
 	if err != nil {
 		return "", err
 	}
-	d.evict(b)
-	return path, nil
+	layout := tandem.H(encoded)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			d.touch(m.Hash)
+			return path, nil
+		}
+		b.mu.Lock()
+		if dl := b.downloads[string(m.Hash)]; dl != nil {
+			b.mu.Unlock()
+			select {
+			case <-dl.done:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			if !bytes.Equal(dl.layout, layout) {
+				continue // another layout's failure says nothing about this manifest
+			}
+			if dl.err != nil {
+				return "", dl.err
+			}
+			return path, nil
+		}
+		dl := &download{done: make(chan struct{}), chunks: len(m.Chunks), layout: layout}
+		b.downloads[string(m.Hash)] = dl
+		delete(b.unavailable, string(id))
+		b.mu.Unlock()
+		defer b.use()()
+		d.blobEvent(list, record)
+		err := d.download(ctx, b, dl, id, m, path)
+		b.mu.Lock()
+		delete(b.downloads, string(m.Hash))
+		if errors.Is(err, ErrBlobUnavailable) {
+			b.unavailable[string(id)] = true
+		}
+		b.mu.Unlock()
+		dl.err = err
+		close(dl.done)
+		d.blobEvent(list, record)
+		if err != nil {
+			return "", err
+		}
+		d.evict(b, hex.EncodeToString(m.Hash))
+		return path, nil
+	}
 }
 
 func (d *Device) blobEvent(list, record []byte) {
@@ -994,12 +1049,34 @@ func (d *Device) blobEvent(list, record []byte) {
 // key and its length before writing it at its offset, and checks the whole content's hash.
 func (d *Device) download(ctx context.Context, b *blobs, dl *download, id []byte, m *tandem.Manifest, path string) error {
 	partial := filepath.Join(b.dir, "partial", hex.EncodeToString(m.Hash))
+	doneKey := "blobs.partial." + hex.EncodeToString(m.Hash)
+	layoutKey := "blobs.layout." + hex.EncodeToString(m.Hash)
+	d.mu.RLock()
+	previous, _ := d.store.Value(layoutKey)
+	d.mu.RUnlock()
+	// A content hash does not bind a manifest's chunk order, offsets or keys.
+	// Never reuse its bitmap under another layout, or without its actual file.
+	if !bytes.Equal(previous, dl.layout) || !fileExists(partial) {
+		if err := os.Remove(partial); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		d.mu.Lock()
+		err := d.store.Transaction(func() error {
+			if err := d.store.RemoveValue(doneKey); err != nil {
+				return err
+			}
+			return d.store.SetValue(layoutKey, dl.layout)
+		})
+		d.mu.Unlock()
+		if err != nil {
+			return err
+		}
+	}
 	f, err := os.OpenFile(partial, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	doneKey := "blobs.partial." + hex.EncodeToString(m.Hash)
 	d.mu.RLock()
 	have, _ := d.store.Value(doneKey)
 	d.mu.RUnlock()
@@ -1144,6 +1221,7 @@ func (d *Device) download(ctx context.Context, b *blobs, dl *download, id []byte
 	}
 	d.mu.Lock()
 	_ = d.store.RemoveValue(doneKey)
+	_ = d.store.RemoveValue(layoutKey)
 	d.mu.Unlock()
 	d.touch(m.Hash)
 	return nil
@@ -1169,7 +1247,7 @@ func (d *Device) touchLocked(hash []byte) {
 }
 
 // evict removes content opened longest ago while the store is over its limit; it becomes remote again.
-func (d *Device) evict(b *blobs) {
+func (d *Device) evict(b *blobs, keep string) {
 	limit := b.current().StoreLimit
 	entries, err := os.ReadDir(b.dir)
 	if err != nil {
@@ -1203,6 +1281,9 @@ func (d *Device) evict(b *blobs) {
 	for _, f := range files {
 		if total <= limit {
 			break
+		}
+		if f.name == keep {
+			continue // FetchBlob must return a readable file, including oversized ones.
 		}
 		if os.Remove(filepath.Join(b.dir, f.name)) == nil {
 			total -= f.size

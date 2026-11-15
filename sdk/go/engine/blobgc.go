@@ -587,7 +587,7 @@ func (d *Device) dropUnnamed(b *blobs, n named) {
 			}
 		}
 	}
-	for _, prefix := range []string{"blobs.opened.", "blobs.partial."} {
+	for _, prefix := range []string{"blobs.opened.", "blobs.partial.", "blobs.layout."} {
 		vs, _ := d.store.Values(prefix)
 		for _, v := range vs {
 			if h := strings.TrimPrefix(v.Name, prefix); !n.hashes[h] {

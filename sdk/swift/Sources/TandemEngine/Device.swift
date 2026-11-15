@@ -230,7 +230,7 @@ public actor Device {
         syncing = task
         defer { if syncing == task { syncing = nil }; flushEvents() }
         let applied = try await task.value
-        afterSync()
+        try afterSync()
         return applied
     }
 

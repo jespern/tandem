@@ -222,7 +222,7 @@ extension Device {
                 }
             }
         }
-        for prefix in ["blobs.opened.", "blobs.partial."] {
+        for prefix in ["blobs.opened.", "blobs.partial.", "blobs.layout."] {
             for (name, _) in (try? store.values(prefix: prefix)) ?? [] where !hashes.contains(String(name.dropFirst(prefix.count))) {
                 try? store.removeValue(name)
             }
