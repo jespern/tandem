@@ -821,7 +821,7 @@ func (d *Device) applyCollection(m tandem.Message, cid, epoch, key []byte) (outc
 		}
 		return ignored, nil
 	}
-	state, frag, err := tandem.ParseKind1(pt, d.pin.Hub, cid)
+	states, frag, err := tandem.ParseKind1States(pt, d.pin.Hub, cid)
 	if err != nil {
 		return ignored, nil
 	}
@@ -841,6 +841,29 @@ func (d *Device) applyCollection(m tandem.Message, cid, epoch, key []byte) (outc
 		}
 		return applied, d.moveCollection(cid)
 	}
+	// A pack holds data records only (§10.5); each entry is merged as a record state.
+	if len(states) > 1 {
+		for _, st := range states {
+			if bytes.Equal(st.Record, rosterRecord) {
+				return ignored, nil
+			}
+		}
+	}
+	result := ignored
+	for _, st := range states {
+		o, err := d.applyState(m, cid, epoch, st)
+		if err != nil || o == waiting {
+			return o, err
+		}
+		if o == applied {
+			result = applied
+		}
+	}
+	return result, nil
+}
+
+// applyState merges one record state of a kind-1 message, and notes which writes the message holds.
+func (d *Device) applyState(m tandem.Message, cid, epoch []byte, state *tandem.RecordState) (outcome, error) {
 	anyApplied, moved := false, false
 	var appliedIDs [][]byte
 	for _, w := range state.Writes {

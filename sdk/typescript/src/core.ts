@@ -44,25 +44,46 @@ function clone(w: Write): Write {
 }
 const dotJSON = (d: Dot) => [b64u(d.device), d.millis, d.counter];
 export function recordPayload(record: Uint8Array, writes: readonly Write[]): Buffer {
+  return Buffer.from(JSON.stringify(stateJSON(record, writes)));
+}
+/** A pack (§10.5): several records' states in one message, in ascending order of record ID, each with writes. */
+export function packPayload(states: readonly {record: Uint8Array; writes: readonly Write[]}[]): Buffer {
+  if (states.length < 2) throw new Error('a pack holds at least two records');
+  states.forEach((s, i) => { if (!s.writes.length || (i > 0 && cmp(Buffer.from(states[i - 1]!.record), Buffer.from(s.record)) >= 0)) throw new Error('pack entries out of order, repeated or without writes'); });
+  return Buffer.from(JSON.stringify({recs: states.map(s => stateJSON(s.record, s.writes))}));
+}
+function stateJSON(record: Uint8Array, writes: readonly Write[]) {
   bytes(record, 16);
-  return Buffer.from(JSON.stringify({rec: b64u(record), writes: writes.map(w => {
+  return {rec: b64u(record), writes: writes.map(w => {
     sigInput(w); if (!eq(w.record, record) || w.signature.length !== 64) throw new Error('record or signature mismatch');
     return {f: w.field, op: w.op, ...(w.op === 1 ? {v: b64u(w.value)} : {}), ...(w.element !== null ? {e: b64u(w.element)} : {}),
       a: b64u(w.author), cert: b64u(w.certificate), auth: b64u(w.authorization), d: dotJSON(w.dot),
       ...(!eq(w.ref, Buffer.alloc(32)) ? {r: b64u(w.ref)} : {}), c: w.context.map(dotJSON), b: w.base.map(dotJSON), s: b64u(w.signature)};
-  })}));
+  })};
 }
-export function parseKind1(data: Uint8Array, hub: Uint8Array, scope: Uint8Array): {record: Buffer; writes: Write[]} | {epoch: Buffer; part: number; parts: number; bytes: Buffer} {
+export type RecordPayload = {record: Buffer; writes: Write[]};
+export type FragmentPayload = {epoch: Buffer; part: number; parts: number; bytes: Buffer};
+/** One record's state or an inventory fragment; a pack is refused (`parseKind1States` reads it). */
+export function parseKind1(data: Uint8Array, hub: Uint8Array, scope: Uint8Array): RecordPayload | FragmentPayload {
+  const out = parseKind1States(data, hub, scope);
+  if (!Array.isArray(out)) return out;
+  if (out.length !== 1) throw new Error('a pack holds several records');
+  return out[0]!;
+}
+/** A kind-1 payload in any of its forms (§10.5): one record's state, a pack of several, or an inventory fragment. */
+export function parseKind1States(data: Uint8Array, hub: Uint8Array, scope: Uint8Array): RecordPayload[] | FragmentPayload {
   bytes(hub, 32); bytes(scope, 16);
   const obj = (v: unknown): Record<string, any> => { if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('expected object'); return v as Record<string, any>; };
-  const j = obj(parseJSON(data)); if (Object.hasOwn(j, 'rec') === Object.hasOwn(j, 'inventory')) throw new Error('exactly one of rec and inventory');
+  const j = obj(parseJSON(data));
+  if (['rec', 'recs', 'inventory'].filter(k => Object.hasOwn(j, k)).length !== 1) throw new Error('exactly one of rec, recs and inventory');
   const raw = (v: unknown, n?: number): Buffer => { if (typeof v !== 'string') throw new Error('expected base64url string'); return bytes(unb64u(v), n); };
   if (Object.hasOwn(j, 'inventory')) { const f = obj(j.inventory); integer(f.part, 2**53); integer(f.parts, 2**53 + 2);
     if (!(f.part < f.parts)) throw new Error('bad fragment index'); return {epoch: raw(f.epoch, 32), part: f.part, parts: f.parts, bytes: raw(f.bytes)}; }
-  const rec = raw(j.rec, 16); if (!Array.isArray(j.writes)) throw new Error('writes missing');
   const dot = (d: unknown): Dot => { if (!Array.isArray(d) || d.length !== 3) throw new Error('bad dot'); const out = {device: raw(d[0], 8), millis: d[1], counter: d[2]}; checkDot(out); return out; };
   const vector = (v: unknown): Dot[] => { if (!Array.isArray(v)) throw new Error('vector missing'); return v.map(dot); };
-  return {record: rec, writes: j.writes.map((row: unknown) => {
+  const state = (o: Record<string, any>): RecordPayload => {
+  const rec = raw(o.rec, 16); if (!Array.isArray(o.writes)) throw new Error('writes missing');
+  return {record: rec, writes: o.writes.map((row: unknown) => {
     const r = obj(row);
     if (typeof r.f !== 'string' || Object.hasOwn(r, 'v') !== (r.op === 1) || Object.hasOwn(r, 'e') !== (r.op === 2 || r.op === 3)) throw new Error('invalid write payload');
     const w: Write = {hub: bytes(hub), scope: bytes(scope), record: rec, field: r.f, op: r.op, author: raw(r.a, 32), certificate: raw(r.cert, 32), authorization: raw(r.auth, 32),
@@ -70,6 +91,12 @@ export function parseKind1(data: Uint8Array, hub: Uint8Array, scope: Uint8Array)
       ref: Object.hasOwn(r, 'r') ? raw(r.r, 32) : Buffer.alloc(32), context: vector(r.c), base: vector(r.b), signature: raw(r.s, 64)};
     sigInput(w); return w;
   })};
+  };
+  if (!Object.hasOwn(j, 'recs')) return [state(j)];
+  if (!Array.isArray(j.recs) || j.recs.length < 2) throw new Error('a pack holds at least two records');
+  const out = j.recs.map((o: unknown) => state(obj(o)));
+  out.forEach((s: RecordPayload, i: number) => { if (!s.writes.length || (i > 0 && cmp(out[i - 1]!.record, s.record) >= 0)) throw new Error('pack entries out of order, repeated or without writes'); });
+  return out;
 }
 export function inventoryBytes(entries: ReadonlyMap<string, readonly Uint8Array[]>): Buffer {
   const out: Uint8Array[] = [u32(entries.size)];

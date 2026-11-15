@@ -146,7 +146,7 @@ def _dot_json(d):
     return [b64u(d.device), d.millis, d.counter]
 
 
-def record_payload(record: bytes, writes: list[Write]) -> bytes:
+def _rows(record: bytes, writes: list[Write]) -> list:
     _bytes(record, 16)
     rows = []
     for w in writes:
@@ -162,14 +162,31 @@ def record_payload(record: bytes, writes: list[Write]) -> bytes:
         if w.element is not None:
             row["e"] = b64u(w.element)
         rows.append(row)
-    return json.dumps(dict(rec=b64u(record), writes=rows), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return rows
+
+
+def record_payload(record: bytes, writes: list[Write]) -> bytes:
+    return json.dumps(dict(rec=b64u(record), writes=_rows(record, writes)), ensure_ascii=False,
+                      separators=(",", ":")).encode("utf-8")
+
+
+def pack_payload(states: list[tuple[bytes, list[Write]]]) -> bytes:
+    """A pack (§10.5): several records' states, in ascending order of record ID, each with writes."""
+    if len(states) < 2:
+        raise ValueError("a pack holds at least two records")
+    entries = []
+    for i, (record, writes) in enumerate(states):
+        if not writes or (i and states[i - 1][0] >= record):
+            raise ValueError("pack entries out of order, repeated or without writes")
+        entries.append(dict(rec=b64u(record), writes=_rows(record, writes)))
+    return json.dumps(dict(recs=entries), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
 def parse_kind1(data: bytes, hub: bytes, scope: bytes):
     _bytes(hub, 32); _bytes(scope, 16)
     j = parse_json(data)
-    if not isinstance(j, dict) or ("rec" in j) == ("inventory" in j):
-        raise ValueError("exactly one of rec and inventory")
+    if not isinstance(j, dict) or sum(k in j for k in ("rec", "recs", "inventory")) != 1:
+        raise ValueError("exactly one of rec, recs and inventory")
     def raw(text, n=None):
         return _bytes(unb64u(text), n)
     if "inventory" in j:
@@ -178,15 +195,11 @@ def parse_kind1(data: bytes, hub: bytes, scope: bytes):
         if type(part) is not int or type(parts) is not int or not 0 <= part < parts:
             raise ValueError("invalid inventory fragment index")
         return dict(epoch=raw(f["epoch"], 32), part=part, parts=parts, bytes=raw(f["bytes"]))
-    rec = raw(j["rec"], 16)
-    if not isinstance(j["writes"], list):
-        raise ValueError("writes must be an array")
     def dot(d):
         if not isinstance(d, list) or len(d) != 3:
             raise ValueError("invalid dot")
         return Dot(raw(d[0], 8), d[1], d[2])
-    out = []
-    for row in j["writes"]:
+    def write(rec, row):
         if type(row["op"]) is not int:
             raise ValueError("op must be an integer")
         op = Op(row["op"])
@@ -195,8 +208,24 @@ def parse_kind1(data: bytes, hub: bytes, scope: bytes):
         w = Write(hub, scope, rec, row["f"], op, raw(row["a"], 32), raw(row["cert"], 32), raw(row["auth"], 32), dot(row["d"]),
                   raw(row["v"]) if "v" in row else b"", raw(row["e"]) if "e" in row else None,
                   raw(row["r"], 32) if "r" in row else bytes(32), tuple(map(dot, row["c"])), tuple(map(dot, row["b"])), raw(row["s"], 64))
-        w.sig_input(); out.append(w)
-    return rec, tuple(out)
+        w.sig_input()
+        return w
+    def state(o):
+        if not isinstance(o, dict):
+            raise ValueError("a record state is an object")
+        rec = raw(o["rec"], 16)
+        if not isinstance(o["writes"], list):
+            raise ValueError("writes must be an array")
+        return rec, tuple(write(rec, row) for row in o["writes"])
+    if "recs" in j:
+        if not isinstance(j["recs"], list) or len(j["recs"]) < 2:
+            raise ValueError("a pack holds at least two records")
+        out = [state(o) for o in j["recs"]]
+        for i, (rec, ws) in enumerate(out):
+            if not ws or (i and out[i - 1][0] >= rec):
+                raise ValueError("pack entries out of order, repeated or without writes")
+        return out
+    return state(j)
 
 
 def inventory_bytes(entries: dict[bytes, tuple[bytes, ...]]) -> bytes:

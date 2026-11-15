@@ -311,11 +311,16 @@ func (d *Device) tidy(ctx context.Context, tag string, scope []byte, records map
 		if len(cs) == 0 || bytes.Equal(cs[0].Record, rosterRecord) {
 			continue // roster and fragments stay
 		}
+		// A pack (§10.5) holds several records: it is in the group of each, judged by all its writes.
 		h := hubMessage{id: m.ID, hash: m.Hash, writes: map[string]bool{}}
+		in := map[string]bool{}
 		for _, ct := range cs {
 			h.writes[string(ct.Write)] = true
+			in[string(ct.Record)] = true
 		}
-		byRecord[string(cs[0].Record)] = append(byRecord[string(cs[0].Record)], h)
+		for rid := range in {
+			byRecord[rid] = append(byRecord[rid], h)
+		}
 	}
 	// A record with no message left at all is healed too.
 	for rid, r := range records {
@@ -323,11 +328,10 @@ func (d *Device) tidy(ctx context.Context, tag string, scope []byte, records map
 			byRecord[rid] = []hubMessage{}
 		}
 	}
-	var doomed []string
+	// Every write the messages name, as this device placed it when it merged it, in any record:
+	// a pack is compared with messages of each of its records.
+	entries := map[string]tandem.Entry{}
 	for _, rid := range sortedKeys(byRecord) {
-		messages := byRecord[rid]
-		// Every write the messages name, as this device placed it when it merged it.
-		entries := map[string]tandem.Entry{}
 		rows, err := d.store.Writes(scope, []byte(rid))
 		if err != nil {
 			return err
@@ -341,6 +345,10 @@ func (d *Device) tidy(ctx context.Context, tag string, scope []byte, records map
 				entries[string(e.ID)] = *e
 			}
 		}
+	}
+	gone := map[string]bool{}
+	for _, rid := range sortedKeys(byRecord) {
+		messages := byRecord[rid]
 		// covers: write x (by ID) is in n, or one of n's writes supersedes it.
 		covers := func(n map[string]bool, x string) bool {
 			if n[x] {
@@ -365,7 +373,6 @@ func (d *Device) tidy(ctx context.Context, tag string, scope []byte, records map
 			}
 			return true
 		}
-		gone := map[string]bool{}
 		if len(messages) > 1 {
 			for _, m := range messages {
 				for _, n := range messages {
@@ -381,8 +388,6 @@ func (d *Device) tidy(ctx context.Context, tag string, scope []byte, records map
 				}
 			}
 		}
-		goneIDs := sortedKeys(gone)
-		doomed = append(doomed, goneIDs...)
 		// Healing (§12.2): the messages left, taken together, must cover this device's state of the record.
 		state := records[rid]
 		if state == nil {
@@ -427,6 +432,7 @@ func (d *Device) tidy(ctx context.Context, tag string, scope []byte, records map
 			}
 		}
 	}
+	doomed := sortedKeys(gone)
 	if len(doomed) == 0 {
 		return nil
 	}

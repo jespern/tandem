@@ -170,3 +170,16 @@ test('a browser stages an exact native pairing package and can cancel it in its 
   f.apply(f.state.prepareCancelPairing(prepared.link.token,f.reserve));assert.equal(f.state.homeRecord(name).elements('outcome').length,1);
   assert.throws(()=>f.state.preparePairing('Expired',prepared.link.mail,0),/lifetime/);
 });
+test('a pack of tombstones deletes its records on a device that never saw them one by one (§10.5)',()=>{
+  const f=fixture(),a=t.randomBytes(16),b=t.randomBytes(16);
+  for(const r of [a,b])f.apply(f.state.prepareField(f.cid,r,[{field:'title',op:1,value:Buffer.from('x')}],f.reserve));
+  const before=f.messages.length;
+  for(const r of [a,b])f.apply(f.state.prepareField(f.cid,r,[{field:'',op:4}],f.reserve));
+  const deletes=f.messages.slice(before).filter(m=>m.channel===f.tag);
+  const states=deletes.map(m=>t.parseKind1(t.openEnvelope(f.collectionKey,f.pin.hub,f.tag,m.body).plaintext,f.pin.hub,f.cid)).sort((x,y)=>Buffer.compare(x.record,y.record));
+  const body=t.seal(f.collectionKey,f.pin.hub,f.tag,t.packPayload(states),1),pack={id:t.b64u(t.sha(body)),channel:f.tag,body};
+  const fresh=()=>{const s=new t.DeviceState(new t.Registry(f.pin),f.directory,f.participant,f.keys);s.offerHomeKey(f.homeID,f.homeKey);return s;};
+  const rest=f.messages.filter(m=>!deletes.includes(m));
+  const without=fresh();without.ingest(rest);assert.equal(without.records(f.cid).length,2);
+  const withPack=fresh();withPack.ingest([...rest,pack]);assert.deepEqual(withPack.records(f.cid),[]);
+});

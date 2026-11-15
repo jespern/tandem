@@ -73,9 +73,21 @@ def generate():
         record = t.Record(m["hub"], m["scope"], m["record"])
         record.merge(*(t.Entry(writes[i], m["epoch"], 0) for i in indexes))
         expected.append(dict(indexes=indexes, kept=[e.id.hex() for e in record.kept], deleted=record.deleted))
+    # Packs (§10.5): two records' tombstones in one message, and payloads every reader rejects.
+    other = replace(delete, record=material("record2", 16)).sign(signing)
+    states = sorted([(m["record"], [writes[5]]), (other.record, [other])])
+    entry = lambda rec, ws: dict(rec=t.b64u(rec), writes=json.loads(t.record_payload(rec, ws))["writes"])
+    e1, e2 = (entry(r, ws) for r, ws in states)
+    encode = lambda o: json.dumps(o, ensure_ascii=False, separators=(",", ":")).encode()
+    single = json.loads(t.record_payload(states[0][0], states[0][1]))
+    packs = dict(valid=[dict(payload=t.pack_payload(states).hex(),
+                             records=[dict(record=r.hex(), writes=[w.id.hex() for w in ws]) for r, ws in states])],
+                 invalid=[encode(o).hex() for o in (dict(recs=[e1]), dict(recs=[e2, e1]), dict(recs=[e1, e1]),
+                                                     dict(recs=[e1, dict(e2, writes=[])]), dict(single, recs=[e1, e2]),
+                                                     dict(recs={}), dict(recs=[]))])
     return dict(description="Public Tandem v2 core vectors; control formats awaiting Q28 are absent.",
                 material=plain(m), derived=plain(d), writes=rows, plaintext=plaintext.hex(), symmetric=symmetric.hex(),
-                inbox=inbox.hex(), inventory=t.inventory_bytes(inv).hex(), merges=expected)
+                inbox=inbox.hex(), inventory=t.inventory_bytes(inv).hex(), merges=expected, packs=packs)
 
 
 if __name__ == "__main__":

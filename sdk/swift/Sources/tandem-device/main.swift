@@ -176,6 +176,9 @@ actor Driver {
         case "setRetention":
             try await dev().setRetention(.milliseconds(c["ms"] as? Int ?? 0))
             return [:]
+        case "setPackThreshold":
+            try await dev().setPackThreshold(c["n"] as? Int ?? 0)
+            return [:]
         case "removedLists":
             return ["lists": try await dev().removedLists().map(B64u.encode)]
         case "goneLists":

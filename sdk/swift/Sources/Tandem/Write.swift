@@ -120,6 +120,7 @@ public struct Write: Sendable {
 public struct RecordState: Sendable {
     public var record: Bytes
     public var writes: [Write]
+    public init(record: Bytes, writes: [Write]) { self.record = record; self.writes = writes }
 }
 
 public struct InventoryFragment: Sendable {
@@ -131,6 +132,19 @@ public struct InventoryFragment: Sendable {
 
 /// Serialize with Foundation; strict parsing and signing remain byte-based.
 public func recordPayload(record: Bytes, writes: [Write]) throws -> Bytes {
+    Bytes(try JSONSerialization.data(withJSONObject: try stateJSON(record: record, writes: writes)))
+}
+
+/// A pack (§10.5): several records' states in one message, in ascending order of record ID, each with writes.
+public func packPayload(_ states: [RecordState]) throws -> Bytes {
+    guard states.count >= 2 else { throw TandemError.invalid("a pack holds at least two records") }
+    for (i, s) in states.enumerated() where s.writes.isEmpty || (i > 0 && !states[i - 1].record.lexicographicallyPrecedes(s.record)) {
+        throw TandemError.invalid("pack entries out of order, repeated or without writes")
+    }
+    return Bytes(try JSONSerialization.data(withJSONObject: ["recs": try states.map { try stateJSON(record: $0.record, writes: $0.writes) }]))
+}
+
+private func stateJSON(record: Bytes, writes: [Write]) throws -> [String: Any] {
     guard record.count == 16 else { throw TandemError.invalid("record ID must be 16 bytes") }
     func dot(_ d: Dot) -> [Any] { [B64u.encode(d.device), d.millis, d.counter] }
     let rows: [[String: Any]] = try writes.map { w in
@@ -144,17 +158,36 @@ public func recordPayload(record: Bytes, writes: [Write]) throws -> Bytes {
         if w.ref != Bytes(repeating: 0, count: 32) { row["r"] = B64u.encode(w.ref) }
         return row
     }
-    return Bytes(try JSONSerialization.data(withJSONObject: ["rec": B64u.encode(record), "writes": rows]))
+    return ["rec": B64u.encode(record), "writes": rows]
 }
 
 public enum Kind1: Sendable {
     case record(RecordState)
     case inventory(InventoryFragment)
+    /// Several records' states in one message, in ascending order of record ID (§10.5).
+    case pack([RecordState])
 
     public static func parse(_ plaintext: Bytes, hub: Bytes, scope: Bytes) throws -> Kind1 {
         guard hub.count == 32, scope.count == 16 else { throw TandemError.invalid("invalid payload context") }
         let j = try JSON.parse(plaintext)
         guard case .object = j else { throw TandemError.invalid("payload is not an object") }
+        guard [j["rec"], j["recs"], j["inventory"]].compactMap({ $0 }).count == 1 else {
+            throw TandemError.invalid("exactly one of rec, recs and inventory")
+        }
+        func state(_ o: JSON) throws -> RecordState {
+            guard case .object = o else { throw TandemError.invalid("a record state is an object") }
+            let rec = try o.bytes("rec", count: 16)
+            guard case let .array(items)? = o["writes"] else { throw TandemError.invalid("writes missing") }
+            return RecordState(record: rec, writes: try items.map { try parseWrite($0, hub: hub, scope: scope, record: rec) })
+        }
+        if let recs = j["recs"] {
+            guard case let .array(items) = recs, items.count >= 2 else { throw TandemError.invalid("a pack holds at least two records") }
+            let states = try items.map(state)
+            for (i, s) in states.enumerated() where s.writes.isEmpty || (i > 0 && !states[i - 1].record.lexicographicallyPrecedes(s.record)) {
+                throw TandemError.invalid("pack entries out of order, repeated or without writes")
+            }
+            return .pack(states)
+        }
         switch (j["rec"], j["inventory"]) {
         case (nil, let inv?):
             let epoch = try inv.bytes("epoch", count: 32)
@@ -162,9 +195,7 @@ public enum Kind1: Sendable {
             guard parts >= 1, part >= 0, part < parts else { throw TandemError.invalid("bad fragment index") }
             return .inventory(InventoryFragment(epoch: epoch, part: Int(part), parts: Int(parts), bytes: try inv.bytes("bytes")))
         case (_?, nil):
-            let rec = try j.bytes("rec", count: 16)
-            guard case let .array(items)? = j["writes"] else { throw TandemError.invalid("writes missing") }
-            return .record(RecordState(record: rec, writes: try items.map { try parseWrite($0, hub: hub, scope: scope, record: rec) }))
+            return .record(try state(j))
         default:
             throw TandemError.invalid("exactly one of rec and inventory")
         }

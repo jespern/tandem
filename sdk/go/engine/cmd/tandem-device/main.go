@@ -400,6 +400,10 @@ func (d *driver) handle(ctx context.Context, a args) (map[string]any, error) {
 		ms, _ := a["ms"].(float64)
 		dev.SetRetention(time.Duration(ms) * time.Millisecond)
 		return nil, nil
+	case "setPackThreshold":
+		n, _ := a["n"].(float64)
+		dev.SetPackThreshold(int(n))
+		return nil, nil
 	case "removedLists":
 		return map[string]any{"lists": b64us(dev.RemovedLists())}, nil
 	case "goneLists":

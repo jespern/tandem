@@ -2,7 +2,7 @@ import {Buffer} from 'buffer';
 import {type PrivateKey,bytes,b64u,unb64u,sha,publicKey,randomBytes,commit,sealInbox,openEnvelope,openInbox,seal,directoryTag,directoryKey,homeTag,homeScope,inboxTag,collectionTag,namedID} from './crypto.js';
 import {type ControlObject,controlFromJSON,controlToJSON,parseControl,objectID,signControl,sealHomeRecovery,verifyControl,pairingInviteKey,pairingKey,pairingTag,sealPackage,sealGate} from './control.js';
 import {parseJSON,validUnicode} from './json.js';
-import {type Dot,type Write,type Op,Entry,RecordState,parseKind1,recordPayload,signWrite,writeID,inventoryBytes,supersedes,join,MAX_VECTOR,verifyWrite} from './core.js';
+import {type Dot,type Write,type Op,Entry,RecordState,parseKind1,parseKind1States,recordPayload,signWrite,writeID,inventoryBytes,supersedes,join,MAX_VECTOR,verifyWrite} from './core.js';
 import {Registry,RegistryHoldingLimit,type Certificate,type Validity} from './registry.js';
 import {HomePolicy,HomeHoldingLimit} from './home-policy.js';
 import {CollectionPolicy,CollectionHoldingLimit,ROSTER_RECORD,META_RECORD,statementJSON} from './roster.js';
@@ -98,7 +98,7 @@ export class DeviceState {
         const tag=homeTag(key,hub,this.#participant,epoch),route=`home:${b64u(epoch)}:${b64u(sha(key))}`;
         changed=this.#read(tag,route,message=>{const opened=openEnvelope(key,hub,tag,message.body);
           if(opened.kind===3){const o=controlFromJSON(opened.plaintext,'home-epoch');const witness=b64u(sha(controlToJSON(o.kind,o.fields,o.signatures,o.extras)));if(!this.#controls.has(witness)){this.#home.accept(o);this.#controls.add(witness);}this.#homeStarts.set(JSON.stringify([tag,message.id]),o);}
-          else if(opened.kind===1){const payload={epoch,parsed:parseKind1(opened.plaintext,hub,homeScope(hub,this.#participant))};this.#homePayloads.push(payload);this.#packets.set(JSON.stringify([tag,message.id]),payload);}
+          else if(opened.kind===1)this.#take(parseKind1States(opened.plaintext,hub,homeScope(hub,this.#participant)),epoch,tag,message.id,this.#homePayloads);
         })||changed;
       }
       for(const payload of this.#homePayloads){if('writes'in payload.parsed)continue;const start=this.#home.object(payload.epoch);
@@ -109,7 +109,7 @@ export class DeviceState {
       for(const c of this.#collections.values()){
         for(const {epoch,key}of c.policy.readableKeys()){
           const tag=collectionTag(key,hub,epoch),route=`collection:${b64u(c.policy.id)}:${b64u(epoch)}:${b64u(sha(key))}`;
-          changed=this.#read(tag,route,message=>{const opened=openEnvelope(key,hub,tag,message.body);if(opened.kind===1){const payload={epoch,parsed:parseKind1(opened.plaintext,hub,c.policy.id)};c.payloads.push(payload);this.#packets.set(JSON.stringify([tag,message.id]),payload);}})||changed;
+          changed=this.#read(tag,route,message=>{const opened=openEnvelope(key,hub,tag,message.body);if(opened.kind===1)this.#take(parseKind1States(opened.plaintext,hub,c.policy.id),epoch,tag,message.id,c.payloads);})||changed;
         }
         for(const payload of c.payloads){if(!('writes'in payload.parsed)||!eq(payload.parsed.record,ROSTER_RECORD)||payload.handled)continue;
           const before=c.policy.revision;let pending=false;for(const w of payload.parsed.writes){if(c.policy.accept(w,payload.epoch).kind==='pending')pending=true;}
@@ -127,6 +127,13 @@ export class DeviceState {
       }
     }
     for(const c of this.#collections.values())if(c.policy.inventoriesReady())c.records=this.#records(c.payloads,c.policy.id,w=>c.policy.eligible(w),(w,e)=>c.policy.dataValidity(w,e),w=>c.policy.entry(w),`${b64u(c.policy.id)}:${this.#registry.revision}:${c.policy.revision}`);
+  }
+  /** One kind-1 message: its payload, or each record of a pack (§10.5). A pack is never named among the messages this
+   * device judges for clean-up: it holds several records, and this device judges a message by one record's writes. */
+  #take(parsed:ReturnType<typeof parseKind1States>,epoch:Uint8Array,tag:string,id:string,into:Payload[]):void{
+    if(!Array.isArray(parsed)){const payload={epoch,parsed};into.push(payload);this.#packets.set(JSON.stringify([tag,id]),payload);return;}
+    for(const state of parsed)into.push({epoch,parsed:state});
+    if(parsed.length===1)this.#packets.set(JSON.stringify([tag,id]),into[into.length-1]!);
   }
   #assemble(scope:string,payload:Payload,commitment:Uint8Array,accept:(data:Uint8Array)=>void):boolean{
     if(payload.handled||'writes'in payload.parsed)return false;const key=JSON.stringify([scope,b64u(payload.epoch)]);

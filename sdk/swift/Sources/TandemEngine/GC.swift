@@ -19,6 +19,17 @@ extension Device {
     /// keeps gone lists for good.
     public func setRetention(_ r: Duration) { retention = r == .zero ? Self.defaultRetention : r }
 
+    /// How many messages of one deleted record each the current channel holds before a device of the owner packs them
+    /// (§10.7).
+    public static let defaultPackThreshold = 50
+
+    /// Keeps a pack well within the message size limit (§10.6).
+    static let maxPackBytes = 512 * 1024
+
+    /// Changes how many single tombstone messages a list's channel holds before this device, if it is the owner's, packs
+    /// them. Zero takes the default.
+    public func setPackThreshold(_ n: Int) { packThreshold = n > 0 ? n : Self.defaultPackThreshold }
+
     /// The pass after hygiene.
     func collectGarbage() async throws {
         guard let me else { return }
@@ -26,6 +37,7 @@ extension Device {
             try dropPastWrites(cid, me: me)
             try await collectGone(cid, me: me)
             try await trimRosters(cid, me: me)
+            try await packTombstones(cid, me: me)
         }
     }
 
@@ -128,6 +140,44 @@ extension Device {
             if !exact { try await publish(cid: cid, epoch: epoch, record: Roster.record, writes: segment) }
             try await hub.destroy(ids: extra)
             try store.forgetMessages(extra)
+        }
+    }
+
+    /// Packs the states of deleted records that each have a message of their own in the current channel, once there are
+    /// more than the threshold of them (§10.7). The single messages are then dominated, and the next clean-up collects
+    /// them. Done by the owner's devices.
+    func packTombstones(_ cid: Bytes, me: Me) async throws {
+        guard let c = collections[cid], let head = c.head, c.statements[head]?.statement.deleted == false, !c.dead,
+              c.owner == me.participant, registry.activity(me.certificate).isValid,
+              let (epoch, _) = dropEpoch(cid), let key = c.keys[epoch] else { return }
+        let tag = Tandem.collectionTag(key: key, hub: pin.hub, epoch: epoch)
+        var single = Set<Bytes>(), packed = Set<Bytes>()
+        for (id, _) in try store.merged(channel: tag) {
+            let records = Set(try store.contents(message: id).map(\.record))
+            for rid in records {
+                if records.count > 1 { packed.insert(rid) }
+                else if rid != Roster.record, c.records[rid]?.deleted == true { single.insert(rid) }
+            }
+        }
+        var todo = single.subtracting(packed).sorted { $0.lexicographicallyPrecedes($1) }
+            .map { RecordState(record: $0, writes: c.records[$0]!.kept.map(\.write)) }
+        guard todo.count > packThreshold else { return }
+        while todo.count >= 2 {
+            var n = todo.count
+            while n > 2, (try? packPayload(Array(todo[..<n])))?.count ?? Int.max > Self.maxPackBytes { n /= 2 }
+            try await publishPack(key: key, tag: tag, Array(todo[..<n]))
+            todo.removeFirst(n)
+        }
+    }
+
+    /// Appends a pack and notes it as this device's own, applied message holding each record's writes.
+    func publishPack(key: Bytes, tag: String, _ states: [RecordState]) async throws {
+        let envelope = try Envelope.seal(key: key, hub: pin.hub, kind: 1, tag: tag, plaintext: try packPayload(states))
+        let id = try await hub.append(channel: tag, body: envelope)
+        try store.transaction {
+            try store.noteMessage(id: id, channel: tag, hash: H(envelope))
+            try store.markApplied(id)
+            for s in states { try store.noteContents(message: id, record: s.record, writes: try s.writes.map { try $0.id() }) }
         }
     }
 

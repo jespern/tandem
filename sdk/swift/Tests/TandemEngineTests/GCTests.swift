@@ -289,6 +289,55 @@ final class GCTests: XCTestCase {
         XCTAssertEqual(bobSees, ["Milk", "Bread", "Back"])
     }
 
+    /// In a list's current channel: the messages that hold one of the given records alone, and the packs.
+    func tombstoneMessages(_ hub: MemoryHub, _ d: Device, _ list: Bytes, _ records: Set<Bytes>) async throws -> (single: Int, packs: Int) {
+        let c = await d.collections[list]!
+        let epoch = c.epoch(of: c.head!)!, key = c.keys[epoch]!
+        let tag = Tandem.collectionTag(key: key, hub: d.pin.hub, epoch: epoch)
+        var single = 0, packs = 0
+        for m in await hub.messages where m.channel == tag {
+            let (_, p) = try Envelope.open(key: key, hub: d.pin.hub, tag: tag, envelope: m.body)
+            switch try? Kind1.parse(p, hub: d.pin.hub, scope: list) {
+            case .pack?: packs += 1
+            case let .record(s)? where records.contains(s.record): single += 1
+            default: break
+            }
+        }
+        return (single, packs)
+    }
+
+    /// GC.md §3 and §10.7: past the threshold the owner's device packs the tombstones; the single messages are collected;
+    /// every device, a new one too, still reads the records as deleted, and a key change carries them.
+    func testTombstonesArePacked() async throws {
+        let w = try await world()
+        await w.bob.setPackThreshold(3)
+        var gone = Set<Bytes>()
+        for i in 0..<6 {
+            let r = w.alice.newRecordID()
+            try await w.alice.setField(list: w.house, record: r, field: "title", value: [UInt8(ascii: "a") + UInt8(i)])
+            if i < 5 { try await w.alice.deleteRecord(list: w.house, record: r); gone.insert(r) }
+        }
+        for _ in 0..<3 { try await sync(w.alice, w.bob, w.carol) }
+        let (single, packs) = try await tombstoneMessages(w.hub, w.bob, w.house, gone)
+        XCTAssertEqual(single, 0, "single tombstone messages left")
+        XCTAssertGreaterThan(packs, 0)
+        let want: Set<String> = ["Milk", "Bread", "f"]
+        for d in [w.alice, w.bob, w.carol] {
+            let got = await titles(d, w.house)
+            XCTAssertEqual(got, want)
+        }
+        let laptop = try Device.open(genesis: w.f.genesis, directoryKey: w.f.directoryKey, keys: w.aliceKeys, store: try Store(path: ":memory:"), hub: await w.hub.connect())
+        try await sync(laptop, laptop)
+        let fresh = await titles(laptop, w.house)
+        XCTAssertEqual(fresh, want, "a new device reads the packed tombstones")
+        try await w.bob.rekey(list: w.house)
+        try await sync(w.alice, w.carol, laptop, w.bob)
+        for d in [w.alice, w.bob, w.carol, laptop] {
+            let got = await titles(d, w.house)
+            XCTAssertEqual(got, want, "after a key change")
+        }
+    }
+
     // MARK: Files
 
     struct BlobWorld { let hub: MemoryHub; let blobs: MemoryBlobHub; let bob: Device; let alice: Device; let list: Bytes }

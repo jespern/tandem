@@ -104,3 +104,14 @@ test('live session only reconciles at initial sync, push, local submit and recon
   } finally { await session.close(); }
   assert.equal(store.closed, true); assert.equal((await updates.next()).done, true);
 });
+
+test('packs: several records in one message; bad forms are refused (§10.5)', () => {
+  for (const p of v.packs.valid) {
+    const states = t.parseKind1States(hex(p.payload), m.hub, m.scope);
+    assert.deepEqual(states.map(s => [s.record.toString('hex'), s.writes.map(w => t.writeID(w).toString('hex'))]),
+      p.records.map(r => [r.record, r.writes]));
+    assert.deepEqual(t.packPayload(states), hex(p.payload));
+    assert.throws(() => t.parseKind1(hex(p.payload), m.hub, m.scope));
+  }
+  for (const bad of v.packs.invalid) assert.throws(() => t.parseKind1States(hex(bad), m.hub, m.scope));
+});

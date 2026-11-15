@@ -39,6 +39,25 @@ final class CoreTests: XCTestCase {
             return record.writes[0]
         }
     }
+    /// Packs (§10.5): several records' states in one message; the vectors' bad forms are refused.
+    func testPacks() throws {
+        let v = try fixture("core.json"), m = v["material"] as! [String: String], packs = v["packs"] as! [String: Any]
+        let hub = Bytes(hex: m["hub"]!)!, scope = Bytes(hex: m["scope"]!)!
+        for p in packs["valid"] as! [[String: Any]] {
+            let payload = Bytes(hex: p["payload"] as! String)!
+            guard case let .pack(states) = try Kind1.parse(payload, hub: hub, scope: scope) else { return XCTFail("not a pack") }
+            let records = p["records"] as! [[String: Any]]
+            XCTAssertEqual(states.map(\.record.hex), records.map { $0["record"] as! String })
+            XCTAssertEqual(try states.map { try $0.writes.map { try $0.id().hex } }, records.map { $0["writes"] as! [String] })
+            // Writers may order JSON keys differently; what a reader parses must agree.
+            guard case let .pack(back) = try Kind1.parse(try packPayload(states), hub: hub, scope: scope) else { return XCTFail("round trip") }
+            XCTAssertEqual(try back.map { try $0.writes.map { try $0.id() } }, try states.map { try $0.writes.map { try $0.id() } })
+        }
+        for bad in packs["invalid"] as! [String] {
+            XCTAssertThrowsError(try Kind1.parse(Bytes(hex: bad)!, hub: hub, scope: scope))
+        }
+    }
+
     func testWriteVectorsAndPublicConstruction() throws {
         let v = try fixture("core.json"), m = v["material"] as! [String: String], rows = v["writes"] as! [[String: Any]]
         for (i, w) in try writes(v).enumerated() {

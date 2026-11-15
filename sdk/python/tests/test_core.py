@@ -51,6 +51,19 @@ class CoreTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 t.parse_inventory(bad)
 
+    def test_packs(self):
+        """Packs (§10.5): several records' states in one message; the vectors' bad forms are refused."""
+        m, packs = self.m, self.v["packs"]
+        for p in packs["valid"]:
+            payload = bytes.fromhex(p["payload"])
+            states = t.parse_kind1(payload, m["hub"], m["scope"])
+            self.assertEqual([(r.hex(), [w.id.hex() for w in ws]) for r, ws in states],
+                             [(r["record"], r["writes"]) for r in p["records"]])
+            self.assertEqual(t.pack_payload([(r, list(ws)) for r, ws in states]), payload)
+        for bad in packs["invalid"]:
+            with self.assertRaises((ValueError, KeyError, TypeError)):
+                t.parse_kind1(bytes.fromhex(bad), m["hub"], m["scope"])
+
     def test_writes_and_bindings(self):
         m = self.m
         for row in self.v["writes"]:

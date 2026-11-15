@@ -285,7 +285,40 @@ def collecting(new, hub):
     check('the hub holds only the roster', late('writeCount', list=lst)['data'], 0)
 
 
-SCENARIOS = [sharing, pairing, key_change, copying, blobs, collecting]
+def packing(new, hub):
+    """The owner's device packs tombstones (§10.7); a member and a new device on the other engine read the deleted
+    records as deleted, from the packs, and a key change carries them."""
+    bob = new('a', 'Bob')
+    bob('found', label='Bob’s Mac')
+    alice = new('b', 'Alice')
+    alice('join', link=bob('invite', label='Alice')['link'], label='Alice')
+    bob('sync')
+    lst = bob('createList', name='House')['list']
+    bob('share', list=lst, participant=alice('me')['participant'], role='writer')
+    alice('sync')
+    alice('accept', list=lst)
+    bob('setPackThreshold', n=2)
+    for i, name in enumerate((b'one', b'two', b'three', b'four')):
+        record = b64u(os.urandom(16))
+        alice('set', list=lst, record=record, field='title', value=b64u(name))
+        if i < 3:
+            alice('delete', list=lst, record=record)
+    for d in (bob, alice, bob, alice, bob):
+        d('sync')
+    check('Alice reads', titles(alice, lst), ['four'])
+    laptop = new('b', 'Alice’s laptop')
+    laptop('pair', link=alice('startPairing', label='Laptop')['link'], label='Alice’s laptop')
+    bob('sync')
+    bob('approve', claim=bob('claims')['claims'][0]['id'])
+    laptop('sync')
+    check('a new device reads the packs', titles(laptop, lst), ['four'])
+    bob('rekey', list=lst)
+    for d in (alice, laptop, bob):
+        d('sync')
+    check('after a key change', (titles(alice, lst), titles(laptop, lst), titles(bob, lst)), (['four'], ['four'], ['four']))
+
+
+SCENARIOS = [sharing, pairing, key_change, copying, blobs, collecting, packing]
 
 
 def run(server, first, second):

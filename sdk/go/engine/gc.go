@@ -36,6 +36,23 @@ func (d *Device) SetRetention(r time.Duration) {
 	d.retention = r
 }
 
+// DefaultPackThreshold is how many messages of one deleted record each the current channel holds
+// before a device of the owner packs them (§10.7).
+const DefaultPackThreshold = 50
+
+// maxPackBytes keeps a pack well within the message size limit (§10.6).
+const maxPackBytes = 512 * 1024
+
+// SetPackThreshold changes how many single tombstone messages a list's channel holds before this
+// device, if it is the owner's, packs them. Zero takes the default.
+func (d *Device) SetPackThreshold(n int) {
+	defer d.begin()()
+	if n <= 0 {
+		n = DefaultPackThreshold
+	}
+	d.packThreshold = n
+}
+
 // collectGarbage is the pass after hygiene.
 func (d *Device) collectGarbage(ctx context.Context) error {
 	me := d.me
@@ -51,6 +68,9 @@ func (d *Device) collectGarbage(ctx context.Context) error {
 			return err
 		}
 		if err := d.trimRosters(ctx, c, me); err != nil {
+			return err
+		}
+		if err := d.packTombstones(ctx, c, me); err != nil {
 			return err
 		}
 	}
@@ -256,6 +276,106 @@ func (d *Device) trimRosters(ctx context.Context, c *collection, me *Me) error {
 		}
 	}
 	return nil
+}
+
+// packTombstones packs the states of deleted records that each have a message of their own in the
+// current channel, once there are more than the threshold of them (§10.7). The single messages
+// are then dominated, and the next clean-up collects them. Done by the owner's devices.
+func (d *Device) packTombstones(ctx context.Context, c *collection, me *Me) error {
+	s, ok := c.headStatement()
+	if !ok || s.Deleted || c.dead() || !bytes.Equal(c.owner(), me.Participant) || !d.registry.Activity(me.Certificate).IsValid() {
+		return nil
+	}
+	epoch, _, ok := d.dropEpoch(c)
+	key := c.keys[string(epoch)]
+	if !ok || key == nil {
+		return nil
+	}
+	tag := tandem.CollectionTag(key, d.pin.Hub, epoch)
+	ms, err := d.store.Merged(tag)
+	if err != nil {
+		return err
+	}
+	single, packed := map[string]bool{}, map[string]bool{}
+	for _, m := range ms {
+		cs, err := d.store.Contents(m.ID)
+		if err != nil {
+			return err
+		}
+		records := map[string]bool{}
+		for _, ct := range cs {
+			records[string(ct.Record)] = true
+		}
+		for rid := range records {
+			if len(records) > 1 {
+				packed[rid] = true
+			} else if r := c.records[rid]; rid != string(rosterRecord) && r != nil && r.Deleted() {
+				single[rid] = true
+			}
+		}
+	}
+	var todo []*tandem.RecordState
+	for _, rid := range sortedKeys(single) {
+		if !packed[rid] {
+			st := &tandem.RecordState{Record: []byte(rid)}
+			for _, e := range c.records[rid].Entries() {
+				st.Writes = append(st.Writes, e.W)
+			}
+			todo = append(todo, st)
+		}
+	}
+	if len(todo) <= d.packThreshold {
+		return nil
+	}
+	for len(todo) >= 2 {
+		n := len(todo)
+		for n > 2 {
+			if p, err := tandem.PackPayload(todo[:n]); err == nil && len(p) <= maxPackBytes {
+				break
+			}
+			n /= 2
+		}
+		if err := d.publishPack(ctx, key, tag, todo[:n]); err != nil {
+			return err
+		}
+		todo = todo[n:]
+	}
+	return nil
+}
+
+// publishPack appends a pack and notes it as this device's own, applied message holding each
+// record's writes.
+func (d *Device) publishPack(ctx context.Context, key []byte, tag string, states []*tandem.RecordState) error {
+	p, err := tandem.PackPayload(states)
+	if err != nil {
+		return err
+	}
+	env, err := tandem.Seal(key, d.pin.Hub, tandem.KindRecord, tag, p)
+	if err != nil {
+		return err
+	}
+	id, err := d.hubAppend(ctx, tag, env)
+	if err != nil {
+		return err
+	}
+	return d.store.Transaction(func() error {
+		if err := d.store.NoteMessage(id, tag, tandem.H(env)); err != nil {
+			return err
+		}
+		if err := d.store.MarkApplied(id); err != nil {
+			return err
+		}
+		for _, s := range states {
+			var ids [][]byte
+			for _, w := range s.Writes {
+				ids = append(ids, writeID(w))
+			}
+			if err := d.store.NoteContents(id, s.Record, ids); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // gone reports whether a list is deleted, or this participant was removed from it after

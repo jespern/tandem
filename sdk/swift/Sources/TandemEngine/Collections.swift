@@ -396,14 +396,34 @@ extension Device {
             }
         }
         guard kind == 1, let parsed = try? Kind1.parse(plaintext, hub: pin.hub, scope: cid) else { return .ignored }
-        guard case let .record(state) = parsed else {
-            guard case let .inventory(f) = parsed else { return .ignored }
+        let states: [RecordState]
+        switch parsed {
+        case let .inventory(f):
             guard let s = collections[cid]?.statements[epoch]?.statement, let commitment = s.snapshot else { return .waiting }
             try store.setValue("fragmsg." + m.id, Self.fragmentReceipt(epoch: epoch, part: f.part, parts: f.parts, slice: f.bytes))   // which part each message carries, for healing (§12.2)
             guard try receiveFragment(f, epoch: epoch, commitment: commitment) else { return .ignored }
             try moveCollection(cid)
             return .applied
+        case let .record(state):
+            states = [state]
+        case let .pack(pack):
+            // A pack holds data records only (§10.5); each entry is merged as a record state.
+            guard !pack.contains(where: { $0.record == Roster.record }) else { return .ignored }
+            states = pack
         }
+        var result = Outcome.ignored
+        for state in states {
+            switch try applyState(m, cid: cid, epoch: epoch, state) {
+            case .waiting: return .waiting
+            case .applied: result = .applied
+            case .ignored: break
+            }
+        }
+        return result
+    }
+
+    /// Merges one record state of a kind-1 message, and notes which writes the message holds.
+    func applyState(_ m: Message, cid: Bytes, epoch: ID, _ state: RecordState) throws -> Outcome {
         var any = false, moved = false
         var applied: [Bytes] = []
         for var w in state.writes {

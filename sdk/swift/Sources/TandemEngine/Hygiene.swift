@@ -123,27 +123,30 @@ extension Device {
         for (id, hash) in try store.merged(channel: tag) {
             let contents = try store.contents(message: id)
             guard let record = contents.first?.record, record != Roster.record else { continue }   // roster and fragments stay
-            byRecord[record, default: []].append((id, hash, Set(contents.map(\.write))))
+            // A pack (§10.5) holds several records: it is in the group of each, judged by all its writes.
+            for r in Set(contents.map(\.record)) { byRecord[r, default: []].append((id, hash, Set(contents.map(\.write)))) }
         }
-        var doomed: [String] = []
-        // A record with no message left at all is healed too.
-        for record in records.keys where record != Roster.record && byRecord[record] == nil && !(records[record].map(keptHere)?.isEmpty ?? true) {
-            byRecord[record] = []
-        }
-        for (record, messages) in byRecord.sorted(by: { $0.key.lexicographicallyPrecedes($1.key) }) {
-            // Every write the messages name, as this device placed it when it merged it.
-            var entries: [Bytes: Entry] = [:]
+        // Every write the messages name, as this device placed it when it merged it, in any record: a pack is compared
+        // with messages of each of its records.
+        var entries: [Bytes: Entry] = [:]
+        for record in byRecord.keys {
             for row in try store.writes(scope: scope, record: record) {
                 guard case let .record(state) = try Kind1.parse(row.payload, hub: pin.hub, scope: scope), let w = state.writes.first,
                       let e = entry(w) else { continue }
                 entries[e.id] = e
             }
+        }
+        var gone = Set<String>()
+        // A record with no message left at all is healed too.
+        for record in records.keys where record != Roster.record && byRecord[record] == nil && !(records[record].map(keptHere)?.isEmpty ?? true) {
+            byRecord[record] = []
+        }
+        for (record, messages) in byRecord.sorted(by: { $0.key.lexicographicallyPrecedes($1.key) }) {
             func dominated(_ m: Set<Bytes>, by n: Set<Bytes>) -> Bool {
                 m.allSatisfy { w in
                     n.contains(w) || (entries[w].map { x in n.contains { entries[$0].map { supersedes($0, x) } ?? false } } ?? false)
                 }
             }
-            var gone = Set<String>()
             for m in messages where messages.count > 1 {
                 for n in messages where n.id != m.id && !gone.contains(n.id) {
                     guard dominated(m.writes, by: n.writes) else { continue }
@@ -153,7 +156,6 @@ extension Device {
                     break
                 }
             }
-            doomed += gone.sorted()
             // Healing (§12.2): the messages left, taken together, must cover this device's state of the record.
             guard let record0 = records[record] else { continue }
             let kept = keptHere(record0)
@@ -167,8 +169,9 @@ extension Device {
             let single = messages.filter { !gone.contains($0.id) }.contains { m in
                 kept.allSatisfy { k in m.writes.contains(k.id) || m.writes.contains { entries[$0].map { supersedes($0, k) } ?? false } }
             }
-            if !covered || (!single && messages.count - gone.count > 1) { try await republish(record, kept.map(\.write)) }
+            if !covered || (!single && messages.filter({ !gone.contains($0.id) }).count > 1) { try await republish(record, kept.map(\.write)) }
         }
+        let doomed = gone.sorted()
         guard !doomed.isEmpty else { return }
         try await hub.destroy(ids: doomed)
         try store.forgetMessages(doomed)

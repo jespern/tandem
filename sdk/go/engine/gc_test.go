@@ -469,3 +469,70 @@ func TestGCOldChannelsKeepTheirOwnStatements(t *testing.T) {
 		t.Fatal("Bob sees", got)
 	}
 }
+
+// tombstoneMessages counts, in a list's current channel, the messages that hold one of the given
+// records alone, and the packs.
+func tombstoneMessages(t *testing.T, hub *MemoryHub, d *Device, list []byte, records map[string]bool) (single, packs int) {
+	t.Helper()
+	epoch, key := epochKey(d, list)
+	tag := tandem.CollectionTag(key, d.Pin().Hub, epoch)
+	for _, m := range hub.Messages() {
+		if m.Channel != tag {
+			continue
+		}
+		_, p := try2(tandem.Open(key, d.Pin().Hub, tag, m.Body))
+		states, _, err := tandem.ParseKind1States(p, d.Pin().Hub, list)
+		if err != nil {
+			continue
+		}
+		if len(states) > 1 {
+			packs++
+		} else if len(states) == 1 && records[string(states[0].Record)] {
+			single++
+		}
+	}
+	return
+}
+
+// GC.md §3 and §10.7: past the threshold the owner's device packs the tombstones; the single
+// messages are collected; every device, a new one too, still reads the records as deleted, and a
+// key change carries them.
+func TestGCTombstonesArePacked(t *testing.T) {
+	w := newRotWorld(t)
+	w.bob.SetPackThreshold(3)
+	gone := map[string]bool{}
+	for i := range 6 {
+		r := NewRecordID()
+		must(t, w.alice.SetField(bg, w.house, r, "title", []byte{'a' + byte(i)}))
+		if i < 5 {
+			must(t, w.alice.DeleteRecord(bg, w.house, r))
+			gone[string(r)] = true
+		}
+	}
+	for range 3 {
+		syncAll(t, w.alice, w.bob, w.carol)
+	}
+	single, packs := tombstoneMessages(t, w.hub, w.bob, w.house, gone)
+	if single != 0 || packs == 0 {
+		t.Fatalf("%d single tombstone messages, %d packs", single, packs)
+	}
+	want := set("Milk", "Bread", "f")
+	for _, d := range []*Device{w.alice, w.bob, w.carol} {
+		if got := titles(d, w.house); !sameSet(got, want) {
+			t.Fatal("state", got)
+		}
+	}
+	// Alice's laptop starts from the hub alone.
+	laptop := open(t, w.f, w.alice.keys, MemoryStore(), w.hub.Connect())
+	syncAll(t, laptop, laptop)
+	if got := titles(laptop, w.house); !sameSet(got, want) {
+		t.Fatal("a new device reads the packed tombstones", got)
+	}
+	must(t, w.bob.Rekey(bg, w.house))
+	syncAll(t, w.alice, w.carol, laptop, w.bob)
+	for _, d := range []*Device{w.alice, w.bob, w.carol, laptop} {
+		if got := titles(d, w.house); !sameSet(got, want) {
+			t.Fatal("after a key change", got)
+		}
+	}
+}

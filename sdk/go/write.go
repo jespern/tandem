@@ -239,6 +239,47 @@ func RecordPayload(record []byte, writes []*Write) ([]byte, error) {
 	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), nil
 }
 
+// PackPayload is the payload of a pack (§10.5): several records' states in one message, in
+// ascending order of record ID, each with at least one write.
+func PackPayload(states []*RecordState) ([]byte, error) {
+	if len(states) < 2 {
+		return nil, errors.New("tandem: a pack holds at least two records")
+	}
+	type entry struct {
+		Rec    string      `json:"rec"`
+		Writes []writeJSON `json:"writes"`
+	}
+	entries := make([]entry, len(states))
+	for i, s := range states {
+		if len(s.Record) != 16 || len(s.Writes) == 0 {
+			return nil, errors.New("tandem: a pack entry needs a record ID and writes")
+		}
+		if i > 0 && bytes.Compare(states[i-1].Record, s.Record) >= 0 {
+			return nil, errors.New("tandem: pack entries out of order or repeated")
+		}
+		ws := make([]writeJSON, len(s.Writes))
+		for k, w := range s.Writes {
+			if err := w.check(); err != nil {
+				return nil, err
+			}
+			if !bytes.Equal(s.Record, w.Record) || len(w.Sig) != 64 {
+				return nil, errors.New("tandem: record or signature mismatch")
+			}
+			ws[k] = w.toJSON()
+		}
+		entries[i] = entry{B64u(s.Record), ws}
+	}
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(struct {
+		Recs []entry `json:"recs"`
+	}{entries}); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), nil
+}
+
 func parseDot(j JSON) (Dot, error) {
 	var d Dot
 	if j.Kind != KindArray || len(j.Items) != 3 || j.Items[0].Kind != KindString ||
@@ -354,6 +395,19 @@ type InventoryFragment struct {
 // ParseKind1 reads a kind-1 plaintext: exactly one of a record state or an
 // inventory fragment. scope is the channel's collection ID or home scope.
 func ParseKind1(plaintext, hub, scope []byte) (*RecordState, *InventoryFragment, error) {
+	states, f, err := ParseKind1States(plaintext, hub, scope)
+	if err != nil || f != nil {
+		return nil, f, err
+	}
+	if len(states) != 1 {
+		return nil, nil, errors.New("tandem: a pack holds several records")
+	}
+	return states[0], nil, nil
+}
+
+// ParseKind1States reads a kind-1 payload in any of its forms (§10.5): one record's state, a pack
+// of several records' states, or an inventory fragment.
+func ParseKind1States(plaintext, hub, scope []byte) ([]*RecordState, *InventoryFragment, error) {
 	if len(hub) != 32 || len(scope) != 16 {
 		return nil, nil, errors.New("tandem: invalid payload context")
 	}
@@ -366,8 +420,39 @@ func ParseKind1(plaintext, hub, scope []byte) (*RecordState, *InventoryFragment,
 	}
 	_, hasRec := j.Get("rec")
 	inv, hasInv := j.Get("inventory")
-	if hasRec == hasInv {
-		return nil, nil, errors.New("tandem: exactly one of rec and inventory")
+	recs, hasRecs := j.Get("recs")
+	forms := 0
+	for _, has := range []bool{hasRec, hasInv, hasRecs} {
+		if has {
+			forms++
+		}
+	}
+	if forms != 1 {
+		return nil, nil, errors.New("tandem: exactly one of rec, recs and inventory")
+	}
+	if hasRecs {
+		// A pack: at least two records, in ascending order of record ID, each with writes.
+		if recs.Kind != KindArray || len(recs.Items) < 2 {
+			return nil, nil, errors.New("tandem: a pack holds at least two records")
+		}
+		var out []*RecordState
+		for i, item := range recs.Items {
+			if item.Kind != KindObject {
+				return nil, nil, errors.New("tandem: a pack entry is not an object")
+			}
+			rs, err := parseRecordState(item, hub, scope)
+			if err != nil {
+				return nil, nil, fmt.Errorf("pack entry %d: %w", i, err)
+			}
+			if len(rs.Writes) == 0 {
+				return nil, nil, errors.New("tandem: a pack entry without writes")
+			}
+			if i > 0 && bytes.Compare(out[i-1].Record, rs.Record) >= 0 {
+				return nil, nil, errors.New("tandem: pack entries out of order or repeated")
+			}
+			out = append(out, rs)
+		}
+		return out, nil, nil
 	}
 	if hasInv {
 		f := &InventoryFragment{}
@@ -385,20 +470,30 @@ func ParseKind1(plaintext, hub, scope []byte) (*RecordState, *InventoryFragment,
 		}
 		return nil, f, nil
 	}
-	rs := &RecordState{}
-	if rs.Record, err = j.bytes("rec", 16); err != nil {
+	rs, err := parseRecordState(j, hub, scope)
+	if err != nil {
 		return nil, nil, err
+	}
+	return []*RecordState{rs}, nil, nil
+}
+
+// parseRecordState reads {"rec", "writes"}.
+func parseRecordState(j JSON, hub, scope []byte) (*RecordState, error) {
+	rs := &RecordState{}
+	var err error
+	if rs.Record, err = j.bytes("rec", 16); err != nil {
+		return nil, err
 	}
 	ws, ok := j.Get("writes")
 	if !ok || ws.Kind != KindArray {
-		return nil, nil, errors.New("tandem: writes missing")
+		return nil, errors.New("tandem: writes missing")
 	}
 	for i, item := range ws.Items {
 		w, err := parseWrite(item, hub, scope, rs.Record)
 		if err != nil {
-			return nil, nil, fmt.Errorf("write %d: %w", i, err)
+			return nil, fmt.Errorf("write %d: %w", i, err)
 		}
 		rs.Writes = append(rs.Writes, w)
 	}
-	return rs, nil, nil
+	return rs, nil
 }

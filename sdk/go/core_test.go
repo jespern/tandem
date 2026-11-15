@@ -30,6 +30,16 @@ type coreVectors struct {
 		Kept    []string
 		Deleted bool
 	}
+	Packs struct {
+		Valid []struct {
+			Payload string
+			Records []struct {
+				Record string
+				Writes []string
+			}
+		}
+		Invalid []string
+	}
 }
 
 func unhex(s string) []byte {
@@ -413,5 +423,53 @@ func TestSessionPushSubmitReconnectAndClose(t *testing.T) {
 	defer store.mu.Unlock()
 	if !store.closed || store.calls != 4 {
 		t.Fatalf("closed=%v changes=%d", store.closed, store.calls)
+	}
+}
+
+// Packs (§10.5): several records' states in one message; the vectors' bad forms are refused.
+func TestPacks(t *testing.T) {
+	v := core(t)
+	hub, scope := unhex(v.Material["hub"]), unhex(v.Material["scope"])
+	for _, p := range v.Packs.Valid {
+		states, f, err := ParseKind1States(unhex(p.Payload), hub, scope)
+		if err != nil || f != nil || len(states) != len(p.Records) {
+			t.Fatal("pack", err, len(states))
+		}
+		for i, r := range p.Records {
+			if hex.EncodeToString(states[i].Record) != r.Record || len(states[i].Writes) != len(r.Writes) {
+				t.Fatal("pack entry", i)
+			}
+			for k, w := range states[i].Writes {
+				if id, err := w.ID(); err != nil || hex.EncodeToString(id) != r.Writes[k] {
+					t.Fatal("pack write", i, k)
+				}
+			}
+		}
+		// Writers may order JSON keys differently; what a reader parses must agree.
+		again, err := PackPayload(states)
+		if err != nil {
+			t.Fatal(err)
+		}
+		back, _, err := ParseKind1States(again, hub, scope)
+		if err != nil || len(back) != len(states) {
+			t.Fatal("PackPayload reads back", err)
+		}
+		for i := range back {
+			for k := range back[i].Writes {
+				a, _ := back[i].Writes[k].ID()
+				b, _ := states[i].Writes[k].ID()
+				if !bytes.Equal(a, b) {
+					t.Fatal("PackPayload reads back to other writes")
+				}
+			}
+		}
+		if _, _, err := ParseKind1(unhex(p.Payload), hub, scope); err == nil {
+			t.Fatal("ParseKind1 takes one record only")
+		}
+	}
+	for i, bad := range v.Packs.Invalid {
+		if _, _, err := ParseKind1States(unhex(bad), hub, scope); err == nil {
+			t.Fatal("accepted bad pack", i)
+		}
 	}
 }

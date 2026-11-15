@@ -54,6 +54,8 @@ public actor Device {
     var keyRequestTimer: Task<Void, Never>?
     /// How long a gone list stays before it is collected (GC.swift).
     var retention: Duration = Device.defaultRetention
+    /// Single tombstone messages a list's channel holds before the owner's device packs them (GC.swift).
+    var packThreshold = Device.defaultPackThreshold
     /// The store's `data_version` when this device last took in other processes' writes (`takeExternalChanges`).
     var seenDataVersion: Int64 = 0
     /// Lists with a key change running on this device.
