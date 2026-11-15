@@ -12,6 +12,7 @@ struct BlobScope {
     var current: String?                // the current channel; nil in a deleted or dead list
     var collect = false                 // nothing stops clean-up in this list
     var orphans = false                 // and orphans may go too
+    var purge = false                   // a deleted list this owner's device collected: every chunk goes (§11.9)
     var protected: Set<Bytes> = []      // addresses of protected manifests
     var listed: Set<Bytes> = []         // addresses a write this device holds has listed
     var live: [(id: Bytes, m: Blob.Manifest)] = []
@@ -31,6 +32,7 @@ extension Device {
                 s.current = Tandem.collectionTag(key: key, hub: pin.hub, epoch: epoch)
                 s.collect = true
             }
+            if let head, c.statements[head]?.statement.deleted == true, purged(cid), c.owner == me?.participant { s.purge = true }
             if !s.tags.isDisjoint(with: heldIn) { s.collect = false }   // a held write may be a manifest this device can't see yet
             func protect(_ value: Bytes, live: Entry?) {
                 switch Blob.parse(value) {
@@ -93,6 +95,7 @@ extension Device {
         for s in scopes { for t in s.tags { byTag[t] = s } }
         let ms = grace.components.seconds * 1000 + grace.components.attoseconds / 1_000_000_000_000_000
         return rows.compactMap { r in
+            if let s = byTag[r.channel], s.purge { return r.id }
             guard let s = byTag[r.channel], s.collect, r.state != .rejected, !s.protected.contains(r.address) else { return nil }
             return s.listed.contains(r.address) || (s.orphans && now - r.seen > ms) ? r.id : nil
         }
@@ -102,6 +105,7 @@ extension Device {
         var h = SHA256()
         for s in scopes {
             h.update(data: s.cid)
+            if s.purge { h.update(data: [1]) }
             for set in [s.listed, s.protected] {
                 for a in set.sorted(by: { $0.lexicographicallyPrecedes($1) }) { h.update(data: a) }
                 h.update(data: [0])
@@ -117,6 +121,7 @@ extension Device {
     func blobHygiene(_ b: BlobRuntime) async throws {
         guard let me, registry.activity(me.certificate).isValid else { return }
         let scopes = try blobScopes()
+        dropUnnamed(b)
         var rows = try store.chunks()
         let now = { Int64(Date().timeIntervalSince1970 * 1000) }
         let holds = scopes.contains { $0.live.contains { $0.m.chunks != nil && FileManager.default.fileExists(atPath: b.content($0.m.hash).path) } }
@@ -177,6 +182,38 @@ extension Device {
                 var appended: [String: Bytes] = [:]
                 try await appendChunks(b, file: path, tag: tag, missing, offsets, appended: &appended)
             }
+        }
+    }
+
+    /// Removes content no record names any more, downloaded or half downloaded: a deleted record's, a replaced
+    /// version's, a collected list's, and what was kept about it. A gone list's files stay as long as its replica does.
+    func dropUnnamed(_ b: BlobRuntime) {
+        var hashes: Set<String> = [], writes: Set<String> = []
+        for c in collections.values {
+            for r in c.records.values where !r.deleted {
+                for e in r.kept where e.write.op == .assign && Self.isBlobField(e.write.field) {
+                    if case let .manifest(m) = Blob.parse(e.write.value), m.chunks != nil { hashes.insert(m.hash.hex) }
+                    writes.insert(e.id.hex)
+                }
+            }
+        }
+        for u in (try? store.uploads()) ?? [] {
+            if case let .record(state)? = try? Kind1.parse(u.payload, hub: pin.hub, scope: u.scope), let w = state.writes.first,
+               case let .manifest(m) = Blob.parse(w.value), m.chunks != nil { hashes.insert(m.hash.hex) }
+        }
+        let fm = FileManager.default
+        for (dir, marker) in [(b.directory, "blobs.opened."), (b.partial, "blobs.partial.")] {
+            for name in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] where name.count == 64 && !hashes.contains(name) && Bytes(hex: name) != nil {
+                if (try? fm.removeItem(at: dir.appendingPathComponent(name))) != nil { try? store.removeValue(marker + name) }
+            }
+        }
+        for prefix in ["blobs.opened.", "blobs.partial."] {
+            for (name, _) in (try? store.values(prefix: prefix)) ?? [] where !hashes.contains(String(name.dropFirst(prefix.count))) {
+                try? store.removeValue(name)
+            }
+        }
+        for (name, _) in (try? store.values(prefix: "blobs.unreadable.")) ?? [] where !writes.contains(String(name.dropFirst("blobs.unreadable.".count))) {
+            try? store.removeValue(name)
         }
     }
 

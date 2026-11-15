@@ -194,6 +194,7 @@ func (d *Device) purgeReplica(c *collection) error {
 	for _, v := range unshared {
 		markers = append(markers, v.Name)
 	}
+	markers = append(markers, "blobs.keep."+hexs(c.id))
 	ups, err := d.store.Uploads()
 	if err != nil {
 		return err

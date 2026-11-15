@@ -186,6 +186,7 @@ public final class Store: @unchecked Sendable {
         for id in ids {
             try run("DELETE FROM messages WHERE id = ?", [.text(id)])
             try run("DELETE FROM contents WHERE message = ?", [.text(id)])
+            try run("DELETE FROM values_ WHERE name = ?", [.text("fragmsg." + id)])
         }
     }
 
@@ -253,6 +254,20 @@ public final class Store: @unchecked Sendable {
             out.append((Self.blob($0, 0), Self.blob($0, 1)))
         }
         return out
+    }
+
+    /// Every write held in a scope, with its record and epoch.
+    public func writeIDs(scope: Bytes) throws -> [(id: Bytes, record: Bytes, epoch: Bytes)] {
+        var out: [(Bytes, Bytes, Bytes)] = []
+        try run("SELECT id, record, epoch FROM writes WHERE scope = ? ORDER BY rowid", [.blob(scope)]) {
+            out.append((Self.blob($0, 0), Self.blob($0, 1), Self.blob($0, 2)))
+        }
+        return out
+    }
+
+    /// Forgets writes this device no longer needs (GC.swift).
+    public func dropWrites(_ ids: [Bytes]) throws {
+        for id in ids { try run("DELETE FROM writes WHERE id = ?", [.blob(id)]) }
     }
 
     public func records(scope: Bytes) throws -> [Bytes] {

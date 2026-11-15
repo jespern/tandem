@@ -224,7 +224,68 @@ def blobs(new, hub):
     check('Alice reads the new version', unb64u(alice('fetchBlob', list=lst, record=photo, name='photo')['content']), newer)
 
 
-SCENARIOS = [sharing, pairing, key_change, copying, blobs]
+def collecting(new, hub):
+    """Garbage collection across engines (§9.3, §11.6, §11.9): a past epoch's writes dropped after the other engine's
+    key change; a removed member's replica collected after the retention period; a deleted list's data destroyed on
+    the hub by the owner's device, all but the roster, and collected on every device."""
+    bob = new('a', 'Bob')
+    bob('found', label='Bob’s Mac')
+    alice, carol = new('b', 'Alice'), new('b', 'Carol')
+    for person, name in ((alice, 'Alice'), (carol, 'Carol')):
+        person('join', link=bob('invite', label=name)['link'], label=name)
+    bob('sync')
+    lst = bob('createList', name='House')['list']
+    bob('set', list=lst, record=b64u(os.urandom(16)), field='title', value=b64u(b'Milk'))
+    for person in (alice, carol):
+        bob('share', list=lst, participant=person('me')['participant'], role='writer')
+        person('sync')
+        person('accept', list=lst)
+    bread = b64u(os.urandom(16))
+    for v in (b'Rye', b'Spelt', b'Sourdough'):
+        alice('set', list=lst, record=bread, field='title', value=b64u(v))
+    bob('sync')
+    before = alice('writeCount', list=lst)['data']
+    bob('removeMember', list=lst, participant=carol('me')['participant'])
+    alice('sync')
+    alice('set', list=lst, record=b64u(os.urandom(16)), field='title', value=b64u(b'Eggs'))
+    bob('sync')
+    alice('sync')
+    if alice('writeCount', list=lst)['data'] >= before:
+        raise Failed(f'Alice kept the replaced writes: {alice("writeCount", list=lst)["data"]} writes, {before} before')
+    check('Alice reads', titles(alice, lst), ['Eggs', 'Milk', 'Sourdough'])
+    check('Bob reads', titles(bob, lst), ['Eggs', 'Milk', 'Sourdough'])
+    # Carol was removed: her replica stays for the retention period, then goes.
+    carol('sync')
+    check('Carol keeps it', carol('removedLists')['lists'], [lst])
+    carol('setRetention', ms=1)
+    carol('sync')
+    carol('sync')
+    check('Carol collected it', (carol('removedLists')['lists'], carol('goneLists')['lists'], carol('writeCount', list=lst)['data']), ([], [lst], 0))
+
+    def tablet(name):
+        t = new('b', name)
+        t('pair', link=alice('startPairing', label=name)['link'], label=name)
+        bob('sync')
+        bob('approve', claim=bob('claims')['claims'][0]['id'])
+        t('sync')
+        return t
+    # Bob deletes the list: it stays everywhere for the retention period.
+    bob('deleteList', list=lst)
+    alice('sync')
+    check('deleted', alice('isDeleted', list=lst)['deleted'], True)
+    if alice('writeCount', list=lst)['data'] == 0 or tablet('Alice’s tablet')('writeCount', list=lst)['data'] == 0:
+        raise Failed('a deleted list is collected before the retention period')
+    for d in (bob, alice):
+        d('setRetention', ms=1)
+    for d in (bob, bob, alice, alice):
+        d('sync')
+    check('Alice collected it', (alice('goneLists')['lists'], alice('writeCount', list=lst)['data']), ([lst], 0))
+    late = tablet('Alice’s laptop')
+    check('a late device learns of the deletion', late('isDeleted', list=lst)['deleted'], True)
+    check('the hub holds only the roster', late('writeCount', list=lst)['data'], 0)
+
+
+SCENARIOS = [sharing, pairing, key_change, copying, blobs, collecting]
 
 
 def run(server, first, second):

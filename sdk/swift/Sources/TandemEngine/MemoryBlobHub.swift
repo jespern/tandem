@@ -22,14 +22,17 @@ public actor MemoryBlobHub: BlobHub {
     public var partialAppends: Int?
     /// This many appends store their chunks and then lose the answer.
     public var loseAnswers = 0
+    /// Destroy fails, as a lost connection does.
+    public var failDestroys = false
 
     public init() {}
 
-    public func set(damageEscaped: Bool? = nil, failAppends: Bool? = nil, partialAppends: Int?? = nil, loseAnswers: Int? = nil, quota: Quota? = nil) {
+    public func set(damageEscaped: Bool? = nil, failAppends: Bool? = nil, partialAppends: Int?? = nil, loseAnswers: Int? = nil, failDestroys: Bool? = nil, quota: Quota? = nil) {
         if let damageEscaped { self.damageEscaped = damageEscaped }
         if let failAppends { self.failAppends = failAppends }
         if let partialAppends { self.partialAppends = partialAppends }
         if let loseAnswers { self.loseAnswers = loseAnswers }
+        if let failDestroys { self.failDestroys = failDestroys }
         if let quota { quotaReport = quota }
     }
 
@@ -70,7 +73,10 @@ public actor MemoryBlobHub: BlobHub {
 
     public func fetch(ids: [String]) async throws -> [Chunk] { ids.compactMap { id in live[id].map { Chunk(id: id, envelope: $0.body) } } }
 
-    public func destroy(ids: [String]) async throws { drop(ids) }
+    public func destroy(ids: [String]) async throws {
+        if failDestroys { throw Lost() }
+        drop(ids)
+    }
 
     public func quota() async throws -> Quota { quotaReport }
 

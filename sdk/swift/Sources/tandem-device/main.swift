@@ -13,6 +13,14 @@ actor Driver {
     var account: MailboxAccount?, folder = "Tandem", insecure = false
     var device: Device?, ms: Bytes?
     var blobs: BlobStore?
+    /// The device's own store, for writeCount.
+    var local: Store?
+
+    func newLocal() throws -> Store {
+        let s = try Store(path: ":memory:")
+        local = s
+        return s
+    }
 
     func configuration() throws -> IMAPStore.Configuration {
         guard let account else { throw Failure(message: "no hub: send {\"op\":\"hub\",…} first") }
@@ -69,7 +77,7 @@ actor Driver {
         case "found":
             let keys = DeviceKeys()
             let f = try Founder.found(account: account!, keys: keys, label: try s("label"))
-            let d = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try Store(path: ":memory:"),
+            let d = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try newLocal(),
                                     hub: try await store())
             try await d.publish(f)
             if let password = c["hubPassword"] as? String { try await d.changePassword(to: password, ms: f.managementSeed) }
@@ -84,14 +92,14 @@ actor Driver {
             return ["link": B64u.encode(try link.json())]
         case "join":
             device = try await Device.join(link: try InvitationLink.parse(try b("link")), keys: DeviceKeys(), label: try s("label"),
-                                           store: try Store(path: ":memory:"), hub: try await store())
+                                           store: try newLocal(), hub: try await store())
             return [:]
         case "startPairing":
             let link = try await dev().startPairing(label: try s("label"), account: account!)
             return ["link": B64u.encode(link.json())]
         case "pair":
             device = try await Device.pair(link: try PairingLink.parse(try b("link")), keys: DeviceKeys(), label: try s("label"),
-                                           store: try Store(path: ":memory:"), hub: try await store())
+                                           store: try newLocal(), hub: try await store())
             return [:]
         case "claims":
             let claims = try await dev().pendingClaims()
@@ -160,6 +168,21 @@ actor Driver {
         case "rekey":
             try await dev().rekey(list: try b("list"))
             return [:]
+        case "deleteList":
+            try await dev().delete(list: try b("list"))
+            return [:]
+        case "isDeleted":
+            return ["deleted": try await dev().isDeleted(list: try b("list"))]
+        case "setRetention":
+            try await dev().setRetention(.milliseconds(c["ms"] as? Int ?? 0))
+            return [:]
+        case "removedLists":
+            return ["lists": try await dev().removedLists().map(B64u.encode)]
+        case "goneLists":
+            return ["lists": try await dev().goneLists().map(B64u.encode)]
+        case "writeCount":
+            let roster = Tandem.namedID(Bytes("_roster".utf8)), list = try b("list")
+            return ["data": try local!.writeIDs(scope: list).filter { $0.record != roster }.count]
         case "copy":
             let copy = try await dev().copy(list: try b("list"))
             return ["list": B64u.encode(copy.list), "shared": copy.shared.map(B64u.encode), "undecided": copy.undecided.map(B64u.encode)]

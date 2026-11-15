@@ -638,7 +638,10 @@ extension Device {
             files.append((name, size, opened)); total += size
         }
         for f in files.sorted(by: { $0.opened < $1.opened }) where total > b.settings.storeLimit {
-            if (try? FileManager.default.removeItem(at: b.directory.appendingPathComponent(f.name))) != nil { total -= f.size }
+            if (try? FileManager.default.removeItem(at: b.directory.appendingPathComponent(f.name))) != nil {
+                total -= f.size
+                try? store.removeValue("blobs.opened." + f.name)
+            }
         }
     }
 

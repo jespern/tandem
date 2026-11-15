@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	tandem "github.com/jespern/tandem/sdk/go"
 	"github.com/jespern/tandem/sdk/go/engine"
@@ -24,6 +25,7 @@ type driver struct {
 	device   *engine.Device
 	ms       []byte
 	blobs    *imap.BlobStore
+	local    *engine.Store // the device's own store, for writeCount
 }
 
 func (d *driver) imapConfig() imap.Config {
@@ -201,6 +203,7 @@ func (d *driver) handle(ctx context.Context, a args) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
+		d.local = store
 		keys, err := tandem.NewDeviceKeys()
 		if err != nil {
 			return nil, err
@@ -389,6 +392,27 @@ func (d *driver) handle(ctx context.Context, a args) (map[string]any, error) {
 		return nil, dev.RemoveMember(ctx, participant, list)
 	case "rekey":
 		return nil, dev.Rekey(ctx, list)
+	case "deleteList":
+		return nil, dev.Delete(ctx, list)
+	case "isDeleted":
+		return map[string]any{"deleted": dev.IsDeleted(list)}, nil
+	case "setRetention":
+		ms, _ := a["ms"].(float64)
+		dev.SetRetention(time.Duration(ms) * time.Millisecond)
+		return nil, nil
+	case "removedLists":
+		return map[string]any{"lists": b64us(dev.RemovedLists())}, nil
+	case "goneLists":
+		return map[string]any{"lists": b64us(dev.GoneLists())}, nil
+	case "writeCount":
+		rows, err := d.local.WriteIDs(list)
+		n := 0
+		for _, r := range rows {
+			if string(r.Record) != string(tandem.NamedID("_roster")) {
+				n++
+			}
+		}
+		return map[string]any{"data": n}, err
 	case "copy":
 		cp, err := dev.Copy(ctx, list)
 		if err != nil {

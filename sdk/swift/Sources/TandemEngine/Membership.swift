@@ -42,11 +42,14 @@ extension Device {
     /// offer to keep what's in them (Liszto's rescue into the Inbox).
     public func removedLists() -> [Bytes] {
         guard let me else { return [] }
-        return collections.values.filter { c in
-            guard c.owner != me.participant, let head = c.head, c.statements[head]?.statement.deleted == false,
-                  admission(of: me.participant, in: c, at: head) == nil else { return false }
-            return homeElements(membershipName(c.id), field: "answers").contains { $0.count == 33 && $0[32] == UInt8(ascii: "a") }
-        }.map(\.id).sorted { $0.lexicographicallyPrecedes($1) }
+        return collections.values.filter { removed(from: $0, me: me) && !purged($0.id) }.map(\.id).sorted { $0.lexicographicallyPrecedes($1) }
+    }
+
+    /// Whether this participant accepted a list and has since been removed from it.
+    func removed(from c: CollectionState, me: Me) -> Bool {
+        guard c.owner != me.participant, let head = c.head, c.statements[head]?.statement.deleted == false,
+              admission(of: me.participant, in: c, at: head) == nil else { return false }
+        return homeElements(membershipName(c.id), field: "answers").contains { $0.count == 33 && $0[32] == UInt8(ascii: "a") }
     }
 
     /// Say no to a list shared with this participant (§11.2): nothing appears, and the owner is told.

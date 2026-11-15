@@ -52,6 +52,8 @@ public actor Device {
     /// Key requests (§11.4): the wait before asking, and the one timer that waits for it.
     var keyRequestDelay: Duration = .seconds(600)
     var keyRequestTimer: Task<Void, Never>?
+    /// How long a gone list stays before it is collected (GC.swift).
+    var retention: Duration = Device.defaultRetention
     /// The store's `data_version` when this device last took in other processes' writes (`takeExternalChanges`).
     var seenDataVersion: Int64 = 0
     /// Lists with a key change running on this device.

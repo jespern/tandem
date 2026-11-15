@@ -428,6 +428,7 @@ extension Device {
         try await settleLateWrites()
         try await keyRequestFollowUp()
         try await hygiene()
+        try await collectGarbage()
         guard let me else { return }
         for (name, cert) in try store.values(prefix: "pairing.done.") {
             guard let token = Bytes(hex: String(name.dropFirst("pairing.done.".count))), currentHomeEpoch != nil else { continue }
