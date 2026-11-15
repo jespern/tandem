@@ -59,6 +59,21 @@ scenario runs both engines on Stalwart. Not done: a one-batch transfer on the fe
 exists, the engine doesn't use it yet); requested downloads ahead of unasked ones; pipelined appends for a server with
 `LITERAL+` but no `MULTIAPPEND`.
 
+## Garbage collection (2026-11-15)
+
+`GC.swift`, the same as the Go engine's `gc.go`: what `DESIGN.md` already allows, after each sync. Writes of past epochs
+that the current inventory doesn't list go once the inventory is here (§9.3), after this participant's late writes are
+settled and unless `unshared` reported them; a dropped manifest's addresses are kept as `blobs.dropped.*` so its chunks
+are still collected. A list deleted (§11.9) or this participant was removed from (§11.6) keeps its replica read-only for
+`setRetention` (30 days by default) on this device's own clock from when it first saw that; then the replica goes but for
+its roster, and the list is in `goneLists()` and out of `removedLists()`. A device of a deleted list's owner also destroys
+every message it merged in the list's channels that carries no roster write, and every chunk of the list. Downloaded and
+partial files no record names go after each sync, with their markers. `GCTests` mirrors Go's `gc_test.go`; interop's
+`collecting` scenario runs it across engines. Interop found two bugs on the way, both fixed in both engines: the owner's
+device refused the writes it carried into a new channel because they arrived before its statement was announced (now
+held, `testOwnCarriedWritesAreMerged`), and a member's device carried writes back into a deleted list after the owner
+purged it. What the spec leaves open (writes replaced within an epoch, tombstones, the roster) is in `GC.md`.
+
 ## Several processes on one store (Liszto, 2026-11-13)
 
 The Liszto session asked for two things, decided with Jesper, now done (`SharedStore.swift`, `SharedStoreTests`): the running `Device` takes in another process's writes, checking `PRAGMA data_version` at the start of every sync, write and read and on `refresh()`, reloading the changed records and announcing them; and `ItemWriter`, a light writer for extensions that loads one list and one record, signs several changes in one call, appends once with a timeout and leaves the rest to the app. Its tests fail without the data-version check.

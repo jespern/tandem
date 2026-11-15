@@ -129,7 +129,7 @@ try await device.decline(list: offerList)
 try await device.leave(list: list)                             // the owner sees .left and removes them
 ```
 
-- "Stop sharing" is removing every member. Their devices keep a read-only replica; `role(list:)` is nil for them, the list leaves `lists()` and appears in `removedLists()`, for Liszto's rescue into the Inbox.
+- "Stop sharing" is removing every member. Their devices keep a read-only replica for 30 days (see "What the device clears away"); `role(list:)` is nil for them, the list leaves `lists()` and appears in `removedLists()`, for Liszto's rescue into the Inbox.
 - A removed member's edits that never reached the list stay in their replica. For a member who is still in the list, edits that a key change may have left behind are listed by `unshared(list:)`; offer to recover or dismiss them (`dismissUnshared`). Liszto's "rescue into Inbox" fits both.
 - Removing someone or lowering a role is a key change: it needs the network and takes a few round trips. It is journalled, so a crash resumes it, in `resume()`, which `run()` calls first. Call one of them when the app starts: `sync()` alone doesn't resume a key change, and until it is resumed the removed member can still read what's written in the old epoch. If another device of the same owner was in the middle of one, `pendingChange(list:)` describes it and `finish(list:seen:)` or `discard(list:seen:)` settles it; until then sharing changes on that list throw `ChangeError.pending`.
 - `isDead(list:)`: two devices of the owner changed sharing at the same instant, or the hub hid one change from the other. The list is read-only for good. The way out is `copy(list:)`: a new list with the same name, `_meta` and record IDs, owned by whoever copies it (an owner or a member), shared again with everyone both versions of the old roster agree on. It returns those in `shared` and the rest in `undecided`, for the app to ask about and `share`. Calling it again, or from another device of the same person, finishes the same copy. Members get an ordinary offer; `copyOf(list:)` on it names the old list, so the offer can read "Bob continued House", and once they accept, the app can hide the dead list. Tandem doesn't redirect anyone silently. Hopefully never needed; it is the break-glass path.
@@ -231,6 +231,18 @@ if let info = await device.blob(list: list, record: id, name: "photo") {        
   files this device holds are put back if they went missing. `checkBlobs()` asks for that check now, for instance when
   the app comes to the foreground. `blobQuota()` is `.unknown` where the server says nothing, never zero.
 - **Testing.** `MemoryBlobHub` is an in-memory blob folder: `try await device.useBlobs(MemoryBlobHub())`.
+
+## What the device clears away
+
+Nothing for the app to do; a device keeps itself and the hub from growing where the protocol allows. After each sync:
+
+- Edits replaced before a key change are dropped once the change is through (an edit's history otherwise stays until the
+  next key change; `GC.md` proposes more).
+- A list that was deleted, or that this user was removed from, stays readable on the device for 30 days from when the
+  device learned of it, so the app can offer to rescue what is in it. Then it goes, and `goneLists()` lists it.
+  `setRetention(_:)` changes the period; a negative value keeps such lists for good. The owner's device also deletes
+  the list's data and files from the mailbox then, all but the record that says the list was deleted.
+- Downloaded files that no record names any more (replaced, or their record deleted) are deleted.
 
 ## App extensions
 
