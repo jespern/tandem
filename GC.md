@@ -1,6 +1,6 @@
 # Proposal: garbage collection beyond what the specification allows today
 
-Status: **implemented**, 2026-11-15, in `DESIGN.md` and the Go, Swift and browser devices: section 2's rule (proved in `proofs/TandemProofs/Drop.lean`; a write is dropped only once no message holds it), packs and deletion marks (section 3), and old channels' rosters cut to their epoch's statements (section 4.3; the whole epoch is kept, not only the announcement and its parent, since a device away from the middle of an epoch needs its later statements). Every open question is answered (section 8). References with § are to
+Status: **implemented**, 2026-11-15, in `DESIGN.md` and the Go, Swift and browser devices: section 2's rule (proved in `proofs/TandemProofs/Drop.lean`; a write is dropped only once no message holds it), packs and deletion marks (section 3), and old channels' rosters cut to their epoch's statements (section 4.3; the whole epoch is kept, not only the announcement and its parent, since a device away from the middle of an epoch needs its later statements). Every open question is answered (section 8). That clean-up gets done is proved too (`proofs/TandemProofs/Progress.lean`), and what file clean-up and healing guarantee (`BlobGC.lean`). References with § are to
 `DESIGN.md`. Decisions left for Jesper are marked **Open**.
 
 Step 1 of the clean-up work, on branch `gc`, implements what `DESIGN.md` already allows and the
