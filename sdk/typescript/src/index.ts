@@ -17,3 +17,4 @@ export * from './operation.js';
 
 // HTTPS JMAP uses standard fetch and also runs directly in Node.
 export * from './browser/jmap.js';
+export * from './browser/blob-jmap.js';
