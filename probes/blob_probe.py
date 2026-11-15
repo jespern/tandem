@@ -473,6 +473,15 @@ def probe(host, port, user, password, verify=True, name=None, samples=3, wait=60
     log(f'created {feed} and {blobs}; BINARY {r["has"]["BINARY"]}, MULTIAPPEND {r["has"]["MULTIAPPEND"]}, '
         f'LITERAL+ {r["has"]["LITERAL+"]}, APPENDLIMIT {limit}')
     counter = iter(range(10**9))
+    # What a transfer pays before its first chunk: TLS, LOGIN, CAPABILITY and SELECT on a new connection.
+    r['connect_seconds'] = []
+    for _ in range(3):
+        start = time.monotonic()
+        fresh = connect_raw()
+        fresh.cmd([b'SELECT ' + astring(blobs)])
+        r['connect_seconds'].append(round(time.monotonic() - start, 3))
+        fresh.close()
+    log('a new connection, ready to transfer, took', r['connect_seconds'], 'seconds')
     r['cells'], r['quota'] = [], {'start': quota(c, blobs)}
     modes = ['one at a time'] + ['pipelined'] * ('LITERAL+' in c.caps) + ['MULTIAPPEND'] * ('MULTIAPPEND' in c.caps)
     try:

@@ -1,0 +1,59 @@
+{
+  "appendlimit": 35651584,
+  "capabilities": [
+    "APPENDLIMIT=35651584",
+    "CHILDREN",
+    "COMPRESS=DEFLATE",
+    "CONDSTORE",
+    "ENABLE",
+    "ESEARCH",
+    "ID",
+    "IDLE",
+    "IMAP4REV1",
+    "LIST-EXTENDED",
+    "LIST-STATUS",
+    "LITERAL-",
+    "MOVE",
+    "NAMESPACE",
+    "QUOTA",
+    "SPECIAL-USE",
+    "UIDPLUS",
+    "UNSELECT",
+    "UTF8=ACCEPT",
+    "X-GM-EXT-1",
+    "XLIST"
+  ],
+  "cleanup": "clean",
+  "connect_seconds": [
+    2.401,
+    2.757,
+    2.418
+  ],
+  "date": "2026-11-15",
+  "has": {
+    "BINARY": false,
+    "LITERAL+": false,
+    "LITERAL-": true,
+    "MULTIAPPEND": false,
+    "QUOTA": true
+  },
+  "host": "imap.gmail.com",
+  "parallel": [
+    {
+      "append_mib_per_second": 0.16,
+      "append_seconds": 101.056,
+      "chunk": 1048576,
+      "connections": 1,
+      "count": 16,
+      "fetch_batched_mib_per_second": 0.63,
+      "fetch_batched_seconds": 25.378,
+      "fetch_single_mib_per_second": 0.38,
+      "fetch_single_seconds": 41.95,
+      "form": "text",
+      "intact": true,
+      "mode": "one at a time"
+    }
+  ],
+  "probe": "blobs-parallel",
+  "run": "ddd17888"
+}
