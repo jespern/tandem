@@ -345,6 +345,7 @@ def parallel(connect_raw, folder, run, counter, binary, counts, total=16, size=1
 
             mib = total * size / 2**20
             row = {'connections': k, 'mode': mode, 'form': 'binary' if binary else 'text', 'chunk': size, 'count': total}
+            log(f'{k} connections, {mode}: appending {total} chunks of {size // KIB} KiB, then fetching them ...')
             seconds = run_all(up)
             row['append_seconds'], row['append_mib_per_second'] = round(seconds, 3), round(mib / max(seconds, 1e-6), 2)
             if not errors and all(uids):

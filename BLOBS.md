@@ -55,9 +55,10 @@ Costs, accepted on purpose:
 - **The hub learns file sizes** and which channel a file belongs to, as it does for records (§14).
 - **Provider ceilings.** Google documents 500 MB of IMAP upload and 2500 MB of download per day and
   account for Workspace; a hub is one account, so all its participants share that. Gmail is also
-  slow: about 0.2 MiB per second up and 0.5 down on one connection, against 8 to 12 on Fastmail
-  (section 12). This design suits documents and photos, not a media library, and on Gmail a photo
-  of 10 MB takes about a minute to upload.
+  slow: about 0.2 MiB per second up and 0.5 down on one connection, and 0.5 up and 0.9 down on
+  four, against 8 to 12 on Fastmail (section 12). This design suits documents and photos, not a
+  media library, and on Gmail a photo of 10 MB takes about 20 seconds to upload over four
+  connections.
 
 ## 3. Terms
 
@@ -206,11 +207,14 @@ messages (Q3) stays about records.
 
 **Connections.** Chunks move on **transfer connections** that exist only while there is something
 to transfer, so the feed connection stays in IDLE and edits keep arriving during a long upload. A
-device uses up to two of them by default, a per-hub setting from 0 to 8, and shares the chunks of a
-transfer among them. Two is what Fastmail rewards: with batching a second connection added about
-40% to uploads and more added nothing, while without batching every further connection helped
-(section 12). Servers cap connections per account or address (§10.3 lists the caps), and every one a
-device holds is one another device cannot. Where the server refuses a further connection the device
+device shares the chunks of a transfer among them. How many it uses is a per-hub setting from 0 to
+8, and the default follows what the server can do: **two where appends can be batched, four where
+they cannot.** With batching, a second connection added about 40% to uploads on Fastmail and more
+added nothing. Without it, as on Gmail, connections are the only lever: four moved 3.4 times as
+much as one, eight 5 times (section 12). The default stops at four there because servers cap
+connections per account or address (§10.3 lists the caps; Google documents 15 per account for
+Gmail), a hub is one account, and every connection one device holds is one another device cannot
+open, its feed connection included. Where the server refuses a further connection the device
 goes on with those it has. With none, or with the setting at 0, it uses its feed connection and
 transfers one chunk between returns to IDLE.
 
@@ -546,7 +550,22 @@ Gmail, text form, one append and one fetch at a time, which is all it offers:
   larger chunk gains little: 4 MiB is 1.3 times as fast as 1 MiB, not the three times that a fixed
   cost alone would give. A 4 MiB chunk takes 18 s, and a lost connection costs that much.
 - **1 MiB is the default everywhere.** That closes the chunk-size question.
-- Whether Gmail's rate is per connection is not known (B1).
+
+Gmail, 16 text chunks of 1 MiB spread over several connections at once, one append and one fetch at
+a time on each, MiB per second:
+
+| Connections | Append | Fetch |
+|---|---|---|
+| 1 | 0.16 | 0.43 |
+| 2 | 0.24 | 0.59 |
+| 4 | 0.54 | 0.85 |
+| 8 | 0.81 | 1.88 |
+
+- **On Gmail connections are the lever.** The rate is mostly per connection: eight moved five times
+  as much up and over four times as much down as one. All chunks came back intact and no connection
+  was refused. One run.
+- **Four is the default there** (section 4.3): 3.4 times the upload of one connection, and it leaves
+  room under Gmail's cap for the other devices of the hub (B1).
 
 Fastmail, 16 binary chunks of 1 MiB spread over several connections at once, MiB per second:
 
@@ -568,7 +587,7 @@ Fastmail, 16 binary chunks of 1 MiB spread over several connections at once, MiB
 
 | # | Question |
 |---|---|
-| B1 | **Parallel connections on Gmail.** Gmail has no batching and moves 0.2 MiB per second up on one connection (section 12). If that rate is per connection, several transfer connections are the only way to go faster there, and the default of two may be too low for Gmail. `blob_probe.py --parallel` measures it (about 90 MB, of a documented 500 MB a day). |
+| B1 | **Connection caps under transfer.** A hub is one account, and its devices share the server's cap: 15 per account on Gmail as documented, 16 on Stalwart, 10 per user and address on Dovecot (§10.3). Not measured: what a device that comes online gets when others are transferring on several connections each, and whether a refused feed connection should make transferring devices give one up. |
 | B2 | **Storage of binary chunks.** `BINARY` works on Fastmail and Stalwart (section 12), but Fastmail stores the chunk as base64, so it saves transfer and no quota there. No way to store raw bytes on Fastmail is known. |
 | B3 | **Provider limits and terms.** Gmail's append limit was probed at about 35 MB and its daily IMAP volumes are documented for Workspace only. Fastmail advertises an append limit of 200 MB; its behaviour with large folders of large messages is unmeasured, and no provider's terms were checked for use as file storage. |
 | B4 | **Orphan grace.** Is 7 days right, and should the uploader's app show an upload that has waited that long? The grace runs on each device's own first sight of a chunk (section 7), so a device that opens the blob folder rarely collects late. |
