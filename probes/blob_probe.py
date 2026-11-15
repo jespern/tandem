@@ -21,6 +21,11 @@ connection while chunks are being uploaded on another.
 in batches where the server can batch, then fetched one at a time and with one command a connection. It
 uploads about 130 MB, or about 90 MB where the server cannot batch (Gmail).
 
+--forms compares the ways of carrying a chunk on one connection: as text, as a
+base64 attachment, as binary and as 8bit content with a few bytes escaped, each
+with and without COMPRESS=DEFLATE (RFC 4978). It uploads about 55 MB on Gmail
+and about 75 MB where BINARY is offered; name the forms to run fewer.
+
 --stalwart starts the disposable Stalwart the tests use (needs Docker) and
 removes it afterwards. --fastmail reads the app password from
 ~/.config/tandem/fastmail-imap.json and asks Fastmail's JMAP session, with the
@@ -46,6 +51,7 @@ import sys
 import threading
 import time
 import urllib.request
+import zlib
 from email.utils import formatdate
 
 import imap_probe
@@ -65,10 +71,50 @@ class Lit(bytes):
     """A literal in a server response."""
 
 
+class Deflated:
+    """A connection after COMPRESS DEFLATE (RFC 4978): raw deflate both ways, flushed after every write."""
+
+    def __init__(self, sock):
+        self.sock, self.buf = sock, bytearray()
+        self.c, self.d = zlib.compressobj(6, zlib.DEFLATED, -15), zlib.decompressobj(-15)
+        self.sent = self.received = 0       # bytes on the wire, inside TLS
+
+    def sendall(self, data):
+        out = self.c.compress(data) + self.c.flush(zlib.Z_SYNC_FLUSH)
+        self.sent += len(out)
+        self.sock.sendall(out)
+
+    def fill(self):
+        raw = self.sock.recv(1 << 16)
+        if not raw:
+            raise EOFError('connection closed')
+        self.received += len(raw)
+        self.buf += self.d.decompress(raw)
+
+    def readline(self):
+        while True:
+            i = self.buf.find(b'\n')
+            if i >= 0:
+                line = bytes(self.buf[:i + 1])
+                del self.buf[:i + 1]
+                return line
+            self.fill()
+
+    def read(self, n):
+        while len(self.buf) < n:
+            self.fill()
+        out = bytes(self.buf[:n])
+        del self.buf[:n]
+        return out
+
+    def close(self):
+        self.sock.close()
+
+
 class Raw:
     """Just enough IMAP to send literals of every kind and read literals back."""
 
-    def __init__(self, host, port, user, password, verify=True):
+    def __init__(self, host, port, user, password, verify=True, compress=False):
         ctx = ssl.create_default_context()
         if not verify:
             ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
@@ -82,6 +128,10 @@ class Raw:
         for r in untagged:
             if r[0].upper().startswith(b'* CAPABILITY'):
                 self.caps = set(r[0].decode().upper().split()[2:])
+        self.wire = None
+        if compress:
+            self.cmd([b'COMPRESS DEFLATE'])
+            self.s = self.f = self.wire = Deflated(self.s)
 
     def response(self):
         """One response line with its literals, as a list of pieces."""
@@ -167,16 +217,50 @@ def chunk(size):
     return b'TNDM\x02\x04' + TRICKY + os.urandom(size - len(TRICKY)) + os.urandom(16)
 
 
-def message(run, n, envelope, binary):
+ESCAPED_ANYWHERE = (0x3D, 0x00, 0x0A, 0x0D)                  # '=' first, then NUL, LF, CR
+ESCAPED_AT_LINE_START = b'\t .F>'                               # stripped, dot-stuffed or mbox-quoted by some stores
+ESCAPED_AT_LINE_END = b'\t '
+
+
+def escape8(data, width=490):
+    """The envelope as legal 8bit mail content, the way yEnc does it: a few bytes written as
+    '=' and the byte plus 64, lines of at most `width` bytes of input, so never over the 998 a
+    line may have even if every byte is escaped. About 2% larger."""
+    lines = []
+    for i in range(0, len(data), width):
+        line = data[i:i + width]
+        first, last = line[:1], line[-1:]
+        body = line[1:-1] if len(line) > 1 else b''
+        for b in ESCAPED_ANYWHERE:
+            body = body.replace(bytes([b]), b'=' + bytes([(b + 64) & 255]))
+
+        def edge(byte, also):
+            if byte and (byte[0] in ESCAPED_ANYWHERE or byte in [bytes([x]) for x in also]):
+                return b'=' + bytes([(byte[0] + 64) & 255])
+            return byte
+        lines.append(edge(first, ESCAPED_AT_LINE_START) + body + (edge(last, ESCAPED_AT_LINE_END) if len(line) > 1 else b''))
+    return b'\r\n'.join(lines) + b'\r\n'
+
+
+def unescape8(body):
+    flat = bytes(body).replace(b'\r', b'').replace(b'\n', b'')
+    return re.sub(rb'=(.)', lambda m: bytes([(m.group(1)[0] - 64) & 255]), flat, flags=re.S)
+
+
+def message(run, n, envelope, binary, attachment=False, eightbit=False):
     head = ('From: Tandem <tandem@tandem.airforce>\r\n'
             f'Date: {formatdate(usegmt=True)}\r\n'
             f'Message-ID: <{n}.{run}@tandem.airforce>\r\n'
             'Subject: tandem\r\nMIME-Version: 1.0\r\nTandem-Version: 2\r\n'
             f'Tandem-Channel: {base64.b32encode(os.urandom(20)).decode().lower()}\r\n'
             f'Tandem-Blob: {address(envelope)}\r\n').encode()
+    if eightbit:
+        return head + b'Content-Type: application/octet-stream\r\nContent-Transfer-Encoding: 8bit\r\n\r\n' + escape8(envelope)
     if binary:
         return head + b'Content-Type: application/octet-stream\r\nContent-Transfer-Encoding: binary\r\n\r\n' + envelope
     text = base64.encodebytes(envelope).replace(b'\n', b'\r\n')     # 76 characters a line
+    if attachment:      # the same base64, declared as an encoding of binary content instead of as text
+        return head + b'Content-Type: application/octet-stream\r\nContent-Transfer-Encoding: base64\r\n\r\n' + text
     return head + b'Content-Type: text/plain; charset=us-ascii\r\nContent-Transfer-Encoding: 7bit\r\n\r\n' + text
 
 
@@ -284,9 +368,11 @@ def append_batch(c, prefix, messages, binary):
     return [u for m in messages for u in appended_uids(c.cmd([prefix, (m, binary)])[0])]
 
 
-def parallel(connect_raw, folder, run, counter, binary, counts, total=16, size=1024 * KIB, batch=4):
+def parallel(connect_raw, folder, run, counter, form, counts, total=16, size=1024 * KIB, batch=4):
     """`total` chunks spread over k connections at once, for each k: appended one at a
     time and in batches of `batch`, then fetched one at a time and one command a connection."""
+    binary = form == 'binary'
+    undo = unescape8 if form == '8bit' else (lambda body: decoded(body, binary))
     item = b'BINARY.PEEK[1]' if binary else b'BODY.PEEK[TEXT]'
     prefix = b'APPEND ' + astring(folder) + b' (\\Seen) '
     out = []
@@ -325,7 +411,7 @@ def parallel(connect_raw, folder, run, counter, binary, counts, total=16, size=1
         # Batching needs MULTIAPPEND or LITERAL+; without them it would repeat the first mode.
         for mode in ('one at a time',) + ('batched',) * bool({'MULTIAPPEND', 'LITERAL+'} & conns[0].caps):
             envelopes = [chunk(size) for _ in range(total)]
-            messages = [message(run, next(counter), e, binary) for e in envelopes]
+            messages = [message(run, next(counter), e, binary, form == 'attachment', form == '8bit') for e in envelopes]
             uids, got, again = [None] * total, {}, {}
 
             def up(c, share):
@@ -347,7 +433,7 @@ def parallel(connect_raw, folder, run, counter, binary, counts, total=16, size=1
                 again.update(literals(c.cmd([b'UID FETCH ' + b','.join(b'%d' % uids[i] for i in share) + b' (' + item + b')'])[1]))
 
             mib = total * size / 2**20
-            row = {'connections': k, 'mode': mode, 'form': 'binary' if binary else 'text', 'chunk': size, 'count': total}
+            row = {'connections': k, 'mode': mode, 'form': form, 'chunk': size, 'count': total}
             log(f'{k} connections, {mode}: appending {total} chunks of {size // KIB} KiB, then fetching them ...')
             seconds = run_all(up)
             row['append_seconds'], row['append_mib_per_second'] = round(seconds, 3), round(mib / max(seconds, 1e-6), 2)
@@ -357,7 +443,7 @@ def parallel(connect_raw, folder, run, counter, binary, counts, total=16, size=1
                 row['fetch_single_seconds'], row['fetch_single_mib_per_second'] = round(seconds, 3), round(mib / max(seconds, 1e-6), 2)
                 seconds = run_all(down_batched)
                 row['fetch_batched_seconds'], row['fetch_batched_mib_per_second'] = round(seconds, 3), round(mib / max(seconds, 1e-6), 2)
-                row['intact'] = all(decoded(g.get(uid, b''), binary) == e for g in (got, again) for uid, e in zip(uids, envelopes))
+                row['intact'] = all(undo(g.get(uid, b'')) == e for g in (got, again) for uid, e in zip(uids, envelopes))
             if errors:
                 row['errors'], errors = errors[:4], []
             out.append(row)
@@ -366,6 +452,59 @@ def parallel(connect_raw, folder, run, counter, binary, counts, total=16, size=1
                 f"one command each {row['fetch_batched_mib_per_second']:6.2f}, intact {row['intact']}"))
         for c in conns:
             c.close()
+    return out
+
+
+def forms(connect_raw, caps, folder, run, counter, which, total=8, size=1024 * KIB):
+    """One connection, `total` chunks a row: each way of carrying a chunk, with and without
+    COMPRESS=DEFLATE, appended the best way the server offers and fetched with one command."""
+    out, mib = [], total * size / 2**20
+    prefix = b'APPEND ' + astring(folder) + b' (\\Seen) '
+    for compress in (False, True):
+        if compress and 'COMPRESS=DEFLATE' not in caps:
+            continue
+        c = connect_raw(compress)
+        c.cmd([b'SELECT ' + astring(folder)])
+        for form in which:
+            if form == 'binary' and 'BINARY' not in caps:
+                continue
+            binary = form == 'binary'
+            item = b'BINARY.PEEK[1]' if binary else b'BODY.PEEK[TEXT]'
+            envelopes = [chunk(size) for _ in range(total)]
+            messages = [message(run, next(counter), e, binary, form == 'attachment', form == '8bit') for e in envelopes]
+            undo = unescape8 if form == '8bit' else (lambda body: decoded(body, binary))
+            row = {'form': form, 'compress': compress, 'chunk': size, 'count': total, 'message_bytes': sum(map(len, messages))}
+            log(f"{form}{' compressed' if compress else ''}: appending {total} chunks, then fetching them ...")
+            try:
+                before = c.wire.sent if c.wire else 0
+                start = time.monotonic()
+                uids = append_batch(c, prefix, messages, binary)
+                seconds = time.monotonic() - start
+                row['append_seconds'], row['append_mib_per_second'] = round(seconds, 3), round(mib / max(seconds, 1e-6), 2)
+                row['wire_bytes_sent'] = c.wire.sent - before if c.wire else row['message_bytes']
+                c.cmd([b'NOOP'])
+                before = c.wire.received if c.wire else 0
+                start = time.monotonic()
+                got = literals(c.cmd([b'UID FETCH ' + b','.join(b'%d' % u for u in uids) + b' (' + item + b')'])[1])
+                seconds = time.monotonic() - start
+                row['fetch_seconds'], row['fetch_mib_per_second'] = round(seconds, 3), round(mib / max(seconds, 1e-6), 2)
+                row['wire_bytes_received'] = c.wire.received - before if c.wire else sum(map(len, got.values()))
+                row['intact'] = len(uids) == total and all(undo(got.get(u, b'')) == e for u, e in zip(uids, envelopes))
+                if form == '8bit' and uids:     # what the server did to it
+                    _, untagged = c.cmd([b'UID FETCH %d (BODY.PEEK[HEADER.FIELDS (Content-Type Content-Transfer-Encoding)] RFC822.SIZE)' % uids[0]])
+                    head = literals(untagged).get(uids[0], b'').decode(errors='replace')
+                    row['stored_headers'] = sorted(' '.join(x.split()) for x in head.splitlines() if x.strip())
+                    row['identical_bytes'] = bytes(got.get(uids[0], b'')) == messages[0].split(b'\r\n\r\n', 1)[1]
+            except (Refused, EOFError, OSError) as e:
+                row['error'] = type(e).__name__ + ': ' + str(e)[:200]
+                c.close()
+                c = connect_raw(compress)
+                c.cmd([b'SELECT ' + astring(folder)])
+            out.append(row)
+            log(f"{form:10} {'compressed' if compress else 'plain':10}: " + (row.get('error') or
+                f"append {row['append_mib_per_second']:6.2f} MiB/s ({row['wire_bytes_sent'] / row['message_bytes']:.2f} of the bytes on the wire), "
+                f"fetch {row['fetch_mib_per_second']:6.2f} MiB/s, intact {row['intact']}"))
+        c.close()
     return out
 
 
@@ -447,13 +586,13 @@ def push_during_upload(connect_raw, connect_lib, feed, blobs, run, counter, samp
     return out
 
 
-def probe(host, port, user, password, verify=True, name=None, samples=3, wait=60, counts=None):
+def probe(host, port, user, password, verify=True, name=None, samples=3, wait=60, counts=None, carry=False, form=None):
     run = os.urandom(4).hex()
     feed, blobs = f'Tandem-probe-{run}', f'Tandem-probe-{run}-blobs'
     r = {'host': name or host, 'date': time.strftime('%Y-%m-%d'), 'run': run, 'probe': 'blobs'}
 
-    def connect_raw():
-        return Raw(host, port, user, password, verify)
+    def connect_raw(compress=False):
+        return Raw(host, port, user, password, verify, compress)
 
     def connect_lib():
         ctx = ssl.create_default_context()
@@ -485,10 +624,15 @@ def probe(host, port, user, password, verify=True, name=None, samples=3, wait=60
     r['cells'], r['quota'] = [], {'start': quota(c, blobs)}
     modes = ['one at a time'] + ['pipelined'] * ('LITERAL+' in c.caps) + ['MULTIAPPEND'] * ('MULTIAPPEND' in c.caps)
     try:
+        if carry:
+            r['probe'] = 'blobs-forms'
+            del r['cells'], r['quota']
+            r['forms'] = forms(connect_raw, c.caps, blobs, run, counter, carry)
+            return r
         if counts:
             r['probe'] = 'blobs-parallel'
             del r['cells'], r['quota']
-            r['parallel'] = parallel(connect_raw, blobs, run, counter, 'BINARY' in c.caps, counts)
+            r['parallel'] = parallel(connect_raw, blobs, run, counter, form or ('binary' if 'BINARY' in c.caps else 'text'), counts)
             return r
         for binary in (False, True):
             if binary and 'BINARY' not in c.caps:
@@ -548,6 +692,11 @@ def main():
     p.add_argument('user', nargs='?')
     p.add_argument('--port', type=int, default=993)
     p.add_argument('--keychain', metavar='SERVICE', help='read the password from this macOS keychain item')
+    p.add_argument('--forms', nargs='?', const='text,attachment,binary,8bit', metavar='FORMS', type=lambda v: v.split(','),
+                   help='compare these ways of carrying a chunk, with and without COMPRESS=DEFLATE, instead '
+                        '(default text,attachment,binary,8bit)')
+    p.add_argument('--form', choices=['text', 'attachment', 'binary', '8bit'],
+                   help='with --parallel, carry chunks this way (default binary where offered, else text)')
     p.add_argument('--stalwart', action='store_true', help='run against a disposable Stalwart in Docker')
     p.add_argument('--fastmail', action='store_true', help='run against Fastmail with ~/.config/tandem credentials')
     p.add_argument('--samples', type=int, default=3, help='appends timed for live updates (default 3)')
@@ -562,7 +711,7 @@ def main():
         from stalwart import IMAGE, Stalwart
         with Stalwart() as server:
             report = probe('127.0.0.1', server.ports[993], server.username, server.password, verify=False,
-                           name='stalwart-' + IMAGE.split(':')[1].split('@')[0], counts=args.parallel)
+                           name='stalwart-' + IMAGE.split(':')[1].split('@')[0], counts=args.parallel, carry=args.forms, form=args.form)
     elif args.fastmail:
         config = os.path.expanduser('~/.config/tandem')
         token = open(os.path.join(config, 'fastmail.json')).read().strip()
@@ -570,7 +719,7 @@ def main():
         request = urllib.request.Request('https://api.fastmail.com/jmap/session', headers={'Authorization': 'Bearer ' + token})
         with urllib.request.urlopen(request, timeout=30) as answer:
             user = json.load(answer)['username']
-        report = probe('imap.fastmail.com', 993, user, password, samples=args.samples, counts=args.parallel)
+        report = probe('imap.fastmail.com', 993, user, password, samples=args.samples, counts=args.parallel, carry=args.forms, form=args.form)
     else:
         if not (args.host and args.user):
             p.error('give a host and a user, --stalwart or --fastmail')
@@ -582,7 +731,7 @@ def main():
             password = found.stdout.rstrip('\n')
         else:
             password = getpass.getpass(f'Password for {args.user} at {args.host}: ')
-        report = probe(args.host, args.port, args.user, password, samples=args.samples, counts=args.parallel)
+        report = probe(args.host, args.port, args.user, password, samples=args.samples, counts=args.parallel, carry=args.forms, form=args.form)
     os.makedirs(args.out, exist_ok=True)
     path = os.path.join(args.out, f"{report['host']}-{report['probe']}-{report['date']}-{report['run']}.json")
     with open(path, 'w') as f:

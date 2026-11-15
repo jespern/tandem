@@ -1,0 +1,111 @@
+{
+  "appendlimit": 35651584,
+  "capabilities": [
+    "APPENDLIMIT=35651584",
+    "CHILDREN",
+    "COMPRESS=DEFLATE",
+    "CONDSTORE",
+    "ENABLE",
+    "ESEARCH",
+    "ID",
+    "IDLE",
+    "IMAP4REV1",
+    "LIST-EXTENDED",
+    "LIST-STATUS",
+    "LITERAL-",
+    "MOVE",
+    "NAMESPACE",
+    "QUOTA",
+    "SPECIAL-USE",
+    "UIDPLUS",
+    "UNSELECT",
+    "UTF8=ACCEPT",
+    "X-GM-EXT-1",
+    "XLIST"
+  ],
+  "cleanup": "clean",
+  "connect_seconds": [
+    4.468,
+    2.74,
+    2.957
+  ],
+  "date": "2026-11-15",
+  "forms": [
+    {
+      "append_mib_per_second": 0.19,
+      "append_seconds": 41.889,
+      "chunk": 1048576,
+      "compress": false,
+      "count": 8,
+      "fetch_mib_per_second": 0.72,
+      "fetch_seconds": 11.147,
+      "form": "8bit",
+      "identical_bytes": true,
+      "intact": true,
+      "message_bytes": 8557476,
+      "stored_headers": [
+        "Content-Transfer-Encoding: 8bit",
+        "Content-Type: application/octet-stream"
+      ],
+      "wire_bytes_received": 8554556,
+      "wire_bytes_sent": 8557476
+    },
+    {
+      "append_mib_per_second": 0.15,
+      "append_seconds": 52.028,
+      "chunk": 1048576,
+      "compress": false,
+      "count": 8,
+      "fetch_mib_per_second": 0.56,
+      "fetch_seconds": 14.176,
+      "form": "attachment",
+      "intact": true,
+      "message_bytes": 11482350,
+      "wire_bytes_received": 11479408,
+      "wire_bytes_sent": 11482350
+    },
+    {
+      "append_mib_per_second": 0.2,
+      "append_seconds": 40.354,
+      "chunk": 1048576,
+      "compress": true,
+      "count": 8,
+      "fetch_mib_per_second": 0.76,
+      "fetch_seconds": 10.539,
+      "form": "8bit",
+      "identical_bytes": true,
+      "intact": true,
+      "message_bytes": 8557214,
+      "stored_headers": [
+        "Content-Transfer-Encoding: 8bit",
+        "Content-Type: application/octet-stream"
+      ],
+      "wire_bytes_received": 8539010,
+      "wire_bytes_sent": 8541635
+    },
+    {
+      "append_mib_per_second": 0.19,
+      "append_seconds": 42.434,
+      "chunk": 1048576,
+      "compress": true,
+      "count": 8,
+      "fetch_mib_per_second": 0.75,
+      "fetch_seconds": 10.628,
+      "form": "attachment",
+      "intact": true,
+      "message_bytes": 11482352,
+      "wire_bytes_received": 8706341,
+      "wire_bytes_sent": 8708815
+    }
+  ],
+  "has": {
+    "BINARY": false,
+    "LITERAL+": false,
+    "LITERAL-": true,
+    "MULTIAPPEND": false,
+    "QUOTA": true
+  },
+  "host": "imap.gmail.com",
+  "probe": "blobs-forms",
+  "run": "2bdefe7b"
+}

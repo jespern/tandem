@@ -1,0 +1,101 @@
+{
+  "appendlimit": 35651584,
+  "capabilities": [
+    "APPENDLIMIT=35651584",
+    "CHILDREN",
+    "COMPRESS=DEFLATE",
+    "CONDSTORE",
+    "ENABLE",
+    "ESEARCH",
+    "ID",
+    "IDLE",
+    "IMAP4REV1",
+    "LIST-EXTENDED",
+    "LIST-STATUS",
+    "LITERAL-",
+    "MOVE",
+    "NAMESPACE",
+    "QUOTA",
+    "SPECIAL-USE",
+    "UIDPLUS",
+    "UNSELECT",
+    "UTF8=ACCEPT",
+    "X-GM-EXT-1",
+    "XLIST"
+  ],
+  "cleanup": "clean",
+  "connect_seconds": [
+    2.673,
+    2.588,
+    2.612
+  ],
+  "date": "2026-11-15",
+  "forms": [
+    {
+      "append_mib_per_second": 0.16,
+      "append_seconds": 50.987,
+      "chunk": 1048576,
+      "compress": false,
+      "count": 8,
+      "fetch_mib_per_second": 0.6,
+      "fetch_seconds": 13.382,
+      "form": "text",
+      "intact": true,
+      "message_bytes": 11482360,
+      "wire_bytes_received": 11479408,
+      "wire_bytes_sent": 11482360
+    },
+    {
+      "append_mib_per_second": 0.17,
+      "append_seconds": 48.384,
+      "chunk": 1048576,
+      "compress": false,
+      "count": 8,
+      "fetch_mib_per_second": 0.6,
+      "fetch_seconds": 13.371,
+      "form": "attachment",
+      "intact": true,
+      "message_bytes": 11482350,
+      "wire_bytes_received": 11479408,
+      "wire_bytes_sent": 11482350
+    },
+    {
+      "append_mib_per_second": 0.17,
+      "append_seconds": 45.866,
+      "chunk": 1048576,
+      "compress": true,
+      "count": 8,
+      "fetch_mib_per_second": 0.75,
+      "fetch_seconds": 10.629,
+      "form": "text",
+      "intact": true,
+      "message_bytes": 11482368,
+      "wire_bytes_received": 8706289,
+      "wire_bytes_sent": 8708779
+    },
+    {
+      "append_mib_per_second": 0.2,
+      "append_seconds": 39.439,
+      "chunk": 1048576,
+      "compress": true,
+      "count": 8,
+      "fetch_mib_per_second": 0.77,
+      "fetch_seconds": 10.397,
+      "form": "attachment",
+      "intact": true,
+      "message_bytes": 11482352,
+      "wire_bytes_received": 8706271,
+      "wire_bytes_sent": 8708750
+    }
+  ],
+  "has": {
+    "BINARY": false,
+    "LITERAL+": false,
+    "LITERAL-": true,
+    "MULTIAPPEND": false,
+    "QUOTA": true
+  },
+  "host": "imap.gmail.com",
+  "probe": "blobs-forms",
+  "run": "14257508"
+}

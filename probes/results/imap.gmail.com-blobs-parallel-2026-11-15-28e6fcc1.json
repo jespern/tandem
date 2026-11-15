@@ -1,0 +1,73 @@
+{
+  "appendlimit": 35651584,
+  "capabilities": [
+    "APPENDLIMIT=35651584",
+    "CHILDREN",
+    "COMPRESS=DEFLATE",
+    "CONDSTORE",
+    "ENABLE",
+    "ESEARCH",
+    "ID",
+    "IDLE",
+    "IMAP4REV1",
+    "LIST-EXTENDED",
+    "LIST-STATUS",
+    "LITERAL-",
+    "MOVE",
+    "NAMESPACE",
+    "QUOTA",
+    "SPECIAL-USE",
+    "UIDPLUS",
+    "UNSELECT",
+    "UTF8=ACCEPT",
+    "X-GM-EXT-1",
+    "XLIST"
+  ],
+  "cleanup": "clean",
+  "connect_seconds": [
+    2.376,
+    2.757,
+    2.419
+  ],
+  "date": "2026-11-15",
+  "has": {
+    "BINARY": false,
+    "LITERAL+": false,
+    "LITERAL-": true,
+    "MULTIAPPEND": false,
+    "QUOTA": true
+  },
+  "host": "imap.gmail.com",
+  "parallel": [
+    {
+      "append_mib_per_second": 0.77,
+      "append_seconds": 20.777,
+      "chunk": 1048576,
+      "connections": 4,
+      "count": 16,
+      "fetch_batched_mib_per_second": 2.78,
+      "fetch_batched_seconds": 5.756,
+      "fetch_single_mib_per_second": 1.65,
+      "fetch_single_seconds": 9.709,
+      "form": "8bit",
+      "intact": true,
+      "mode": "one at a time"
+    },
+    {
+      "append_mib_per_second": 1.26,
+      "append_seconds": 12.683,
+      "chunk": 1048576,
+      "connections": 8,
+      "count": 16,
+      "fetch_batched_mib_per_second": 4.54,
+      "fetch_batched_seconds": 3.525,
+      "fetch_single_mib_per_second": 2.82,
+      "fetch_single_seconds": 5.684,
+      "form": "8bit",
+      "intact": true,
+      "mode": "one at a time"
+    }
+  ],
+  "probe": "blobs-parallel",
+  "run": "28e6fcc1"
+}
