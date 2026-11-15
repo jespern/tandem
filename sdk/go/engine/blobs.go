@@ -1183,6 +1183,9 @@ func (d *Device) evict(b *blobs) {
 		}
 		if os.Remove(filepath.Join(b.dir, f.name)) == nil {
 			total -= f.size
+			d.mu.Lock()
+			_ = d.store.RemoveValue("blobs.opened." + f.name)
+			d.mu.Unlock()
 		}
 	}
 }

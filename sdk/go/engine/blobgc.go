@@ -24,6 +24,7 @@ type blobScope struct {
 	current   string          // the current channel; "" in a deleted or dead list
 	collect   bool            // nothing stops clean-up in this list
 	orphans   bool            // and orphans may go too
+	purge     bool            // a deleted list this owner's device collected: every chunk goes (§11.9)
 	protected map[string]bool // addresses of protected manifests
 	listed    map[string]bool // addresses a write this device holds has listed
 	live      []liveBlob
@@ -67,6 +68,7 @@ func (d *Device) blobScopes() ([]*blobScope, error) {
 			s.current = tandem.CollectionTag(key, d.pin.Hub, epoch)
 			s.collect = true
 		}
+		s.purge = ok && st.Deleted && d.purged(c.id) && d.me != nil && bytes.Equal(c.owner(), d.me.Participant)
 		for tag := range s.tags {
 			if heldIn[tag] {
 				s.collect = false // a held write may be a manifest this device can't see yet
@@ -201,6 +203,10 @@ func doomed(scopes []*blobScope, rows []ChunkRow, grace time.Duration, now int64
 	var out []string
 	for _, r := range rows {
 		s := byTag[r.Channel]
+		if s != nil && s.purge {
+			out = append(out, r.ID)
+			continue
+		}
 		if s == nil || !s.collect || r.State == chunkRejected || s.protected[string(r.Address)] {
 			continue
 		}
@@ -224,11 +230,13 @@ func (d *Device) blobHygiene(ctx context.Context, b *blobs) error {
 		d.mu.RUnlock()
 		return err
 	}
+	named := d.namedContent()
 	rows, err := d.store.Chunks()
 	d.mu.RUnlock()
 	if err != nil {
 		return err
 	}
+	d.dropUnnamed(b, named)
 	settings := b.current()
 	b.mu.Lock()
 	heal := !b.healed
@@ -460,6 +468,9 @@ func scopeView(scopes []*blobScope) []byte {
 	h := sha256.New()
 	for _, s := range scopes {
 		h.Write(s.cid)
+		if s.purge {
+			h.Write([]byte{1})
+		}
 		for _, set := range []map[string]bool{s.listed, s.protected, s.tags} {
 			for _, k := range sortedKeys(set) {
 				h.Write([]byte(k))
@@ -468,6 +479,82 @@ func scopeView(scopes []*blobScope) []byte {
 		}
 	}
 	return h.Sum(nil)
+}
+
+// namedContent is what this device still needs of the files it has: the content hash of every
+// file a record of a list not yet collected names, in a kept write of a record that is not
+// deleted, or a pending upload names; and those kept writes' IDs. The caller holds the state
+// lock. A gone list's files stay as long as its replica does (gc.go).
+type named struct{ hashes, writes map[string]bool }
+
+func (d *Device) namedContent() named {
+	out := named{map[string]bool{}, map[string]bool{}}
+	name := func(value []byte) {
+		if m, kind := tandem.ParseManifest(value); kind == tandem.ManifestV1 && !m.Inline() {
+			out.hashes[hex.EncodeToString(m.Hash)] = true
+		}
+	}
+	for _, k := range sortedKeys(d.collections) {
+		for _, r := range d.collections[k].records {
+			if r.Deleted() {
+				continue
+			}
+			for _, e := range r.Entries() {
+				if e.W.Op == tandem.OpAssign && strings.HasPrefix(e.W.Field, BlobPrefix) {
+					name(e.W.Value)
+					out.writes[hex.EncodeToString(e.ID)] = true
+				}
+			}
+		}
+	}
+	ups, _ := d.store.Uploads()
+	for _, u := range ups {
+		if w := storedWrite(u.Payload, d.pin.Hub, u.Scope); w != nil {
+			name(w.Value)
+		}
+	}
+	return out
+}
+
+// dropUnnamed removes content no record names any more, downloaded or half downloaded: a deleted
+// record's, a replaced version's, a collected list's, and what was kept about it.
+func (d *Device) dropUnnamed(b *blobs, n named) {
+	for _, dir := range []struct{ path, marker string }{{b.dir, "blobs.opened."}, {filepath.Join(b.dir, "partial"), "blobs.partial."}} {
+		entries, err := os.ReadDir(dir.path)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || len(name) != 64 || n.hashes[name] {
+				continue
+			}
+			if _, err := hex.DecodeString(name); err != nil {
+				continue
+			}
+			if os.Remove(filepath.Join(dir.path, name)) == nil {
+				d.mu.Lock()
+				_ = d.store.RemoveValue(dir.marker + name)
+				d.mu.Unlock()
+			}
+		}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, prefix := range []string{"blobs.opened.", "blobs.partial."} {
+		vs, _ := d.store.Values(prefix)
+		for _, v := range vs {
+			if h := strings.TrimPrefix(v.Name, prefix); !n.hashes[h] {
+				_ = d.store.RemoveValue(v.Name)
+			}
+		}
+	}
+	vs, _ := d.store.Values("blobs.unreadable.")
+	for _, v := range vs {
+		if !n.writes[strings.TrimPrefix(v.Name, "blobs.unreadable.")] {
+			_ = d.store.RemoveValue(v.Name)
+		}
+	}
 }
 
 func fileExists(path string) bool {

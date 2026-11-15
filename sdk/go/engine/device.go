@@ -60,6 +60,7 @@ type Device struct {
 	pendingEvents []Event
 
 	keyRequestDelay time.Duration
+	retention       time.Duration // how long a gone list stays (gc.go)
 	keyRequestTimer *time.Timer
 	changing        map[string]bool
 	crashPoint      string
@@ -191,7 +192,7 @@ func load(pin HubPin, directoryKey []byte, keys *tandem.DeviceKeys, store *Store
 		heldStarts: map[string]*tandem.Control{}, homeEpochs: map[string]*tandem.Control{}, inventories: map[string]tandem.Inventory{},
 		home: map[string]*tandem.Record{}, collections: map[string]*collection{}, offers: map[string]*offer{},
 		claims: map[string]*PairingClaim{}, receipts: map[string]*tandem.Control{}, profiles: map[string]*tandem.Record{},
-		subscribers: map[int]*subscriber{}, keyRequestDelay: 10 * time.Minute, changing: map[string]bool{}, life: life, cancel: cancel}
+		subscribers: map[int]*subscriber{}, keyRequestDelay: 10 * time.Minute, retention: DefaultRetention, changing: map[string]bool{}, life: life, cancel: cancel}
 	objs, err := store.Objects("")
 	if err != nil {
 		return nil, err

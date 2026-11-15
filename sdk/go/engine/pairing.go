@@ -726,7 +726,7 @@ func (d *Device) followUp(ctx context.Context) error {
 		}
 	}
 	for _, f := range []func(context.Context) error{d.takeGrantedKeys, d.settleAnnouncedNotes, d.settleLateWrites,
-		d.keyRequestFollowUp, d.hygiene} {
+		d.keyRequestFollowUp, d.hygiene, d.collectGarbage} {
 		if err := f(ctx); err != nil {
 			return err
 		}

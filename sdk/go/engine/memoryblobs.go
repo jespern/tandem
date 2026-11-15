@@ -23,6 +23,8 @@ type MemoryBlobHub struct {
 	FailAppends bool
 	// PartialAppends, if set, stores only that many chunks of each Append, then fails it.
 	PartialAppends int
+	// FailDestroys makes Destroy fail, as a lost connection does.
+	FailDestroys bool
 
 	mu       sync.Mutex
 	events   []blobEvent
@@ -121,6 +123,12 @@ func (h *MemoryBlobHub) Fetch(_ context.Context, ids []string) ([]tandem.Chunk, 
 }
 
 func (h *MemoryBlobHub) Destroy(_ context.Context, ids []string) error {
+	h.mu.Lock()
+	fail := h.FailDestroys
+	h.mu.Unlock()
+	if fail {
+		return errors.New("hub: connection lost")
+	}
 	h.Drop(ids)
 	return nil
 }

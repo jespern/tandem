@@ -89,15 +89,20 @@ func (d *Device) RemovedLists() [][]byte {
 	var out [][]byte
 	for _, k := range sortedKeys(d.collections) {
 		c := d.collections[k]
-		s, ok := c.headStatement()
-		if bytes.Equal(c.owner(), me.Participant) || !ok || s.Deleted || admissionOf(me.Participant, c, c.head()) != nil {
-			continue
-		}
-		if slices.ContainsFunc(d.homeElements(membershipName(c.id), "answers"), func(a []byte) bool { return len(a) == 33 && a[32] == 'a' }) {
+		if d.removedFrom(c, me) && !d.purged(c.id) {
 			out = append(out, c.id)
 		}
 	}
 	return out
+}
+
+// removedFrom reports whether this participant accepted a list and has since been removed from it.
+func (d *Device) removedFrom(c *collection, me *Me) bool {
+	s, ok := c.headStatement()
+	if bytes.Equal(c.owner(), me.Participant) || !ok || s.Deleted || admissionOf(me.Participant, c, c.head()) != nil {
+		return false
+	}
+	return slices.ContainsFunc(d.homeElements(membershipName(c.id), "answers"), func(a []byte) bool { return len(a) == 33 && a[32] == 'a' })
 }
 
 // Decline says no to a list shared with this participant (§11.2): nothing appears, and the owner is told.

@@ -290,6 +290,9 @@ func (s *Store) ForgetMessages(ids []string) error {
 			if err := s.exec("DELETE FROM contents WHERE message = ?", id); err != nil {
 				return err
 			}
+			if err := s.exec("DELETE FROM values_ WHERE name = ?", "fragmsg."+id); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -396,6 +399,33 @@ func (s *Store) Writes(scope, record []byte) ([]StoredWrite, error) {
 		return err
 	})
 	return out, err
+}
+
+// StoredID is a stored write with its ID and record.
+type StoredID struct{ ID, Record, Epoch []byte }
+
+// WriteIDs is every write held in a scope, with its record and epoch.
+func (s *Store) WriteIDs(scope []byte) ([]StoredID, error) {
+	var out []StoredID
+	err := s.rows("SELECT id, record, epoch FROM writes WHERE scope = ? ORDER BY rowid", []any{scope}, func(r *sql.Rows) error {
+		var w StoredID
+		err := r.Scan(&w.ID, &w.Record, &w.Epoch)
+		out = append(out, w)
+		return err
+	})
+	return out, err
+}
+
+// DropWrites forgets writes this device no longer needs (gc.go).
+func (s *Store) DropWrites(ids [][]byte) error {
+	return s.Transaction(func() error {
+		for _, id := range ids {
+			if err := s.exec("DELETE FROM writes WHERE id = ?", id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // Records is the record IDs with writes in a scope.
