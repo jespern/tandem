@@ -570,41 +570,32 @@ type cursor struct {
 	Folder  string   `json:"folder"`
 	State   string   `json:"state"`
 	Known   []string `json:"known"`
+	// Pending is the IDs a full scan found and Changes hasn't delivered yet, oldest first; a page
+	// of them per call, as the browser binding does.
+	Pending []string `json:"pending,omitempty"`
 }
 
+// Changes returns one page (ChangeBatch.More): a page of a full scan's messages, or one
+// Email/changes call's.
 func (s *Store) Changes(ctx context.Context, encoded string) (tandem.ChangeBatch, error) {
 	var result tandem.ChangeBatch
 	current := cursor{V: 1, Account: s.account, Folder: s.folder}
 	known := map[string]bool{}
-	added := map[string]tandem.Message{}
 	removed := map[string]bool{}
+	var added []tandem.Message
 	totalBytes := 0
 	collect := func(row emailObject) error {
-		if !row.MailboxIDs[s.folder] {
-			delete(known, row.ID)
-			delete(added, row.ID)
-			removed[row.ID] = true
-			return nil
-		}
-		known[row.ID] = true
 		m, e := s.message(row)
-		if e != nil {
+		if e != nil || m == nil {
 			return e
 		}
-		if m != nil {
-			if old, ok := added[m.ID]; ok {
-				totalBytes -= len(old.Body)
-			}
-			totalBytes += len(m.Body)
-			if totalBytes > s.cfg.MaxBatchBytes {
-				return errors.New("jmap: batch byte limit exceeded")
-			}
-			added[m.ID] = *m
+		if totalBytes += len(m.Body); totalBytes > s.cfg.MaxBatchBytes {
+			return errors.New("jmap: batch byte limit exceeded")
 		}
+		added = append(added, *m)
 		return nil
 	}
-	full := encoded == ""
-	if !full {
+	if encoded != "" {
 		if _, e := tandem.ParseJSON([]byte(encoded)); e != nil {
 			return result, e
 		}
@@ -620,7 +611,16 @@ func (s *Store) Changes(ctx context.Context, encoded string) (tandem.ChangeBatch
 			}
 			known[id] = true
 		}
+		pending := map[string]bool{}
+		for _, id := range current.Pending {
+			if !known[id] || pending[id] {
+				return result, errors.New("jmap: invalid cursor continuation")
+			}
+			pending[id] = true
+		}
 	}
+	// fullScan lists the folder's IDs as of a state: they become known and pending; what was
+	// known and isn't there any more is removed.
 	fullScan := func() error {
 		var base struct {
 			State string `json:"state"`
@@ -631,7 +631,6 @@ func (s *Store) Changes(ctx context.Context, encoded string) (tandem.ChangeBatch
 		if base.State == "" {
 			return errors.New("jmap: missing state")
 		}
-		current.State = base.State
 		var ids []string
 		seen := map[string]bool{}
 		queryState := ""
@@ -674,32 +673,15 @@ func (s *Store) Changes(ctx context.Context, encoded string) (tandem.ChangeBatch
 			}
 		}
 		known = seen
-		added = map[string]tandem.Message{}
-		totalBytes = 0
-		for at := 0; at < len(ids); at += s.cfg.PageSize {
-			rows, missing, e := s.objects(ctx, ids[at:min(at+s.cfg.PageSize, len(ids))], true)
-			if e != nil {
-				return e
-			}
-			for _, id := range missing {
-				delete(known, id)
-				removed[id] = true
-			}
-			for _, row := range rows {
-				if e := collect(row); e != nil {
-					return e
-				}
-			}
-		}
+		current.State, current.Pending = base.State, ids
 		return nil
 	}
-	if full {
+	if encoded == "" {
 		if e := fullScan(); e != nil {
 			return result, e
 		}
 	}
-	reset := false
-	for {
+	if len(current.Pending) == 0 {
 		var changes struct {
 			Created, Updated, Destroyed []string
 			NewState                    string `json:"newState"`
@@ -707,75 +689,48 @@ func (s *Store) Changes(ctx context.Context, encoded string) (tandem.ChangeBatch
 		}
 		e := s.call(ctx, "Email/changes", map[string]any{"sinceState": current.State, "maxChanges": s.cfg.PageSize}, &changes)
 		var protocol *Error
-		if errors.As(e, &protocol) && protocol.Type == "cannotCalculateChanges" && !reset {
-			reset = true
-			if e = fullScan(); e != nil {
-				return result, e
+		if errors.As(e, &protocol) && protocol.Type == "cannotCalculateChanges" {
+			e = fullScan()
+		} else if e == nil {
+			if changes.NewState == "" || changes.HasMoreChanges && changes.NewState == current.State {
+				return result, errors.New("jmap: changes made no progress")
 			}
-			continue
+			if e = s.applyChanges(ctx, changes.Created, changes.Updated, changes.Destroyed, known, removed, collect); e == nil {
+				current.State, result.More = changes.NewState, changes.HasMoreChanges
+			}
 		}
 		if e != nil {
 			return result, e
 		}
-		if changes.NewState == "" || changes.HasMoreChanges && changes.NewState == current.State {
-			return result, errors.New("jmap: changes made no progress")
+	}
+	// A page of what a full scan found. More stays set after the last one: the next call picks up
+	// what changed since the scan's state.
+	if len(current.Pending) > 0 {
+		page := current.Pending[:min(s.cfg.PageSize, len(current.Pending))]
+		rows, missing, e := s.objects(ctx, page, true)
+		if e != nil {
+			return result, e
 		}
-		ids := append(changes.Created, changes.Updated...)
-		slices.Sort(ids)
-		ids = slices.Compact(ids)
-		for _, id := range changes.Destroyed {
-			if known[id] {
-				removed[id] = true
-			}
+		for _, id := range missing {
 			delete(known, id)
-			delete(added, id)
+			removed[id] = true
 		}
-		for at := 0; at < len(ids); at += s.cfg.PageSize {
-			rows, missing, e := s.objects(ctx, ids[at:min(at+s.cfg.PageSize, len(ids))], false)
-			if e != nil {
-				return result, e
-			}
-			var bodies []string
-			for _, id := range missing {
-				delete(known, id)
-				delete(added, id)
-				removed[id] = true
-			}
-			for _, row := range rows {
-				if slices.Contains(changes.Destroyed, row.ID) {
-					continue
-				}
-				if row.MailboxIDs[s.folder] {
-					known[row.ID] = true
-					bodies = append(bodies, row.ID)
-				} else if known[row.ID] {
+		for _, row := range rows {
+			if !row.MailboxIDs[s.folder] {
+				if known[row.ID] {
 					delete(known, row.ID)
-					delete(added, row.ID)
 					removed[row.ID] = true
 				}
+				continue
 			}
-			fetched, missing, e := s.objects(ctx, bodies, true)
-			if e != nil {
+			if e := collect(row); e != nil {
 				return result, e
 			}
-			for _, id := range missing {
-				delete(known, id)
-				delete(added, id)
-				removed[id] = true
-			}
-			for _, row := range fetched {
-				if e := collect(row); e != nil {
-					return result, e
-				}
-			}
 		}
-		if len(known) > s.cfg.MaxKnownMessages {
-			return result, errors.New("jmap: message limit exceeded")
-		}
-		current.State = changes.NewState
-		if !changes.HasMoreChanges {
-			break
-		}
+		current.Pending, result.More = current.Pending[len(page):], true
+	}
+	if len(known) > s.cfg.MaxKnownMessages {
+		return result, errors.New("jmap: message limit exceeded")
 	}
 	current.Known = []string{}
 	for id := range known {
@@ -788,14 +743,66 @@ func (s *Store) Changes(ctx context.Context, encoded string) (tandem.ChangeBatch
 		}
 	}
 	slices.Sort(result.Removed)
-	for _, row := range added {
-		result.Added = append(result.Added, row)
-	}
-	slices.SortFunc(result.Added, func(a, b tandem.Message) int { return strings.Compare(a.ID, b.ID) })
+	result.Added = added
 	b, e := json.Marshal(current)
 	result.Cursor = string(b)
 	return result, e
 }
+
+// applyChanges takes one Email/changes call's created, updated and destroyed IDs: those in the
+// folder are known and their messages collected; those destroyed or moved out are removed.
+func (s *Store) applyChanges(ctx context.Context, created, updated, destroyed []string, known, removed map[string]bool,
+	collect func(emailObject) error) error {
+	ids := append(slices.Clone(created), updated...)
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	for _, id := range destroyed {
+		if known[id] {
+			removed[id] = true
+		}
+		delete(known, id)
+	}
+	for at := 0; at < len(ids); at += s.cfg.PageSize {
+		rows, missing, e := s.objects(ctx, ids[at:min(at+s.cfg.PageSize, len(ids))], false)
+		if e != nil {
+			return e
+		}
+		var bodies []string
+		for _, id := range missing {
+			if known[id] {
+				removed[id] = true
+			}
+			delete(known, id)
+		}
+		for _, row := range rows {
+			if slices.Contains(destroyed, row.ID) {
+				continue
+			}
+			if row.MailboxIDs[s.folder] {
+				known[row.ID] = true
+				bodies = append(bodies, row.ID)
+			} else if known[row.ID] {
+				delete(known, row.ID)
+				removed[row.ID] = true
+			}
+		}
+		fetched, missing, e := s.objects(ctx, bodies, true)
+		if e != nil {
+			return e
+		}
+		for _, id := range missing {
+			delete(known, id)
+			removed[id] = true
+		}
+		for _, row := range fetched {
+			if e := collect(row); e != nil {
+				return e
+			}
+		}
+	}
+	return nil
+}
+
 func (s *Store) Append(ctx context.Context, channel string, body []byte) (string, error) {
 	if b, e := tandem.ParseB32(channel); e != nil || len(b) != 20 || !validEnvelope(body) {
 		return "", errors.New("jmap: invalid envelope or channel")

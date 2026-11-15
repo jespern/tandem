@@ -66,6 +66,7 @@ func (s *sink) finish(err error) {
 
 type selection struct {
 	validity uint32
+	uidNext  uint32 // 0 if the server didn't say
 	modseq   uint64
 	vanished uidSet
 }
@@ -595,6 +596,9 @@ func (l *link) selectBox(ctx context.Context, c *conn, name string, since *curso
 			if u.code != nil && u.code.name == "HIGHESTMODSEQ" {
 				s.modseq = u.code.num
 			}
+			if u.code != nil && u.code.name == "UIDNEXT" {
+				s.uidNext = uint32(u.code.num)
+			}
 		case vanishedData:
 			if u.earlier {
 				s.vanished = s.vanished.union(u.set)
@@ -746,12 +750,37 @@ func (l *link) scan(ctx context.Context, c *conn, cur *cursor) (tandem.ChangeBat
 		}
 	}
 	var added []tandem.Message
-	top := last
+	top, more := last, false
 	if last < math.MaxUint32 {
 		// n:* always returns the last message, so a UID below the range is ignored.
-		items, err := l.fetchItems(ctx, c, fmt.Sprintf("%d:*", last+1))
-		if err != nil {
-			return tandem.ChangeBatch{}, err
+		set := fmt.Sprintf("%d:*", last+1)
+		// A page at a time: new UIDs lie below UIDNEXT, so only a wider gap than a page can hold
+		// more than one. Then the new UIDs are searched, and the first page of them fetched.
+		if page := l.cfg.PageSize; s.uidNext == 0 || int64(s.uidNext)-1-int64(last) > int64(page) {
+			found, err := l.search(ctx, c, set)
+			if err != nil {
+				return tandem.ChangeBatch{}, err
+			}
+			var uids []uint32
+			for _, uid := range found.uids() {
+				if uid > last {
+					uids = append(uids, uid)
+				}
+			}
+			if len(uids) > page {
+				uids, more = uids[:page], true
+			}
+			if len(uids) > 0 {
+				top = uids[len(uids)-1] // past the page even if its last messages went meanwhile
+			}
+			set = setOf(uids...).String()
+		}
+		items := map[uint32]*fetchItem{}
+		if set != "" {
+			var err error
+			if items, err = l.fetchItems(ctx, c, set); err != nil {
+				return tandem.ChangeBatch{}, err
+			}
 		}
 		for _, uid := range sortedKeys(items) {
 			if uid <= last {
@@ -768,7 +797,7 @@ func (l *link) scan(ctx context.Context, c *conn, cur *cursor) (tandem.ChangeBat
 	if l.qresync {
 		modseq = l.modseq
 	}
-	return tandem.ChangeBatch{Added: added, Removed: removed,
+	return tandem.ChangeBatch{Added: added, Removed: removed, More: more,
 		Cursor: cursor{validity: l.validity, modseq: modseq, last: top, known: known}.String()}, nil
 }
 
@@ -782,8 +811,16 @@ func sortedKeys(m map[uint32]*fetchItem) []uint32 {
 }
 
 func (l *link) searchAll(ctx context.Context, c *conn) (uidSet, error) {
+	return l.search(ctx, c, "ALL")
+}
+
+// search is UID SEARCH for a criterion: ALL, or a UID set such as "n:*".
+func (l *link) search(ctx context.Context, c *conn, criterion string) (uidSet, error) {
+	if criterion != "ALL" {
+		criterion = "UID " + criterion
+	}
 	if l.caps["ESEARCH"] || l.caps["IMAP4REV2"] {
-		r, err := c.execute(ctx, []part{text("UID SEARCH RETURN (ALL) ALL")}, false, false)
+		r, err := c.execute(ctx, []part{text("UID SEARCH RETURN (ALL) " + criterion)}, false, false)
 		if err != nil {
 			return uidSet{}, err
 		}
@@ -794,7 +831,7 @@ func (l *link) searchAll(ctx context.Context, c *conn) (uidSet, error) {
 		}
 		return uidSet{}, nil
 	}
-	r, err := c.execute(ctx, []part{text("UID SEARCH ALL")}, false, false)
+	r, err := c.execute(ctx, []part{text("UID SEARCH " + criterion)}, false, false)
 	if err != nil {
 		return uidSet{}, err
 	}

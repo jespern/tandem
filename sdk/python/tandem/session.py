@@ -16,6 +16,7 @@ class ChangeBatch:
     added: tuple[Message, ...]
     removed: tuple[str, ...]
     cursor: str
+    more: bool = False  # one page of what's new: call changes again with cursor at once, never a polling trigger
 
 
 class PushStore(Protocol):
@@ -86,9 +87,12 @@ class Session:
             yield item
 
     async def _reconcile(self):
-        batch = await self.store.changes(self.cursor)
-        await self._updates.put(batch)
-        self.cursor = batch.cursor
+        while True:
+            batch = await self.store.changes(self.cursor)
+            await self._updates.put(batch)
+            self.cursor = batch.cursor
+            if not batch.more:
+                return
 
     async def _run(self):
         watcher = None

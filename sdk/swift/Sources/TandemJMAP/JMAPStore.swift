@@ -214,9 +214,11 @@ public actor JMAPStore: PushStore {
         guard body.count >= 54, Array(body.prefix(5)) == [84,78,68,77,2], body[5] == 1 || body[5] == 3 || body[5] == 2 && body.count >= 86 else { return nil }
         return Message(id: try string(row["id"]), channel: tag, body: body)
     }
-    private struct Cursor: Codable { var v = 1; var account: String; var folder: String; var state: String; var known: [String] }
-    private struct FullSnapshot { let state: String; let known: Set<String>; let added: [Message] }
-    private func fullScan() async throws -> FullSnapshot {
+    /// `pending`: the IDs a full scan found and `changes` hasn't delivered yet, oldest first; a page of them per call, as
+    /// the browser binding does.
+    private struct Cursor: Codable { var v = 1; var account: String; var folder: String; var state: String; var known: [String]; var pending: [String]? }
+    /// The folder's IDs as of a state, oldest first.
+    private func fullScan() async throws -> (state: String, ids: [String]) {
         let state = try string((await call("Email/get", ["ids": [String](), "properties": ["id"]]))["state"])
         var ids: [String] = [], seen = Set<String>(), queryState = ""
         while true {
@@ -227,58 +229,63 @@ public actor JMAPStore: PushStore {
             guard ids.count <= config.maxKnownMessages, let total = result["total"] as? Int, total >= ids.count else { throw TandemError.invalid("JMAP: invalid query total or message limit exceeded") }
             if total == ids.count { break }; guard !page.isEmpty else { throw TandemError.invalid("JMAP: query made no progress") }
         }
-        var known = seen, added: [Message] = [], count = 0
-        for at in stride(from: 0, to: ids.count, by: config.pageSize) {
-            let (rows, missing) = try await objects(Array(ids[at..<min(at + config.pageSize, ids.count)]), bodies: true)
-            known.subtract(missing)
-            for row in rows {
-                let id = try string(row["id"])
-                guard try object(row["mailboxIds"])[folder] as? Bool == true else { known.remove(id); continue }
-                if let value = try message(row) { count += value.body.count; guard count <= config.maxBatchBytes else { throw TandemError.invalid("JMAP: batch byte limit exceeded") }; added.append(value) }
-            }
-        }
-        return FullSnapshot(state: state, known: known, added: added)
+        return (state, ids)
     }
+    /// One page (`ChangeBatch.more`): a page of a full scan's messages, or one Email/changes call's.
     public func changes(since encoded: String) async throws -> ChangeBatch {
-        var cursor = Cursor(account: account, folder: folder, state: "", known: []), known = Set<String>(), added: [String: Message] = [:], removed = Set<String>(), batchBytes = 0
+        var cursor = Cursor(account: account, folder: folder, state: "", known: []), known = Set<String>(), added: [Message] = [], removed = Set<String>(), batchBytes = 0, more = false
         if !encoded.isEmpty {
             let data = Data(encoded.utf8); _ = try JSON.parse(Bytes(data)); cursor = try JSONDecoder().decode(Cursor.self, from: data)
             guard cursor.v == 1, cursor.account == account, cursor.folder == folder, !cursor.state.isEmpty, cursor.known.count <= config.maxKnownMessages,
                   Set(cursor.known).count == cursor.known.count, cursor.known.allSatisfy({ !$0.isEmpty }) else { throw TandemError.invalid("JMAP: cursor belongs to another store or exceeds limits") }; known = Set(cursor.known)
+            let pending = cursor.pending ?? []
+            guard Set(pending).count == pending.count, pending.allSatisfy(known.contains) else { throw TandemError.invalid("JMAP: invalid cursor continuation") }
         }
         func collect(_ row: Object) throws {
-            let id = try string(row["id"])
-            guard try object(row["mailboxIds"])[folder] as? Bool == true else { known.remove(id); added.removeValue(forKey: id); removed.insert(id); return }
-            known.insert(id)
-            if let value = try message(row) { batchBytes += value.body.count - (added[id]?.body.count ?? 0); guard batchBytes <= config.maxBatchBytes else { throw TandemError.invalid("JMAP: batch byte limit exceeded") }; added[id] = value }
+            guard let value = try message(row) else { return }
+            batchBytes += value.body.count; guard batchBytes <= config.maxBatchBytes else { throw TandemError.invalid("JMAP: batch byte limit exceeded") }; added.append(value)
         }
-        if encoded.isEmpty { let full = try await fullScan(); cursor.state = full.state; removed.formUnion(known.subtracting(full.known)); known = full.known; added = Dictionary(uniqueKeysWithValues: full.added.map { ($0.id, $0) }); batchBytes = full.added.reduce(0) { $0 + $1.body.count } }
-        var reset = false
-        while true {
-            let result: Object
-            do { result = try await call("Email/changes", ["sinceState": cursor.state, "maxChanges": config.pageSize]) }
-            catch let error as JMAPError where error.type == "cannotCalculateChanges" && !reset { reset = true; let full = try await fullScan(); cursor.state = full.state; removed.formUnion(known.subtracting(full.known)); known = full.known; added = Dictionary(uniqueKeysWithValues: full.added.map { ($0.id, $0) }); batchBytes = full.added.reduce(0) { $0 + $1.body.count }; continue }
-            let next = try string(result["newState"]), more = result["hasMoreChanges"] as? Bool == true
-            guard !more || next != cursor.state else { throw TandemError.invalid("JMAP: changes made no progress") }
-            let destroyed = Set(try strings(result["destroyed"])), changed = Set(try strings(result["created"]) + strings(result["updated"])).sorted()
-            for id in destroyed { if known.remove(id) != nil { removed.insert(id) }; added.removeValue(forKey: id) }
-            for at in stride(from: 0, to: changed.count, by: config.pageSize) {
-                let (rows, missing) = try await objects(Array(changed[at..<min(at + config.pageSize, changed.count)]), bodies: false)
-                for id in missing { known.remove(id); added.removeValue(forKey: id); removed.insert(id) }
-                var bodies: [String] = []
-                for row in rows {
-                    let id = try string(row["id"]); if destroyed.contains(id) { continue }
-                    if try object(row["mailboxIds"])[folder] as? Bool == true { known.insert(id); bodies.append(id) }
-                    else if known.remove(id) != nil { added.removeValue(forKey: id); removed.insert(id) }
+        // A full scan's IDs become known and pending; what was known and isn't there any more is removed.
+        func take(_ full: (state: String, ids: [String])) { let found = Set(full.ids); removed.formUnion(known.subtracting(found)); known = found; cursor.state = full.state; cursor.pending = full.ids }
+        if encoded.isEmpty { take(try await fullScan()) }
+        if (cursor.pending ?? []).isEmpty {
+            do {
+                let result = try await call("Email/changes", ["sinceState": cursor.state, "maxChanges": config.pageSize])
+                let next = try string(result["newState"]), hasMore = result["hasMoreChanges"] as? Bool == true
+                guard !hasMore || next != cursor.state else { throw TandemError.invalid("JMAP: changes made no progress") }
+                let destroyed = Set(try strings(result["destroyed"])), changed = Set(try strings(result["created"]) + strings(result["updated"])).sorted()
+                for id in destroyed { if known.remove(id) != nil { removed.insert(id) } }
+                for at in stride(from: 0, to: changed.count, by: config.pageSize) {
+                    let (rows, missing) = try await objects(Array(changed[at..<min(at + config.pageSize, changed.count)]), bodies: false)
+                    for id in missing { if known.remove(id) != nil { removed.insert(id) } }
+                    var bodies: [String] = []
+                    for row in rows {
+                        let id = try string(row["id"]); if destroyed.contains(id) { continue }
+                        if try object(row["mailboxIds"])[folder] as? Bool == true { known.insert(id); bodies.append(id) }
+                        else if known.remove(id) != nil { removed.insert(id) }
+                    }
+                    let (fetched, missingBodies) = try await objects(bodies, bodies: true)
+                    for id in missingBodies { known.remove(id); removed.insert(id) }; for row in fetched { try collect(row) }
                 }
-                let (fetched, missingBodies) = try await objects(bodies, bodies: true)
-                for id in missingBodies { known.remove(id); added.removeValue(forKey: id); removed.insert(id) }; for row in fetched { try collect(row) }
-            }
-            guard known.count <= config.maxKnownMessages else { throw TandemError.invalid("JMAP: message limit exceeded") }
-            cursor.state = next; if !more { break }
+                cursor.state = next; more = hasMore
+            } catch let error as JMAPError where error.type == "cannotCalculateChanges" { take(try await fullScan()) }
         }
+        // A page of what a full scan found. `more` stays set after the last one: the next call picks up what changed
+        // since the scan's state.
+        if let pending = cursor.pending, !pending.isEmpty {
+            let page = Array(pending.prefix(config.pageSize))
+            let (rows, missing) = try await objects(page, bodies: true)
+            for id in missing { known.remove(id); removed.insert(id) }
+            for row in rows {
+                guard try object(row["mailboxIds"])[folder] as? Bool == true else { let id = try string(row["id"]); if known.remove(id) != nil { removed.insert(id) }; continue }
+                try collect(row)
+            }
+            cursor.pending = Array(pending.dropFirst(page.count)); more = true
+        }
+        if cursor.pending?.isEmpty == true { cursor.pending = nil }
+        guard known.count <= config.maxKnownMessages else { throw TandemError.invalid("JMAP: message limit exceeded") }
         cursor.known = known.sorted(); let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys; let data = try encoder.encode(cursor)
-        return ChangeBatch(added: added.values.sorted { $0.id < $1.id }, removed: removed.subtracting(known).sorted(), cursor: String(decoding: data, as: UTF8.self))
+        return ChangeBatch(added: added, removed: removed.subtracting(known).sorted(), cursor: String(decoding: data, as: UTF8.self), more: more)
     }
     public func append(channel: String, body: Bytes) async throws -> String {
         guard B32.decode(channel)?.count == 20, body.count >= 54, Array(body.prefix(5)) == [84,78,68,77,2],

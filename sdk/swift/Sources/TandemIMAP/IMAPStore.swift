@@ -31,17 +31,21 @@ public actor IMAPStore: PushStore {
         public var qresync: Bool
         /// Larger messages (RFC822.SIZE) are ignored; §10.6 caps a message at 1 MiB of envelope.
         public var maxMessageSize: Int
+        /// The most new messages one `changes(since:)` fetches. More come in the next call (`ChangeBatch.more`), so a
+        /// first sync of a big hub holds one page in memory.
+        public var pageSize: Int
         public var reconnectDelay: ClosedRange<Duration>
         /// Receives protocol lines for debugging, each cut at 200 bytes. Login credentials are left out.
         public var trace: (@Sendable (String) -> Void)?
 
         public init(host: String, port: UInt16 = 993, username: String, password: String, security: Security = .tls,
                     folder: String = "Tandem", idleRestart: IdleRestart = .automatic, watchConnection: WatchConnection = .shared,
-                    qresync: Bool = true, maxMessageSize: Int = 2 << 20,
+                    qresync: Bool = true, maxMessageSize: Int = 2 << 20, pageSize: Int = 500,
                     reconnectDelay: ClosedRange<Duration> = .seconds(1) ... .seconds(60), trace: (@Sendable (String) -> Void)? = nil) {
             self.host = host; self.port = port; self.username = username; self.password = password
             self.security = security; self.folder = folder; self.idleRestart = idleRestart
             self.watchConnection = watchConnection; self.qresync = qresync; self.maxMessageSize = maxMessageSize
+            self.pageSize = max(1, pageSize)
             self.reconnectDelay = reconnectDelay; self.trace = trace
         }
     }

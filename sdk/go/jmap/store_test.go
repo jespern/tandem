@@ -127,10 +127,24 @@ func TestRealJMAP(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	initial, e := reader.Changes(ctx, "")
-	if e != nil {
-		t.Fatal(e)
+	// drain calls Changes until a batch has no More, as the engine does: one page each.
+	drain := func(cursor string) (tandem.ChangeBatch, int) {
+		var all tandem.ChangeBatch
+		pages := 0
+		for {
+			page, e := reader.Changes(ctx, cursor)
+			if e != nil {
+				t.Fatal(e)
+			}
+			pages++
+			all.Added, all.Removed, all.Cursor = append(all.Added, page.Added...), append(all.Removed, page.Removed...), page.Cursor
+			if !page.More {
+				return all, pages
+			}
+			cursor = page.Cursor
+		}
 	}
+	initial, _ := drain("")
 	key, hub, epoch := tandem.H([]byte("key")), tandem.H([]byte("hub")), tandem.H([]byte("epoch"))
 	tag := tandem.CollectionTag(key, hub, epoch)
 	var ids []string
@@ -155,20 +169,15 @@ func TestRealJMAP(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("no push", ctx.Err())
 	}
-	batch, e := reader.Changes(ctx, initial.Cursor)
-	if e != nil {
-		t.Fatal(e)
+	batch, pages := drain(initial.Cursor)
+	if len(batch.Added) != 5 || pages < 3 {
+		t.Fatal("explicit pages", len(batch.Added), pages)
 	}
-	if len(batch.Added) != 5 {
-		t.Fatal("did not drain explicit pages", len(batch.Added))
+	if replay, _ := drain(initial.Cursor); !reflect.DeepEqual(replay, batch) {
+		t.Fatal("cursor replay")
 	}
-	replay, e := reader.Changes(ctx, initial.Cursor)
-	if e != nil || !reflect.DeepEqual(replay, batch) {
-		t.Fatal("cursor replay", e)
-	}
-	full, e := reader.Changes(ctx, "")
-	if e != nil || len(full.Added) != 5 {
-		t.Fatal("full paged scan", e, len(full.Added))
+	if full, pages := drain(""); len(full.Added) != 5 || pages < 3 {
+		t.Fatal("full paged scan", len(full.Added), pages)
 	}
 	fetched, e := reader.Fetch(ctx, ids)
 	if e != nil || len(fetched) != 5 {
@@ -196,9 +205,8 @@ func TestRealJMAP(t *testing.T) {
 	if e = writer.Destroy(ctx, ids); e != nil {
 		t.Fatal(e)
 	}
-	removed, e := reader.Changes(ctx, batch.Cursor)
-	if e != nil || len(removed.Removed) != 5 {
-		t.Fatal("removal", e, removed.Removed)
+	if removed, _ := drain(batch.Cursor); len(removed.Removed) != 5 {
+		t.Fatal("removal", removed.Removed)
 	}
 }
 

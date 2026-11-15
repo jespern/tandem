@@ -16,13 +16,16 @@ type ChangeBatch struct {
 	Added   []Message
 	Removed []string
 	Cursor  string
+	// More: this is one page of what's new; call Changes again with Cursor at once. A
+	// continuation of this scan, never a polling trigger.
+	More bool
 }
 type Wake struct{ Err error }
 
 // PushStore is the abstract store of DESIGN §10.1. Watch returns only once the live
 // subscription is active. It buffers invalidations until read, and emits one after
 // reconnecting. Changes reconciles from a cursor; it is called only at startup, after
-// push/reconnect, or after Append. Fetch reads messages by ID, leaving out those that
+// push/reconnect, after Append, or to continue a page (ChangeBatch.More). Fetch reads messages by ID, leaving out those that
 // don't decode (§10.4); Destroy removes them for good (§10.7). Implementations
 // serialize IMAP commands with IDLE/DONE and resume IDLE afterwards.
 type PushStore interface {
@@ -104,16 +107,20 @@ func (s *Session) Run(ctx context.Context) error {
 		return err
 	}
 	reconcile := func() error {
-		batch, e := s.store.Changes(ctx, s.cursor)
-		if e != nil {
-			return e
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case s.updates <- batch:
-			s.cursor = batch.Cursor
-			return nil
+		for {
+			batch, e := s.store.Changes(ctx, s.cursor)
+			if e != nil {
+				return e
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case s.updates <- batch:
+				s.cursor = batch.Cursor
+			}
+			if !batch.More {
+				return nil
+			}
 		}
 	}
 	if err = reconcile(); err != nil {

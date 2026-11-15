@@ -7,7 +7,12 @@ public struct Message: Sendable, Equatable {
 }
 public struct ChangeBatch: Sendable, Equatable {
     public let added: [Message], removed: [String], cursor: String
-    public init(added: [Message], removed: [String], cursor: String) { self.added = added; self.removed = removed; self.cursor = cursor }
+    /// This is one page of what's new: call `changes(since:)` again with `cursor` at once. A continuation of this
+    /// scan, never a polling trigger.
+    public let more: Bool
+    public init(added: [Message], removed: [String], cursor: String, more: Bool = false) {
+        self.added = added; self.removed = removed; self.cursor = cursor; self.more = more
+    }
 }
 
 /// The abstract store of §10.1. watch returns after subscription is active; buffer
@@ -146,9 +151,12 @@ public actor Session {
     private func cancel(_ id: UInt64) { pending.removeValue(forKey: id)?.resume(throwing: CancellationError()) }
 
     private func reconcile() async throws {
-        let batch = try await store.changes(since: cursor)
-        try await output.send(batch)
-        cursor = batch.cursor
+        var more = true
+        while more {
+            let batch = try await store.changes(since: cursor)
+            try await output.send(batch)
+            cursor = batch.cursor; more = batch.more
+        }
     }
     private func run() async {
         do {

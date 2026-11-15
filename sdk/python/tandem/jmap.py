@@ -359,6 +359,8 @@ class JMAPStore:
         return Message(row['id'], tag, body)
 
     async def changes(self, encoded):
+        """One page (ChangeBatch.more): a page of a full scan's messages, or one Email/changes call's. The cursor's
+        `pending` holds the IDs a full scan found and this hasn't delivered yet, as the browser binding does."""
         cursor = dict(v=1, account=self._account, folder=self._folder, state='', known=[])
         if encoded:
             cursor = parse_json(encoded.encode())
@@ -366,27 +368,24 @@ class JMAPStore:
                 raise ValueError('JMAP cursor belongs to another store')
             if not isinstance(cursor.get('known'), list) or any(not isinstance(key, str) or not key for key in cursor['known']) or len(cursor['known']) != len(set(cursor['known'])) or len(cursor['known']) > self.config.max_known_messages:
                 raise ValueError('invalid JMAP cursor IDs')
-        known, added, removed, batch_bytes = set(cursor['known']), {}, set(), 0
+            pending = cursor.get('pending', [])
+            if not isinstance(pending, list) or len(pending) != len(set(pending)) or not set(pending) <= set(cursor['known']):
+                raise ValueError('invalid JMAP cursor continuation')
+        known, added, removed, batch_bytes, more = set(cursor['known']), [], set(), 0, False
 
         def collect(row):
             nonlocal batch_bytes
-            key = row['id']
-            if not row['mailboxIds'].get(self._folder):
-                known.discard(key)
-                added.pop(key, None)
-                removed.add(key)
-                return
-            known.add(key)
             value = self._message(row)
             if value:
-                batch_bytes += len(value.body) - (len(added[key].body) if key in added else 0)
+                batch_bytes += len(value.body)
                 if batch_bytes > self.config.max_batch_bytes:
                     raise ValueError('JMAP batch byte limit exceeded')
-                added[key] = value
+                added.append(value)
 
         async def full_scan():
-            nonlocal known, added, batch_bytes
-            cursor['state'] = (await self._call('Email/get', ids=[], properties=['id']))['state']
+            """The folder's IDs as of a state become known and pending; what was known and isn't there is removed."""
+            nonlocal known
+            state = (await self._call('Email/get', ids=[], properties=['id']))['state']
             ids, query_state, seen = [], None, set()
             while True:
                 result = await self._call('Email/query', filter={'inMailbox': self._folder}, sort=[{'property': 'receivedAt', 'isAscending': True}], position=len(ids), limit=self._page, calculateTotal=True)
@@ -405,66 +404,70 @@ class JMAPStore:
                 if not result['ids']:
                     raise ValueError('JMAP query made no progress')
             removed.update(known - seen)
-            known, added, batch_bytes = seen, {}, 0
-            for at in range(0, len(ids), self._page):
-                rows, missing = await self._objects(ids[at:at + self._page])
-                known.difference_update(missing)
-                removed.update(missing)
-                for row in rows:
-                    collect(row)
+            known = seen
+            cursor['state'], cursor['pending'] = state, ids
 
         if not encoded:
             await full_scan()
-        reset = False
-        while True:
+        if not cursor.get('pending'):
             try:
                 result = await self._call('Email/changes', sinceState=cursor['state'], maxChanges=self._page)
             except JMAPError as error:
-                if error.kind != 'cannotCalculateChanges' or reset:
+                if error.kind != 'cannotCalculateChanges':
                     raise
-                reset = True
                 await full_scan()
-                continue
-            if not result.get('newState') or result['hasMoreChanges'] and result['newState'] == cursor['state']:
-                raise ValueError('JMAP changes made no progress')
-            destroyed = set(result['destroyed'])
-            removed.update(known & destroyed)
-            known.difference_update(destroyed)
-            for key in destroyed:
-                added.pop(key, None)
-            ids = sorted(set(result['created'] + result['updated']))
-            for at in range(0, len(ids), self._page):
-                rows, missing = await self._objects(ids[at:at + self._page], False)
-                for key in missing:
-                    known.discard(key)
-                    added.pop(key, None)
-                    removed.add(key)
-                bodies = []
-                for row in rows:
-                    key = row['id']
-                    if key in destroyed:
-                        continue
-                    if row['mailboxIds'].get(self._folder):
-                        known.add(key)
-                        bodies.append(key)
-                    elif key in known:
-                        known.remove(key)
-                        added.pop(key, None)
+            else:
+                if not result.get('newState') or result['hasMoreChanges'] and result['newState'] == cursor['state']:
+                    raise ValueError('JMAP changes made no progress')
+                destroyed = set(result['destroyed'])
+                removed.update(known & destroyed)
+                known.difference_update(destroyed)
+                ids = sorted(set(result['created'] + result['updated']))
+                for at in range(0, len(ids), self._page):
+                    rows, missing = await self._objects(ids[at:at + self._page], False)
+                    for key in missing:
+                        if key in known:
+                            removed.add(key)
+                        known.discard(key)
+                    bodies = []
+                    for row in rows:
+                        key = row['id']
+                        if key in destroyed:
+                            continue
+                        if row['mailboxIds'].get(self._folder):
+                            known.add(key)
+                            bodies.append(key)
+                        elif key in known:
+                            known.remove(key)
+                            removed.add(key)
+                    rows, missing = await self._objects(bodies)
+                    for key in missing:
+                        known.discard(key)
                         removed.add(key)
-                rows, missing = await self._objects(bodies)
-                for key in missing:
-                    known.discard(key)
-                    added.pop(key, None)
-                    removed.add(key)
-                for row in rows:
-                    collect(row)
-            if len(known) > self.config.max_known_messages:
-                raise ValueError('JMAP message limit exceeded')
-            cursor['state'] = result['newState']
-            if not result['hasMoreChanges']:
-                break
+                    for row in rows:
+                        collect(row)
+                cursor['state'], more = result['newState'], result['hasMoreChanges']
+        # A page of what a full scan found. more stays set after the last one: the next call picks up what changed
+        # since the scan's state.
+        if cursor.get('pending'):
+            page, cursor['pending'] = cursor['pending'][:self._page], cursor['pending'][self._page:]
+            rows, missing = await self._objects(page)
+            known.difference_update(missing)
+            removed.update(missing)
+            for row in rows:
+                if not row['mailboxIds'].get(self._folder):
+                    if row['id'] in known:
+                        known.remove(row['id'])
+                        removed.add(row['id'])
+                    continue
+                collect(row)
+            more = True
+        if not cursor.get('pending'):
+            cursor.pop('pending', None)
+        if len(known) > self.config.max_known_messages:
+            raise ValueError('JMAP message limit exceeded')
         cursor['known'] = sorted(known)
-        return ChangeBatch(tuple(added[key] for key in sorted(added)), tuple(sorted(removed - known)), json.dumps(cursor, separators=(',', ':')))
+        return ChangeBatch(tuple(added), tuple(sorted(removed - known)), json.dumps(cursor, separators=(',', ':')), more)
 
     async def append(self, channel, body):
         if len(unb32(channel)) != 20 or not _valid_envelope(body):

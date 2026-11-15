@@ -25,16 +25,25 @@ final class JMAPTests: XCTestCase {
         let reader = try await JMAPStore.open(config), writer = try await JMAPStore.open(config)
         do {
             let stream = try await reader.watch()
-            let initial = try await reader.changes(since: "")
+            // Changes until a batch has no `more`, as the engine does: one page each.
+            func drain(_ from: String) async throws -> (batch: ChangeBatch, pages: Int) {
+                var added: [Message] = [], removed: [String] = [], cursor = from, pages = 0
+                while true {
+                    let page = try await reader.changes(since: cursor); pages += 1
+                    added += page.added; removed += page.removed; cursor = page.cursor
+                    if !page.more { return (ChangeBatch(added: added, removed: removed, cursor: cursor), pages) }
+                }
+            }
+            let initial = try await drain("").batch
             let pushed = Task { var events = stream.makeAsyncIterator(); _ = try await events.next() }
             let key = H(Bytes("key".utf8)), hub = H(Bytes("hub".utf8)), epoch = H(Bytes("epoch".utf8)), tag = Tandem.collectionTag(key: key, hub: hub, epoch: epoch)
             var ids: [String] = [], bodies: [Bytes] = []
             for i in 0..<5 { let body = try Envelope.seal(key: key, hub: hub, kind: 1, tag: tag, plaintext: [UInt8(i)]); ids.append(try await writer.append(channel: tag, body: body)); bodies.append(body) }
             try await pushed.value
-            let batch = try await reader.changes(since: initial.cursor)
-            XCTAssertEqual(batch.added.count, 5)
-            let replay = try await reader.changes(since: initial.cursor); XCTAssertEqual(replay, batch)
-            let full = try await reader.changes(since: ""); XCTAssertEqual(full.added.count, 5)
+            let (batch, pages) = try await drain(initial.cursor)
+            XCTAssertEqual(batch.added.count, 5); XCTAssertGreaterThanOrEqual(pages, 3, "a page at a time")
+            let replay = try await drain(initial.cursor).batch; XCTAssertEqual(replay, batch)
+            let full = try await drain(""); XCTAssertEqual(full.batch.added.count, 5); XCTAssertGreaterThanOrEqual(full.pages, 3)
             let fetched = try await reader.fetch(ids: ids); XCTAssertEqual(fetched.count, 5)
             for (id, body) in zip(ids, bodies) { XCTAssertEqual(fetched.first { $0.id == id }?.body, body) }
             var otherConfig = config; otherConfig.folderName += "-other"
@@ -42,7 +51,7 @@ final class JMAPTests: XCTestCase {
             do { try await other.destroy(ids: [ids[0]]); XCTFail("destroyed another mailbox's mail") } catch {}
             await other.close()
             try await writer.destroy(ids: ids)
-            let removed = try await reader.changes(since: batch.cursor); XCTAssertEqual(Set(removed.removed), Set(ids))
+            let removed = try await drain(batch.cursor).batch; XCTAssertEqual(Set(removed.removed), Set(ids))
             await reader.close(); await writer.close()
         } catch { await reader.close(); await writer.close(); throw error }
     }
