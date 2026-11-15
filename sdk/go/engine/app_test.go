@@ -230,3 +230,49 @@ func TestAppAHomeWriteOfflineIsSentLater(t *testing.T) {
 		t.Fatal("healing never sent it")
 	}
 }
+
+// Several fields of one record go out as one message, and arrive together.
+func TestAppABatchedWriteIsOneMessage(t *testing.T) {
+	hub, f, keys, bob := found(t, "Bob’s Mac", nil)
+	defer bob.Close()
+	list := try(bob.CreateList(bg, "Groceries"))
+	before := len(hub.Messages())
+	milk := NewRecordID()
+	must(t, bob.Write(bg, list, milk, Set("title", []byte("Milk")), Set("notes", []byte("Oat")), Add("tags", []byte("dairy"))))
+	if n := len(hub.Messages()) - before; n != 1 {
+		t.Fatal("messages:", n)
+	}
+	laptop := open(t, f, keys, nil, hub.Connect())
+	defer laptop.Close()
+	syncAll(t, laptop)
+	item, ok := laptop.Item(list, milk)
+	if !ok || item.Text("title") != "Milk" || item.Text("notes") != "Oat" || len(item.Elements("tags")) != 1 {
+		t.Fatal(item)
+	}
+	must(t, bob.Write(bg, list, milk, Delete()))
+	syncAll(t, laptop)
+	if item, _ := laptop.Item(list, milk); !item.Deleted() {
+		t.Fatal("not deleted")
+	}
+	if err := bob.Write(bg, list, MetaRecord(), Delete()); err == nil {
+		t.Fatal("a named record is never deleted")
+	}
+}
+
+// The owner keeps the app's list properties in _meta; another device reads them, and only the owner writes them.
+func TestAppTheOwnerWritesListPropertiesInMeta(t *testing.T) {
+	s := sharedWithAlice(t)
+	must(t, s.bob.Write(bg, s.groceries, MetaRecord(), Set("icon", []byte("cart")), Set("tagsEnabled", []byte("1"))))
+	must(t, s.alice.Accept(bg, s.groceries))
+	syncAll(t, s.alice)
+	meta, ok := s.alice.Item(s.groceries, MetaRecord())
+	if !ok || meta.Text("icon") != "cart" || meta.Text("tagsEnabled") != "1" || meta.Text("name") != "Groceries" {
+		t.Fatal(meta)
+	}
+	if s.alice.Name(s.groceries) != "Groceries" {
+		t.Fatal("the name stays where Rename and Lists read it")
+	}
+	if err := s.alice.Write(bg, s.groceries, MetaRecord(), Set("icon", []byte("x"))); err == nil {
+		t.Fatal("a writer changed _meta")
+	}
+}

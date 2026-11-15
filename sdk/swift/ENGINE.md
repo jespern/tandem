@@ -34,7 +34,7 @@ Built by the Liszto session at Jesper's request, from its handover; tests in `Ap
 - **`accept(list:)` survives a hub that can't be reached and a crash.** The answer is written last: it closes the offer, so a crash before it leaves the offer open to accept again (crash point `accept:keys`). A lost answer receipt only leaves the owner seeing "pending".
 - **An unanswered offer survives a restart.** Reopening loaded only followed lists, so an offered list was missing: its offer couldn't be checked again and `pendingOffers()` lost it for good. Now the offered list loads whole from the store (`loadCollection`), roster and records; with the roster alone, accepting it after a restart showed an empty list with no name until the next launch.
 - **Not done: a removed member's writes that never reached the list.** A device can't tell them apart: it can no longer read the new epoch, so it doesn't know which of its late writes the new inventory took.
-- **Go engine:** the same behaviour (local-first home writes, offline `createList`/`accept`, answer last, offers across restarts), tests in `app_test.go`. Not ported: the public batched write and `metaRecord` (Go has `writeChanges` and `metaRecord` internally).
+- **Go engine:** the same, tests in `app_test.go`: local-first home writes, offline `CreateList`/`Accept`, answer last, offers across restarts, and the API as `Write(ctx, list, record, Set(…), Add(…), Remove(…), Delete())` and `MetaRecord()`.
 
 ## Several processes on one store (Liszto, 2026-11-13)
 

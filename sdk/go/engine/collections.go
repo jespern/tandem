@@ -363,18 +363,62 @@ func (d *Device) IsDead(list []byte) bool {
 }
 
 func (d *Device) writeRecord(ctx context.Context, cid, record []byte, field string, op tandem.Op, val, element []byte) error {
-	return d.writeChanges(ctx, cid, record, []change{{field, op, val, element}})
+	return d.writeChanges(ctx, cid, record, []Change{{field, op, val, element}})
 }
 
-// change is one write to a field of a record.
-type change struct {
+// Change is one write to a field of a record, for Write: Set, Add, Remove or Delete.
+type Change struct {
 	field        string
 	op           tandem.Op
 	val, element []byte
 }
 
+// Set assigns a field's value.
+func Set(field string, value []byte) Change {
+	return Change{field: field, op: tandem.OpAssign, val: value}
+}
+
+// Add adds an element to a set field, such as a tag (§9.2).
+func Add(field string, element []byte) Change {
+	if element == nil {
+		element = []byte{}
+	}
+	return Change{field: field, op: tandem.OpAdd, element: element}
+}
+
+// Remove removes an element from a set field. A concurrent add on another device wins (§9.2).
+func Remove(field string, element []byte) Change {
+	if element == nil {
+		element = []byte{}
+	}
+	return Change{field: field, op: tandem.OpRemove, element: element}
+}
+
+// Delete deletes the record (§9.5).
+func Delete() Change { return Change{op: tandem.OpDelete} }
+
+// Write makes several changes to one record, signed in one call and published as one message
+// (§10.7): what an app writes when it saves an item with several fields. Offline, they stay saved
+// and the next sync sends them. The owner keeps the app's list properties in MetaRecord.
+func (d *Device) Write(ctx context.Context, list, record []byte, changes ...Change) error {
+	defer d.begin()()
+	if len(changes) == 0 {
+		return nil
+	}
+	for _, x := range changes {
+		if x.op == tandem.OpDelete && (bytes.Equal(record, metaRecord) || bytes.Equal(record, rosterRecord)) {
+			return fail("device: a named record is never deleted")
+		}
+	}
+	return d.writeChanges(ctx, list, record, changes)
+}
+
+// MetaRecord is the ID of a list's _meta record (§7.3): its name and the app's list properties.
+// Only the owner writes it, with Write; anyone reads it with Item.
+func MetaRecord() []byte { return bytes.Clone(metaRecord) }
+
 // writeChanges makes several changes to one record, sent as one message.
-func (d *Device) writeChanges(ctx context.Context, cid, record []byte, changes []change) error {
+func (d *Device) writeChanges(ctx context.Context, cid, record []byte, changes []Change) error {
 	me, c := d.me, d.collections[string(cid)]
 	if me == nil || c == nil || c.dead() {
 		return fail("device: no such list, or it can't sync")
