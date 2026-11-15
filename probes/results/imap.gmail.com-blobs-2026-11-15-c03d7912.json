@@ -1,0 +1,127 @@
+{
+  "appendlimit": 35651584,
+  "capabilities": [
+    "APPENDLIMIT=35651584",
+    "CHILDREN",
+    "COMPRESS=DEFLATE",
+    "CONDSTORE",
+    "ENABLE",
+    "ESEARCH",
+    "ID",
+    "IDLE",
+    "IMAP4REV1",
+    "LIST-EXTENDED",
+    "LIST-STATUS",
+    "LITERAL-",
+    "MOVE",
+    "NAMESPACE",
+    "QUOTA",
+    "SPECIAL-USE",
+    "UIDPLUS",
+    "UNSELECT",
+    "UTF8=ACCEPT",
+    "X-GM-EXT-1",
+    "XLIST"
+  ],
+  "cells": [
+    {
+      "append_mib_per_second": 0.1,
+      "append_seconds": 31.317,
+      "chunk": 262144,
+      "count": 12,
+      "envelope_bytes": 3145992,
+      "fetch_batched_mib_per_second": 0.56,
+      "fetch_batched_seconds": 5.328,
+      "fetch_single_mib_per_second": 0.24,
+      "fetch_single_seconds": 12.724,
+      "fetched_bytes": 4305072,
+      "form": "text",
+      "intact": true,
+      "message_bytes": 4309502,
+      "mode": "one at a time"
+    },
+    {
+      "append_mib_per_second": 0.17,
+      "append_seconds": 36.341,
+      "chunk": 1048576,
+      "count": 6,
+      "envelope_bytes": 6291588,
+      "fetch_batched_mib_per_second": 0.59,
+      "fetch_batched_seconds": 10.099,
+      "fetch_single_mib_per_second": 0.47,
+      "fetch_single_seconds": 12.812,
+      "fetched_bytes": 8609556,
+      "form": "text",
+      "intact": true,
+      "message_bytes": 8611776,
+      "mode": "one at a time"
+    },
+    {
+      "append_mib_per_second": 0.21,
+      "append_seconds": 57.398,
+      "chunk": 4194304,
+      "count": 3,
+      "envelope_bytes": 12582978,
+      "fetch_batched_mib_per_second": 0.66,
+      "fetch_batched_seconds": 18.271,
+      "fetch_single_mib_per_second": 0.53,
+      "fetch_single_seconds": 22.498,
+      "fetched_bytes": 17218818,
+      "form": "text",
+      "intact": true,
+      "message_bytes": 17219928,
+      "mode": "one at a time"
+    }
+  ],
+  "cleanup": "clean",
+  "date": "2026-11-15",
+  "has": {
+    "BINARY": false,
+    "LITERAL+": false,
+    "LITERAL-": true,
+    "MULTIAPPEND": false,
+    "QUOTA": true
+  },
+  "host": "imap.gmail.com",
+  "index_scan": {
+    "expected": 21,
+    "messages": 21,
+    "seconds": 0.732,
+    "with_date_and_both_headers": 21
+  },
+  "other_fetches": {
+    "text": {
+      "BINARY.PEEK[1]": "refused: BAD Could not parse command",
+      "BODY.PEEK[1]": "base64 of the envelope",
+      "BODY.PEEK[TEXT]": "base64 of the envelope",
+      "BODY.PEEK[]": "base64 of the envelope",
+      "stored_headers": [
+        "Content-Transfer-Encoding: 7bit",
+        "Content-Type: text/plain; charset=us-ascii"
+      ],
+      "stored_size": 1435296
+    }
+  },
+  "probe": "blobs",
+  "push": {
+    "chunks_uploaded_meanwhile": 6,
+    "idle": [
+      29.808
+    ],
+    "uploading": [
+      29.819
+    ]
+  },
+  "quota": {
+    "after_text": [
+      47244640256,
+      107374182400
+    ],
+    "start": [
+      47244640256,
+      107374182400
+    ],
+    "text_message_bytes": 30141206
+  },
+  "run": "c03d7912"
+}

@@ -10,14 +10,15 @@
 For chunks of 256 KiB, 1 MiB and 4 MiB it appends and fetches them back in the
 text form (base64, DESIGN.md §10.4) and, where the server advertises BINARY
 (RFC 3516), in the binary form: one append at a time, pipelined where LITERAL+
-allows, and in one MULTIAPPEND where offered. Every chunk is compared byte for
+allows, and in one MULTIAPPEND where offered; each batch is fetched back one
+chunk at a time and again with one command. Every chunk is compared byte for
 byte with what was sent. It also reads the quota before and after, scans the
 headers a chunk index needs, and times a small append reaching an idling
 connection while chunks are being uploaded on another.
 
 --parallel runs a different measurement instead: 1 MiB chunks spread over 1, 2,
 4 and 8 connections at once (or the numbers given), appended one at a time and
-in batches where the server can batch, then fetched the same two ways. It
+in batches where the server can batch, then fetched one at a time and with one command a connection. It
 uploads about 130 MB, or about 90 MB where the server cannot batch (Gmail).
 
 --stalwart starts the disposable Stalwart the tests use (needs Docker) and
@@ -252,20 +253,22 @@ def cell(c, folder, run, counter, size, count, binary, mode):
         out['error'] = f'{len(uids)} UIDs for {count} appends'
         return out, uids
 
+    # Fetching does not depend on how the chunks were appended: several UIDs in one command is
+    # plain IMAP (RFC 9051 §6.4.9), so both ways are measured in every cell.
     c.cmd([b'SELECT ' + astring(folder)])
-    got = {}
+    mib = out['envelope_bytes'] / 2**20
     start = time.monotonic()
-    if mode == 'one at a time':
-        for uid in uids:
-            got.update(literals(c.cmd([b'UID FETCH %d (' % uid + item + b')'])[1]))
-        out['fetch'] = 'one at a time'
-    else:
-        got = literals(c.cmd([b'UID FETCH ' + b','.join(b'%d' % u for u in uids) + b' (' + item + b')'])[1])
-        out['fetch'] = 'one command'
-    out['fetch_seconds'] = round(time.monotonic() - start, 3)
-    out['fetch_mib_per_second'] = round(out['envelope_bytes'] / 2**20 / max(out['fetch_seconds'], 1e-6), 2)
-    out['fetched_bytes'] = sum(map(len, got.values()))
-    out['intact'] = all(decoded(got.get(uid, b''), binary) == e for uid, e in zip(uids, envelopes))
+    single = {}
+    for uid in uids:
+        single.update(literals(c.cmd([b'UID FETCH %d (' % uid + item + b')'])[1]))
+    out['fetch_single_seconds'] = round(time.monotonic() - start, 3)
+    out['fetch_single_mib_per_second'] = round(mib / max(out['fetch_single_seconds'], 1e-6), 2)
+    start = time.monotonic()
+    batched = literals(c.cmd([b'UID FETCH ' + b','.join(b'%d' % u for u in uids) + b' (' + item + b')'])[1])
+    out['fetch_batched_seconds'] = round(time.monotonic() - start, 3)
+    out['fetch_batched_mib_per_second'] = round(mib / max(out['fetch_batched_seconds'], 1e-6), 2)
+    out['fetched_bytes'] = sum(map(len, single.values()))
+    out['intact'] = all(decoded(got.get(uid, b''), binary) == e for got in (single, batched) for uid, e in zip(uids, envelopes))
     return out, uids
 
 
@@ -323,7 +326,7 @@ def parallel(connect_raw, folder, run, counter, binary, counts, total=16, size=1
         for mode in ('one at a time',) + ('batched',) * bool({'MULTIAPPEND', 'LITERAL+'} & conns[0].caps):
             envelopes = [chunk(size) for _ in range(total)]
             messages = [message(run, next(counter), e, binary) for e in envelopes]
-            uids, got = [None] * total, {}
+            uids, got, again = [None] * total, {}, {}
 
             def up(c, share):
                 if mode == 'one at a time':
@@ -335,13 +338,13 @@ def parallel(connect_raw, folder, run, counter, binary, counts, total=16, size=1
                         for i, uid in zip(group, append_batch(c, prefix, [messages[i] for i in group], binary)):
                             uids[i] = uid
 
-            def down(c, share):
+            def down_single(c, share):
                 c.cmd([b'NOOP'])    # learn of the others' appends
-                if mode == 'one at a time':
-                    for i in share:
-                        got.update(literals(c.cmd([b'UID FETCH %d (' % uids[i] + item + b')'])[1]))
-                else:
-                    got.update(literals(c.cmd([b'UID FETCH ' + b','.join(b'%d' % uids[i] for i in share) + b' (' + item + b')'])[1]))
+                for i in share:
+                    got.update(literals(c.cmd([b'UID FETCH %d (' % uids[i] + item + b')'])[1]))
+
+            def down_batched(c, share):
+                again.update(literals(c.cmd([b'UID FETCH ' + b','.join(b'%d' % uids[i] for i in share) + b' (' + item + b')'])[1]))
 
             mib = total * size / 2**20
             row = {'connections': k, 'mode': mode, 'form': 'binary' if binary else 'text', 'chunk': size, 'count': total}
@@ -349,14 +352,18 @@ def parallel(connect_raw, folder, run, counter, binary, counts, total=16, size=1
             seconds = run_all(up)
             row['append_seconds'], row['append_mib_per_second'] = round(seconds, 3), round(mib / max(seconds, 1e-6), 2)
             if not errors and all(uids):
-                seconds = run_all(down)
-                row['fetch_seconds'], row['fetch_mib_per_second'] = round(seconds, 3), round(mib / max(seconds, 1e-6), 2)
-                row['intact'] = all(decoded(got.get(uid, b''), binary) == e for uid, e in zip(uids, envelopes))
+                # Both ways of fetching, whatever the append mode was.
+                seconds = run_all(down_single)
+                row['fetch_single_seconds'], row['fetch_single_mib_per_second'] = round(seconds, 3), round(mib / max(seconds, 1e-6), 2)
+                seconds = run_all(down_batched)
+                row['fetch_batched_seconds'], row['fetch_batched_mib_per_second'] = round(seconds, 3), round(mib / max(seconds, 1e-6), 2)
+                row['intact'] = all(decoded(g.get(uid, b''), binary) == e for g in (got, again) for uid, e in zip(uids, envelopes))
             if errors:
                 row['errors'], errors = errors[:4], []
             out.append(row)
             log(f"{k} connections, {mode:13}: " + (str(row['errors']) if 'errors' in row else
-                f"append {row['append_mib_per_second']:6.2f} MiB/s, fetch {row['fetch_mib_per_second']:6.2f} MiB/s, intact {row['intact']}"))
+                f"append {row['append_mib_per_second']:6.2f} MiB/s, fetch one at a time {row['fetch_single_mib_per_second']:6.2f}, "
+                f"one command each {row['fetch_batched_mib_per_second']:6.2f}, intact {row['intact']}"))
         for c in conns:
             c.close()
     return out
@@ -491,7 +498,8 @@ def probe(host, port, user, password, verify=True, name=None, samples=3, wait=60
                     stored += out.get('message_bytes', 0) if 'error' not in out else 0
                     log(f"{form:6} {mode:13} {size // KIB:5} KiB x{count:2}: "
                         + (out.get('error') or f"append {out['append_mib_per_second']:7.2f} MiB/s, "
-                           f"fetch {out['fetch_mib_per_second']:7.2f} MiB/s, intact {out['intact']}"))
+                           f"fetch one at a time {out['fetch_single_mib_per_second']:7.2f}, "
+                           f"in one command {out['fetch_batched_mib_per_second']:7.2f}, intact {out['intact']}"))
                     if uids and kept is None and size == 1024 * KIB:
                         kept = uids[0]
             if kept is not None:
