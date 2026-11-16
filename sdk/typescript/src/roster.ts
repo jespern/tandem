@@ -117,6 +117,13 @@ export class CollectionPolicy {
   listed(epoch:Uint8Array,w:Write):boolean{return this.#inventories.get(b64u(epoch))?.get(Buffer.from(w.record).toString('hex'))?.some(id=>eq(id,writeID(w)))??false;}
   /** Whether the epoch's inventory marks a record deleted: an entry with no writes (§8.3). */
   marks(epoch:Uint8Array,record:Uint8Array):boolean{return this.#inventories.get(b64u(epoch))?.get(Buffer.from(record).toString('hex'))?.length===0;}
+  /** Whether the newest assembled inventory on the roster line marks a record deleted (§8.3). Until a new epoch's
+   * inventory is assembled, the previous one's marks still stand. As the native engines' `recordMarked`. */
+  marked(record:Uint8Array):boolean{
+    const head=this.head;if(!head)return false;
+    for(const id of this.chain(head).reverse()){const epoch=this.epoch(id);if(epoch&&this.#inventories.has(b64u(epoch)))return this.marks(epoch,record);}
+    return false;
+  }
   #precedes(ancestor:Uint8Array,descendant:Uint8Array):boolean{let row=this.#rows.get(b64u(descendant));const seen=new Set<string>();while(row){if(eq(row.write.ref,ancestor))return true;const key=b64u(row.id);if(seen.has(key))break;seen.add(key);row=this.#rows.get(b64u(row.write.ref));}return false;}
   sourceValidity(w:Write):Validity{
     const row=this.#rows.get(b64u(w.ref));if(!row)return hold(w.ref);const source=this.epoch(row.id);

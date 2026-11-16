@@ -153,6 +153,11 @@ verified `DeviceState` view, with `lists`, `records`, `record`, `homeRecord`, `r
 and `offers`. `createList` commits membership, genesis and metadata together; `accept`
 records the grant answer/key in home and sends the signed answer to the owner.
 Lists received as offers stay out of the workspace until accepted.
+`record` returns `undefined` only for a record this device doesn't know. A
+deleted one, including one whose tombstone a key change collected and only an
+inventory deletion mark still names, is a record with `deleted` true and no
+fields or authors, so the app removes its row instead of sending it again;
+`records` lists live records only.
 `writeFields` and `writeHome` commit signed edits locally before
 export. Set adds/removes and record tombstones use the shared merge rules.
 

@@ -147,15 +147,16 @@ function displayCmp(a: Entry, b: Entry): number {
   const x = a.write, y = b.write; return clockCmp(x.dot, y.dot) || cmp(x.author, y.author) || cmp(x.dot.device, y.dot.device) || cmp(a.id, b.id);
 }
 export class RecordState {
-  readonly #hub: Buffer; readonly #scope: Buffer; readonly #id: Buffer; #kept: Entry[] = [];
-  constructor(hub: Uint8Array, scope: Uint8Array, id: Uint8Array) { this.#hub = bytes(hub, 32); this.#scope = bytes(scope, 16); this.#id = bytes(id, 16); }
+  readonly #hub: Buffer; readonly #scope: Buffer; readonly #id: Buffer; readonly #marked: boolean; #kept: Entry[] = [];
+  /** `marked`: an inventory deletion mark (§8.3) stands for the record: deleted, with no writes, fields or authors. */
+  constructor(hub: Uint8Array, scope: Uint8Array, id: Uint8Array, marked = false) { this.#hub = bytes(hub, 32); this.#scope = bytes(scope, 16); this.#id = bytes(id, 16); this.#marked = marked; }
   get kept(): readonly Entry[] { return [...this.#kept]; }
   merge(...entries: Entry[]): void {
     for (const e of entries) { const w = e.write; if (!eq(w.hub, this.#hub) || !eq(w.scope, this.#scope) || !eq(w.record, this.#id)) throw new Error('entry belongs to another record, scope or hub'); }
     const all = new Map([...this.#kept, ...entries].map(e => [e.id.toString('hex'), e]));
     this.#kept = [...all.values()].filter(x => ![...all.values()].some(w => supersedes(w, x))).sort((a, b) => cmp(a.id, b.id));
   }
-  get deleted(): boolean { return this.#kept.some(e => e.write.op === 4); }
+  get deleted(): boolean { return this.#marked || this.#kept.some(e => e.write.op === 4); }
   siblings(field: string): readonly Entry[] { return this.#kept.filter(e => e.write.op === 1 && e.write.field === field).sort((a, b) => displayCmp(b, a)); }
   value(field: string): Buffer | undefined { const e = this.siblings(field)[0]; return e ? bytes(e.write.value) : undefined; }
   elements(field: string): Buffer[] { return [...new Map(this.#kept.filter(e => e.write.op === 2 && e.write.field === field).map(e => { const v = bytes(e.write.element!); return [v.toString('hex'), v] as const; })).values()].sort(cmp); }

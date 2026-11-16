@@ -208,8 +208,9 @@ every later epoch, so it neither shows the record nor signs its edits again. Twe
 deleted record, in inventory fragments: 7,300 deletes a year is 146 KB in a handful of messages,
 against 7,300 messages.
 
-The native engines expose an inventory mark through `Item` as a deleted item,
-including after reopen or a fresh sync; an unknown ID still returns no item.
+Every engine exposes an inventory mark as a deleted item (Swift and Go through `Item`,
+the browser through `DeviceState.record`), including after reopen or a fresh sync; an
+unknown ID still returns no item.
 Marked IDs are included in item-change notifications, while live-record listings
 exclude them. This public distinction retains no old writes, fields or authors:
 the signed inventory remains the evidence of deletion.

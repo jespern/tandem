@@ -158,7 +158,14 @@ export class DeviceState {
   }
   #copy(record:RecordState|undefined,scope:Uint8Array,id:Uint8Array):RecordState|undefined{if(!record)return;const copy=new RecordState(this.#registry.pin.hub,scope,id);copy.merge(...record.kept);return copy;}
   homeRecord(name:string):RecordState|undefined{const id=namedID(name);return this.#copy(this.#homeRecords.get(b64u(id)),homeScope(this.#registry.pin.hub,this.#participant),id);}
-  record(cid:Uint8Array,id:Uint8Array):RecordState|undefined{return this.#copy(this.#collections.get(b64u(cid))?.records.get(b64u(id)),cid,id);}
+  /** One record, deleted or not; undefined means unknown. A record that only an inventory deletion mark still names
+   * (its tombstone collected at a key change) is a deleted record with no fields or authors, so an app can tell it
+   * from one it has never synced and doesn't send it again (§8.3). */
+  record(cid:Uint8Array,id:Uint8Array):RecordState|undefined{
+    const c=this.#collections.get(b64u(cid));if(!c)return;
+    if(c.policy.marked(id))return new RecordState(this.#registry.pin.hub,cid,id,true);
+    return this.#copy(c.records.get(b64u(id)),cid,id);
+  }
   records(cid:Uint8Array):Uint8Array[]{return [...this.#collections.get(b64u(cid))?.records??[]].filter(([id,r])=>id!==b64u(META_RECORD)&&!r.deleted).map(([id])=>unb64u(id)).sort(Buffer.compare);}
   /** A verified historical value for rescue UI; never re-signs it or changes
    * membership. Missing proof/value stays undefined. Returned bytes are copies. */

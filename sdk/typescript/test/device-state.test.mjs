@@ -199,3 +199,19 @@ test('at a key change a deleted record becomes a mark: not carried, not writable
   const assembled=Buffer.concat(fragments.sort((a,b)=>a.part-b.part).map(p=>p.bytes)),inventory=t.parseInventory(assembled);
   assert.deepEqual(inventory.get(shelf.toString('hex')),[],'the mark is carried forward');
 });
+test('a record only a deletion mark still names reads as deleted, not unknown, on this and a fresh device (§8.3)',()=>{
+  const f=fixture(),shelf=t.randomBytes(16),lamp=t.randomBytes(16);
+  for(const r of [shelf,lamp])f.apply(f.state.prepareField(f.cid,r,[{field:'title',op:1,value:Buffer.from('x')}],f.reserve));
+  f.apply(f.state.prepareField(f.cid,shelf,[{field:'',op:4}],f.reserve));
+  const rotation=f.state.prepareCollectionRotation(f.cid,f.reserve);for(const phase of rotation.phases.slice(0,3))f.apply(phase.messages);
+  for(const phase of rotation.phases.slice(3)){if(phase.intent)phase.messages=f.state.prepareIntent(phase.intent,f.reserve,{deliveries:f.messages}).messages;f.apply(phase.messages);}
+  const restored=new t.DeviceState(new t.Registry(f.pin),f.directory,f.participant,f.keys);restored.offerHomeKey(f.homeID,f.homeKey);restored.ingest(f.messages);
+  for(const state of [f.state,restored]){
+    const marked=state.record(f.cid,shelf);
+    assert.equal(marked?.deleted,true,'a deletion mark must read as a deleted record, not an unknown one');
+    assert.deepEqual(marked.kept,[],'a mark carries no writes, fields or authors');assert.equal(marked.value('title'),undefined);
+    assert.equal(state.record(f.cid,lamp)?.deleted,false);
+    assert.equal(state.record(f.cid,t.randomBytes(16)),undefined,'an unknown record stays unknown');
+    assert.deepEqual(state.records(f.cid).map(r=>Buffer.from(r).toString('hex')),[lamp.toString('hex')],'live listings leave marks out');
+  }
+});
