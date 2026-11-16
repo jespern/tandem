@@ -369,7 +369,9 @@ extension Device {
         guard let c = collections[cid], let head = c.head, let current = c.epoch(of: head),
               current == c.genesis || inventory(current) != nil else { return }
         var moved = c, touched: [Bytes] = []
-        for record in try store.records(scope: cid) where record != Roster.record {
+        let marked = inventories[current]?.entries.filter { $0.value.isEmpty }.map(\.key) ?? []
+        let records = Set(try store.records(scope: cid)).union(marked)
+        for record in records.sorted(by: { $0.lexicographicallyPrecedes($1) }) where record != Roster.record {
             // A record with no write in the current epoch, unlisted or marked deleted, isn't there.
             let r = try Self.loadData(store: store, hub: pin.hub, c: c, record: record, inventories: inventories)
             moved.records[record] = r.kept.isEmpty ? nil : r

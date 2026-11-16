@@ -782,7 +782,17 @@ func (d *Device) moveCollection(cid []byte) error {
 		return err
 	}
 	var changed [][]byte
+	touched := map[string]bool{}
 	for _, record := range records {
+		touched[string(record)] = true
+	}
+	for record, writes := range d.inventories[string(current)] {
+		if len(writes) == 0 {
+			touched[record] = true
+		}
+	}
+	for _, key := range sortedKeys(touched) {
+		record := []byte(key)
 		if bytes.Equal(record, rosterRecord) {
 			continue
 		}

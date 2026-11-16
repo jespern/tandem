@@ -539,7 +539,7 @@ func TestGCTombstonesArePacked(t *testing.T) {
 
 // §8.3, §12.3: at a key change a deleted record becomes a mark, its tombstone isn't carried, a late
 // edit of it isn't signed again, writing to it is refused, the mark is carried forward, and a new
-// device never sees the record.
+// device never lists the record as live, but can query its deletion mark.
 func TestGCDeletedRecordsBecomeMarks(t *testing.T) {
 	w := newRotWorld(t)
 	shelf := NewRecordID()
@@ -559,8 +559,8 @@ func TestGCDeletedRecordsBecomeMarks(t *testing.T) {
 		if !marked {
 			t.Fatal("the new inventory marks the deleted record")
 		}
-		if _, ok := d.Item(w.house, shelf); ok {
-			t.Fatal("a marked record is gone")
+		if item, ok := d.Item(w.house, shelf); !ok || !item.Deleted() {
+			t.Fatal("a deletion mark must be observable as a deleted item")
 		}
 		if n := len(try(d.store.Writes(w.house, shelf))); n != 0 {
 			t.Fatalf("%d writes of a marked record kept", n)
@@ -595,8 +595,48 @@ func TestGCDeletedRecordsBecomeMarks(t *testing.T) {
 		t.Fatal("the mark is carried forward")
 	}
 	laptop := open(t, w.f, w.alice.keys, MemoryStore(), w.hub.Connect())
+	updates := events(t, laptop)
 	syncAll(t, laptop, laptop)
+	waitFor(t, updates, itemsOf(w.house, shelf))
 	if got := titles(laptop, w.house); !sameSet(got, set("Milk", "Bread")) {
 		t.Fatal("a new device", got)
+	}
+	if item, ok := laptop.Item(w.house, shelf); !ok || !item.Deleted() {
+		t.Fatal("a fresh device must distinguish a deletion mark from an unknown record")
+	}
+}
+
+func TestGCDeletionMarkReachesOfflineOwnerDevice(t *testing.T) {
+	w := newRotWorld(t)
+	row := NewRecordID()
+	must(t, w.bob.SetField(bg, w.house, row, "title", []byte("Deleted while away")))
+	store := try(OpenStore(filepath.Join(t.TempDir(), "offline.sqlite")))
+	defer store.Close()
+	phone := open(t, w.f, w.bobKeys, store, w.hub.Connect())
+	defer phone.Close()
+	syncAll(t, phone, phone)
+	if item, ok := phone.Item(w.house, row); !ok || item.Deleted() {
+		t.Fatal("offline device did not first confirm the live record")
+	}
+	must(t, w.bob.DeleteRecord(bg, w.house, row))
+	must(t, w.bob.RemoveMember(bg, w.carolID, w.house))
+	syncAll(t, phone)
+	item, ok := phone.Item(w.house, row)
+	if !ok || !item.Deleted() {
+		t.Fatal("offline device sees a marked deletion as unknown")
+	}
+	if len(item.Fields()) != 0 || item.CreatedBy() != nil || item.LastModifiedBy() != nil {
+		t.Fatal("a deletion mark fabricated record data or attribution")
+	}
+	if _, ok := phone.Item(w.house, NewRecordID()); ok {
+		t.Fatal("an unknown record must remain unknown")
+	}
+	if len(try(store.Writes(w.house, row))) != 0 {
+		t.Fatal("public deletion visibility must not retain old writes")
+	}
+	again := try(Reopen(store, w.bobKeys, w.hub.Connect()))
+	defer again.Close()
+	if item, ok := again.Item(w.house, row); !ok || !item.Deleted() {
+		t.Fatal("a durable reopen lost the public deletion mark")
 	}
 }

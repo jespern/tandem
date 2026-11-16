@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 import Tandem
 @testable import TandemEngine
@@ -340,7 +341,7 @@ final class GCTests: XCTestCase {
 
     /// §8.3, §12.3: at a key change a deleted record becomes a mark, its tombstone isn't carried, a late edit of it isn't
     /// signed again, writing to it is refused, a write to it signed anyway is invalid, the mark is carried forward, and a
-    /// new device never sees the record.
+    /// new device never lists the record as live, but can query its deletion mark.
     func testDeletedRecordsBecomeMarks() async throws {
         let w = try await world()
         let shelf = w.alice.newRecordID()
@@ -358,7 +359,7 @@ final class GCTests: XCTestCase {
             let marked = await d.inventory(epoch)?.marks(shelf) == true
             XCTAssertTrue(marked, "the new inventory marks the deleted record")
             let item = await d.item(list: w.house, id: shelf)
-            XCTAssertNil(item, "a marked record is gone")
+            XCTAssertEqual(item?.deleted, true, "a deletion mark must be observable as a deleted item")
             let n = try await writes(d, w.house, shelf)
             XCTAssertEqual(n, 0, "writes of a marked record kept")
         }
@@ -378,9 +379,46 @@ final class GCTests: XCTestCase {
         let carried = await w.bob.inventory(epoch)?.marks(shelf) == true
         XCTAssertTrue(carried, "the mark is carried forward")
         let laptop = try Device.open(genesis: w.f.genesis, directoryKey: w.f.directoryKey, keys: w.aliceKeys, store: try Store(path: ":memory:"), hub: await w.hub.connect())
+        let updates = await laptop.events()
         try await sync(laptop, laptop)
+        _ = try await LiveTests.next(updates) {
+            if case let .items(list, records) = $0 { return list == w.house && records.contains(shelf) }
+            return false
+        }
         let fresh = await titles(laptop, w.house)
         XCTAssertEqual(fresh, ["Milk", "Bread"], "a new device")
+        let marked = await laptop.item(list: w.house, id: shelf)
+        XCTAssertEqual(marked?.deleted, true, "a fresh device must distinguish a deletion mark from an unknown record")
+    }
+
+    func testDeletionMarkReachesOfflineOwnerDevice() async throws {
+        let w = try await world()
+        let row = w.bob.newRecordID()
+        try await w.bob.setField(list: w.house, record: row, field: "title", value: Bytes("Deleted while away".utf8))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("tandem-mark-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try Store(path: directory.appendingPathComponent("offline.sqlite").path)
+        let phone = try Device.open(genesis: w.f.genesis, directoryKey: w.f.directoryKey, keys: w.bobKeys,
+                                    store: store, hub: await w.hub.connect())
+        try await sync(phone, phone)
+        let live = await phone.item(list: w.house, id: row)
+        XCTAssertEqual(live?.deleted, false)
+        try await w.bob.deleteRecord(list: w.house, record: row)
+        try await w.bob.remove(w.carolID, from: w.house)
+        try await phone.sync()
+        let marked = await phone.item(list: w.house, id: row)
+        XCTAssertEqual(marked?.deleted, true, "offline device sees a marked deletion as unknown")
+        XCTAssertEqual(marked?.fields, [])
+        XCTAssertNil(marked?.createdBy)
+        XCTAssertNil(marked?.lastModifiedBy)
+        let unknown = await phone.item(list: w.house, id: phone.newRecordID())
+        XCTAssertNil(unknown)
+        let retained = try store.writes(scope: w.house, record: row)
+        XCTAssertTrue(retained.isEmpty, "public deletion visibility must not retain old writes")
+        let again = try Device.reopen(store: store, keys: w.bobKeys, hub: await w.hub.connect())
+        let reopened = await again?.item(list: w.house, id: row)
+        XCTAssertEqual(reopened?.deleted, true, "a durable reopen lost the public deletion mark")
     }
 
     // MARK: Files

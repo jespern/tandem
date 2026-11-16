@@ -22,12 +22,13 @@ type FieldValue struct {
 
 // Item is a record of a list as this device holds it: an immutable snapshot (§9).
 type Item struct {
-	ID     []byte
-	record *tandem.Record
+	ID            []byte
+	record        *tandem.Record
+	markedDeleted bool
 }
 
-// Deleted reports whether a delete is among its writes: a deleted record stays deleted (§9.2).
-func (i Item) Deleted() bool { return i.record.Deleted() }
+// Deleted reports a tombstone or an inventory deletion mark (§9.2, §8.3).
+func (i Item) Deleted() bool { return i.markedDeleted || i.record.Deleted() }
 
 // Value is the displayed value of a field: of concurrent values, the one §9.2 orders first.
 func (i Item) Value(field string) ([]byte, bool) { return i.record.Value(field) }
@@ -98,11 +99,28 @@ func cmpDot(a, b tandem.Dot) int {
 	return 0
 }
 
-// Item is one record of a list, deleted or not; false if this device holds no write of it.
+// Item is one record of a list, including tombstones and inventory deletion marks;
+// false means the record is unknown. A mark carries no old fields or attribution.
 func (d *Device) Item(list, id []byte) (Item, bool) {
 	defer d.read()()
 	c := d.collections[string(list)]
-	if c == nil || c.records[string(id)] == nil {
+	if c == nil {
+		return Item{}, false
+	}
+	for _, ref := range slices.Backward(chain(c, c.head())) {
+		epoch := c.epochOf(ref)
+		if inv, known := d.inventories[string(epoch)]; known {
+			if inv.Marks(id) {
+				r, err := tandem.NewRecord(d.pin.Hub, list, id)
+				if err != nil {
+					return Item{}, false
+				}
+				return Item{ID: id, record: r, markedDeleted: true}, true
+			}
+			break
+		}
+	}
+	if c.records[string(id)] == nil {
 		return Item{}, false
 	}
 	return Item{ID: id, record: c.records[string(id)]}, true

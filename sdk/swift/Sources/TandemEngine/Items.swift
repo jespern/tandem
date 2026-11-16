@@ -16,9 +16,14 @@ public struct FieldValue: Equatable, Sendable {
 public struct Item: Sendable {
     public let id: Bytes
     let record: Record
+    let markedDeleted: Bool
 
-    /// Whether a delete is among its writes: a deleted record stays deleted (§9.2).
-    public var deleted: Bool { record.deleted }
+    init(id: Bytes, record: Record, markedDeleted: Bool = false) {
+        self.id = id; self.record = record; self.markedDeleted = markedDeleted
+    }
+
+    /// A tombstone or an inventory deletion mark (§9.2, §8.3).
+    public var deleted: Bool { markedDeleted || record.deleted }
 
     /// The displayed value of a field: of concurrent values, the one §9.2 orders first.
     public func value(_ field: String) -> Bytes? { record.value(Bytes(field.utf8)) }
@@ -50,10 +55,23 @@ public struct Item: Sendable {
 }
 
 extension Device {
-    /// One record of a list, deleted or not; nil if this device holds no write of it.
+    /// One record, including tombstones and inventory deletion marks; nil means
+    /// unknown. A mark carries no old fields or attribution.
     public func item(list cid: Bytes, id: Bytes) -> Item? {
         try? takeExternalChanges()
-        return collections[cid]?.records[id].map { Item(id: id, record: $0) }
+        guard let c = collections[cid] else { return nil }
+        if let head = c.head {
+            // Until a new inventory is assembled, reads retain the previous
+            // epoch's state, including its deletion marks.
+            for ref in chain(c, to: head).reversed() {
+                guard let epoch = c.epoch(of: ref), let inv = inventories[epoch] else { continue }
+                if inv.marks(id), let empty = try? Record(hub: pin.hub, scope: cid, id: id) {
+                    return Item(id: id, record: empty, markedDeleted: true)
+                }
+                break
+            }
+        }
+        return c.records[id].map { Item(id: id, record: $0) }
     }
 
     /// The list's records that aren't deleted, without the named ones, by ID.

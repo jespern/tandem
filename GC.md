@@ -208,6 +208,12 @@ every later epoch, so it neither shows the record nor signs its edits again. Twe
 deleted record, in inventory fragments: 7,300 deletes a year is 146 KB in a handful of messages,
 against 7,300 messages.
 
+The native engines expose an inventory mark through `Item` as a deleted item,
+including after reopen or a fresh sync; an unknown ID still returns no item.
+Marked IDs are included in item-change notifications, while live-record listings
+exclude them. This public distinction retains no old writes, fields or authors:
+the signed inventory remains the evidence of deletion.
+
 What is given up: a write made concurrently with a delete is kept under the tombstone today, and
 the app never shows it (the record is deleted). After a mark it is gone. A blob manifest kept under
 a tombstone is not live (§17.7), so nothing about files changes.

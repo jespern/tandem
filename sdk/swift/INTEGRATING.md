@@ -98,6 +98,14 @@ try await device.write(list: list, record: Device.metaRecord, [.set("icon", Byte
 await device.item(list: list, id: Device.metaRecord)?.text("icon")
 ```
 
+`item(list:id:)` distinguishes unknown records (`nil`) from deleted records
+(`item.deleted == true`). This includes inventory deletion marks after a key
+change has collected the original tombstone. Such an item has no old fields or
+author attribution. The corresponding `.items` event includes marked IDs even
+when this device never held their writes; `items` and `records` list live records
+only. Applications can therefore delete a confirmed local row without trying to
+resend it as an unknown record.
+
 - **Writes are local first.** A write is saved and merged before it goes out. If the hub can't be reached it is kept, reported as `.syncFailed`, and published by the next sync. There is nothing like CloudKit's dirty fields or system fields to track.
 - **Merge is per field and needs no code in the app.** Concurrent edits of different fields both stay. Concurrent edits of one field leave every value (`item.values(field)`), the displayed one first; writing the field again settles it. That replaces Liszto's `notesBase`/`notesSent`: show a conflict when `values("notes").count > 1`, and the user's next edit resolves it. Set fields (tags) merge as add-wins sets; that replaces `tagsBase`/`tagsSent`.
 - **Field values are bytes.** Pick one encoding per field and keep it: UTF-8 for text, a single byte for flags, the record ID's 16 bytes for a parent, your sort key's bytes for order. Unknown fields from newer app versions are kept and synced.
