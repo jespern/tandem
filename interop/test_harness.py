@@ -37,6 +37,26 @@ class HarnessTests(unittest.TestCase):
             device('echo')
         self.assertNotIsInstance(caught.exception, Rejected)
 
+    def test_driver_deadline_is_a_timeout_not_a_rejection(self):
+        # A hung command the driver gives up on answers a timeout; it must never pass as an expected refusal.
+        device = self.driver('import sys,json\nc=json.loads(sys.stdin.readline())\nprint(json.dumps(dict(ok=False,error="context deadline exceeded",timeout=True,d=c["deadlineSeconds"])),flush=True)\nsys.stdin.read()', timeout=5)
+        with self.assertRaisesRegex(Failed, 'timed out during awaitBlob') as caught:
+            device('awaitBlob')
+        self.assertNotIsInstance(caught.exception, Rejected)
+        self.assertIsNotNone(device.process.returncode, 'the driver keeps running after a timeout')
+
+    def test_driver_deadline_comes_before_the_harness_deadline(self):
+        device = self.driver('import sys,json\nfor line in sys.stdin:\n c=json.loads(line); print(json.dumps(dict(ok=True,d=c["deadlineSeconds"])),flush=True)', timeout=10)
+        self.assertLess(device('echo')['d'], 10)
+
+    def test_a_late_reply_is_never_the_next_answer(self):
+        # The harness gives up first: it stops the driver, so the stale reply can't answer the next command.
+        device = self.driver('import sys,time,json\nsys.stdin.readline(); time.sleep(0.5)\nprint(json.dumps(dict(ok=True,value="late")),flush=True)\nsys.stdin.read()', timeout=0.1)
+        with self.assertRaisesRegex(Failed, 'timed out during first'):
+            device('first')
+        with self.assertRaisesRegex(Failed, 'not running'):
+            device('second')
+
     def test_rejection_is_an_explicit_driver_reply(self):
         device = self.driver('import sys,json\nsys.stdin.readline()\nprint(json.dumps(dict(ok=False,error="refused")),flush=True)')
         with self.assertRaisesRegex(Rejected, 'refused'):

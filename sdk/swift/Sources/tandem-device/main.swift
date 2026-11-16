@@ -19,6 +19,11 @@ actor Driver {
     var feed: FixtureFeed?, faultBlobs: FixtureBlobs?
     var runner: Task<Void, any Error>?
 
+    func fixtureBlobs() throws -> FixtureBlobs {
+        guard let faultBlobs else { throw Failure(message: "no blob folder yet: useBlobs first") }
+        return faultBlobs
+    }
+
     func deviceKeys() throws -> DeviceKeys {
         if let keys { return keys }
         let result: DeviceKeys
@@ -157,22 +162,28 @@ actor Driver {
             return ["participant": B64u.encode(me.participant), "certificate": B64u.encode(me.certificate),
                     "awaitingApproval": try await dev().awaitingApproval]
         case "offline":
-            await feed!.setOffline(c["value"] as? Bool ?? false)
+            guard let feed else { throw Failure(message: "no hub yet") }
+            await feed.setOffline(c["value"] as? Bool ?? false)
             return [:]
         case "run":
             guard runner == nil else { throw Failure(message: "already running") }
             let d = try dev()
-            runner = Task { try await d.run() }
-            await feed!.waitForWatch()
+            guard let feed else { throw Failure(message: "no hub yet") }
+            runner = Task {
+                do { try await d.run(); await feed.runEnded(Failure(message: "run ended")) }
+                catch { await feed.runEnded(error); throw error }
+            }
+            try await feed.waitForWatch()   // or the error that ended the run first
             return [:]
         case "awaitBlob":
             let d = try dev(), list = try b("list"), record = try b("record"), name = try s("name"), state = try s("state")
             let names: [BlobState: String] = [.here: "here", .remote: "remote", .downloading: "downloading", .unavailable: "unavailable", .unreadable: "unreadable", .uploading: "uploading"]
             var events = await d.events().makeAsyncIterator()
+            // Any change can be the one: the state is read again. Another operation's sync failure isn't this answer;
+            // the command's deadline bounds the wait.
             while true {
                 if let info = await d.blob(list: list, record: record, name: name), names[info.state] == state { return ["state": state] }
-                guard let event = await events.next() else { throw Failure(message: "events ended") }
-                if case let .syncFailed(message) = event { throw Failure(message: message) }
+                guard await events.next() != nil else { throw Failure(message: "events ended") }
             }
         case "manifest":
             return ["value": try await dev().value(list: b("list"), record: b("record"), field: "_blob:" + s("name")).map(B64u.encode) ?? NSNull()]
@@ -264,12 +275,12 @@ actor Driver {
             return [:]
         case "blobFault":
  guard (c["after"] as? Int ?? 0)>=0 else {throw Failure(message: "negative fault boundary")}
-            await faultBlobs!.fault(after: c["after"] as? Int ?? 0, lostAck: c["lostAck"] as? Bool ?? false)
+            try await fixtureBlobs().fault(after: c["after"] as? Int ?? 0, lostAck: c["lostAck"] as? Bool ?? false)
             return [:]
         case "clearBlobFault":
-            await faultBlobs!.clear(); return [:]
+            try await fixtureBlobs().clear(); return [:]
         case "blobFaultStatus":
-            return ["stored": await faultBlobs!.stored]
+            return ["stored": try await fixtureBlobs().stored]
         case "cancelAttach":
             try await dev().cancelAttach(list: b("list"), record: b("record"), name: s("name")); return [:]
         case "settleBlobs":
@@ -297,7 +308,8 @@ actor Driver {
         case "dropChunk":
             let m = try await manifest(try b("list"), try b("record"), try s("name")), all = try await refs()
             let address = m.chunks![c["index"] as? Int ?? 0].address
-            try await blobs!.destroy(ids: all.filter { $0.address == address }.map(\.id))
+            guard let blobs else { throw Failure(message: "no blob folder yet: useBlobs first") }
+            try await blobs.destroy(ids: all.filter { $0.address == address }.map(\.id))
             return [:]
         default:
             throw Failure(message: "unknown op")
@@ -305,20 +317,63 @@ actor Driver {
     }
 }
 
-let driver = Driver()
-for try await line in FileHandle.standardInput.bytes.lines {
-    var reply: [String: Any]
-    do {
-        guard let command = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { throw Failure(message: "not an object") }
-        reply = try await driver.handle(command)
-        reply["ok"] = true
-    } catch let f as Failure {
-        reply = ["ok": false, "error": f.message]
-    } catch {
-        reply = ["ok": false, "error": "\(error)"]
+/// Serializes a reply line.
+func line(_ reply: [String: Any]) -> Data {
+    (try? JSONSerialization.data(withJSONObject: reply, options: [.sortedKeys]))
+        ?? (try! JSONSerialization.data(withJSONObject: ["ok": false, "error": "unencodable reply"]))
+}
+
+extension Driver {
+    /// One command line to its reply line: {"ok":true,…} or {"ok":false,"error":"…"}.
+    func reply(_ text: String) async -> Data {
+        var reply: [String: Any]
+        do {
+            guard let command = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { throw Failure(message: "not an object") }
+            reply = try await handle(command)
+            reply["ok"] = true
+        } catch let f as Failure {
+            reply = ["ok": false, "error": f.message]
+        } catch {
+            reply = ["ok": false, "error": "\(error)"]
+        }
+        return line(reply)
     }
-    let data = try JSONSerialization.data(withJSONObject: reply, options: [.sortedKeys])
-    FileHandle.standardOutput.write(data + Data("\n".utf8))
+}
+
+/// A reply between the command and its deadline: whichever comes first answers, once.
+final class Answer: @unchecked Sendable {
+    // @unchecked: the lock guards both fields.
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Data, Never>?
+    private var deadline: Task<Void, Never>?
+    init(_ continuation: CheckedContinuation<Data, Never>) { self.continuation = continuation }
+    func arm(_ task: Task<Void, Never>) { lock.lock(); deadline = task; lock.unlock() }
+    func resume(_ data: Data) {
+        lock.lock(); let c = continuation, t = deadline; continuation = nil; deadline = nil; lock.unlock()
+        t?.cancel()
+        c?.resume(returning: data)
+    }
+}
+
+/// Runs one command with its deadline (`deadlineSeconds`, default 120), as the Go driver does. A command still running
+/// at the deadline answers a timeout, which the harness doesn't count as a refusal; the harness then stops this process.
+func answer(_ text: String) async -> Data {
+    let command = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]
+    let seconds = (command?["deadlineSeconds"] as? Double).flatMap { $0 > 0 ? $0 : nil } ?? 120
+    return await withCheckedContinuation { continuation in
+        let answer = Answer(continuation)
+        let work = Task { answer.resume(await driver.reply(text)) }
+        answer.arm(Task {   // a safety net behind the command's own events, not a polling loop
+            guard (try? await Task.sleep(for: .seconds(seconds))) != nil else { return }
+            work.cancel()
+            answer.resume(line(["ok": false, "error": "deadline exceeded", "timeout": true]))
+        })
+    }
+}
+
+let driver = Driver()
+for try await text in FileHandle.standardInput.bytes.lines {
+    FileHandle.standardOutput.write(await answer(text) + Data("\n".utf8))
 }
 
 await driver.stop()

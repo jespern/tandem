@@ -6,6 +6,7 @@
 See interop/README.md for credential setup, coverage and fault boundaries.
 """
 import argparse
+import copy
 from contextlib import ExitStack
 import itertools
 import json
@@ -289,7 +290,7 @@ def run(config, provider, first, second, scenarios, timeout):
             try:
                 scenario(new, hub)
             except Exception as exc:
-                error = str(exc)
+                error = str(exc) or type(exc).__name__  # an empty message must never read as success
             finally:
                 for d in devices:
                     try:
@@ -303,7 +304,7 @@ def run(config, provider, first, second, scenarios, timeout):
         result = dict(provider=provider, sender=first, receiver=second, scenario=scenario.__name__,
                       seconds=round(time.monotonic() - started, 3), ok=error is None)
         if hasattr(scenario, 'details'):
-            result['details'] = scenario.details
+            result['details'] = copy.deepcopy(scenario.details)  # this run's, not the last pair's
         if error:
             for secret in (hub['user'], hub['password']):
                 error = error.replace(secret, '[redacted]')

@@ -25,6 +25,11 @@ class Rejected(Failed):
     pass
 
 
+# The driver's own deadline is this share of the harness's, so a hung command answers as a timeout
+# well before the harness gives up on the process.
+DRIVER_DEADLINE_SHARE = 0.8
+
+
 def b64u(b):
     return base64.urlsafe_b64encode(b).rstrip(b'=').decode()
 
@@ -65,8 +70,11 @@ class Device:
                 args['directory'] = str(self.directory)
         if op == 'useBlobs':
             self.blob_options = dict(args)
+        if self.process.poll() is not None or self.process.stdin.closed:
+            raise Failed(f'{self.name} ({self.engine}) is not running for {op}')
+        command = dict(op=op, deadlineSeconds=self.timeout * DRIVER_DEADLINE_SHARE, **args)
         try:
-            self.process.stdin.write((json.dumps(dict(op=op, deadlineSeconds=self.timeout, **args)) + '\n').encode())
+            self.process.stdin.write((json.dumps(command) + '\n').encode())
             self.process.stdin.flush()
         except BrokenPipeError:
             raise Failed(f'{self.name} ({self.engine}) exited during {op}') from None
@@ -75,6 +83,8 @@ class Device:
             selector.register(self.process.stdout, selectors.EVENT_READ)
             while b'\n' not in self.buffer:
                 if not selector.select(max(0, deadline - time.monotonic())):
+                    # Stop the process: a late reply must never be read as the next command's.
+                    self.kill()
                     raise Failed(f'{self.name} ({self.engine}) timed out during {op}')
                 part = os.read(self.process.stdout.fileno(), 65536)
                 if not part:
@@ -83,6 +93,10 @@ class Device:
         line, self.buffer = self.buffer.split(b'\n', 1)
         reply = json.loads(line)
         if not reply.pop('ok'):
+            if reply.get('timeout'):
+                # The driver ran out of time: a hang, not a refusal. Its command may still be running.
+                self.kill()
+                raise Failed(f'{self.name} ({self.engine}) timed out during {op}: {reply["error"]}')
             raise Rejected(f'{self.name} ({self.engine}) {op}: {reply["error"]}')
         return reply
 
@@ -97,12 +111,17 @@ class Device:
         if self.blob_options is not None:
             self('useBlobs', **self.blob_options)
 
-    def kill(self):
+    def die(self):
+        """SIGKILL and reap, leaving the pipes open: a thread reading them sees end of file, not a closed descriptor."""
         if self.process.poll() is None:
             self.process.kill()
         self.process.wait(timeout=10)
-        self.process.stdin.close()
-        self.process.stdout.close()
+
+    def kill(self):
+        self.die()
+        for pipe in (self.process.stdin, self.process.stdout):
+            if not pipe.closed:
+                pipe.close()
 
     def close(self):
         try:

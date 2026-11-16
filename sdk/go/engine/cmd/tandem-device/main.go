@@ -69,6 +69,9 @@ func (d *driver) blobOp(ctx context.Context, dev *engine.Device, op string, a ar
 		d.faultBlobs = &fixtureBlobs{BlobHub: b}
 		return nil, true, dev.UseBlobs(d.faultBlobs, engine.BlobSettings{ChunkSize: int(size), StoreLimit: int64(limit)})
 	}
+	if (op == "blobFault" || op == "clearBlobFault" || op == "blobFaultStatus") && d.faultBlobs == nil {
+		return nil, true, errors.New("no blob folder yet: useBlobs first")
+	}
 	if op == "blobFault" {
 		n, _ := a["after"].(float64)
 		if n < 0 {
@@ -416,12 +419,9 @@ func (d *driver) handle(ctx context.Context, a args) (map[string]any, error) {
 				return map[string]any{"state": blobStates[b.State]}, nil
 			}
 			select {
-			case e, ok := <-events:
+			case _, ok := <-events: // any change can be the one: the state is read again
 				if !ok {
 					return nil, errors.New("device event stream ended")
-				}
-				if e.Kind == engine.EventSyncFailed {
-					return nil, errors.New(e.Message)
 				}
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -598,9 +598,11 @@ func main() {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(seconds*float64(time.Second)))
 			r, err := d.handle(ctx, a)
+			timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
 			cancel()
 			if err != nil {
-				reply = map[string]any{"ok": false, "error": err.Error()}
+				// A command that ran out of time didn't refuse: the harness must not count it as a rejection.
+				reply = map[string]any{"ok": false, "error": err.Error(), "timeout": timedOut}
 			} else {
 				for k, v := range r {
 					reply[k] = v

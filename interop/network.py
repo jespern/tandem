@@ -13,6 +13,8 @@ def wire_scenario(kind, discard_partial=False):
     details = dict(fault=kind, discard_partial=discard_partial, evidence=[])
 
     def scenario(new, hub):
+        details.clear()
+        details.update(fault=kind, discard_partial=discard_partial, evidence=[])
         with WireProxy(hub) as proxy:
             details['evidence'] = proxy.evidence
             bob, alice, _, lst = world(proxy.route(new, hub), hub)
@@ -46,9 +48,13 @@ def wire_scenario(kind, discard_partial=False):
                 else:
                     alice('run')
                     proxy.arm('idle'); proxy.assert_fired()
-                    # Restart explicitly after a surfaced network failure; no
-                    # assumption that the engine silently retries its Run loop.
-                    alice.restart()
+                    # No restart and no explicit sync: the running engine must reconnect its
+                    # subscription by itself, and the next change reaches Alice by push.
+                    later, more = target(lst), os.urandom(2 * CHUNK + 7)
+                    attach(bob, later, more)
+                    alice('awaitBlob', **later, state='remote')
+                    fetch(alice, later, more)
+                    details['recovered_by_push'] = True
             alice('sync'); fetch(alice, t, data)
             for d in (bob, alice):
                 d('sync'); d('settleBlobs')
@@ -69,6 +75,8 @@ def wire_crash(kind):
     details = dict(fault=kind, evidence=[])
 
     def scenario(new, hub):
+        details.clear()
+        details.update(fault=kind, evidence=[])
         with WireProxy(hub) as proxy:
             details['evidence'] = proxy.evidence
             bob, alice, _, lst = world(proxy.route(new, hub), hub)
@@ -77,19 +85,20 @@ def wire_crash(kind):
             if kind == 'download':
                 attach(bob, t, data); alice('sync')
                 victim = alice
-            proxy.arm(kind, skip=4 if kind == 'download' else 0)
+            # The proxy holds the connection at the boundary: the engine is still waiting there when it dies.
+            proxy.arm(kind, skip=4 if kind == 'download' else 0, hold=True)
             with ThreadPoolExecutor(max_workers=1) as executor:
                 work = executor.submit(fetch, victim, t, data) if kind == 'download' else executor.submit(attach, victim, t, data)
                 if not proxy.fired.wait(victim.timeout):
                     victim.kill()
                     raise Failed('no real socket event reached the crash boundary')
-                victim.kill()  # SIGKILL is triggered by the proxy event, never a sleep.
+                victim.die()  # SIGKILL is triggered by the proxy event, never a sleep; the pipes stay open for the reader.
                 check('actual abrupt process death', victim.process.returncode, -signal.SIGKILL)
                 details['signal'] = 'SIGKILL'
                 try:
                     work.result(timeout=10)
-                except (Failed, OSError, ValueError):
-                    pass  # The intentional death may interrupt the harness's pipe read too.
+                except Failed:
+                    pass  # The reader sees the death as end of file.
             victim.restart(); victim('sync'); victim('settleBlobs')
             alice('sync'); fetch(alice, t, data)
             bob('sync'); bob('settleBlobs')

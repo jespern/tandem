@@ -70,22 +70,30 @@ Each ordered pair exercises eight scenarios:
 | `upload` | Abort both sockets inside an APPEND literal; reopen and resume. |
 | `append_ack` | Observe the server's tagged successful APPEND result, discard it and abort; retry reuses accepted messages. |
 | `download` | Finish four chunks, then cut inside a body literal and again on the transport's one retry; durable progress resumes after restart. |
-| `idle` | Abort an active IDLE subscription, then reopen and reconcile. |
+| `idle` | Abort an active IDLE subscription of a running engine; with no restart and no explicit sync, the next change must reach it by push. |
 | `download_missing_partial` | As above, then remove the partial file while retaining its saved bitmap; retry must start safely. |
-| `crash_upload` | The actual upload-cut event triggers SIGKILL during the operation. |
-| `crash_append_ack` | The accepted-append event triggers SIGKILL before recovery. |
-| `crash_download` | A body-cut event triggers SIGKILL while a download is active. |
+| `crash_upload` | The proxy holds the connection inside an APPEND literal and SIGKILLs the engine there. |
+| `crash_append_ack` | The proxy holds back the server's tagged successful APPEND and SIGKILLs the engine before it sees it. |
+| `crash_download` | The proxy holds the connection inside a body literal and SIGKILLs the engine while the download waits. |
 
 Each cut records small evidence: literal size/forwarded byte count, successful
 server acknowledgement or active subscription. A fault that never fires fails
-the scenario. Crash cases require an actual SIGKILL exit status. Downloads check
+the scenario. Crash cases hold the connection instead of cutting it, so the engine
+is still waiting at the boundary when it dies, and require an actual SIGKILL exit
+status; the harness's pipes stay open until its reader sees the death. Downloads check
 the durable bitmap after a complete batch; all recovered transfers check exact
 contents and one physical message per chunk. Deadlines are safety nets behind
 socket, pipe and engine events, never polling or timed crash scheduling.
 
 Proxy regressions cover FETCH bodies following header literals, CRLF on IDLE,
-short headers versus skipped bodies, unchanged forwarded prefixes, and requiring
-a real tagged success before discarding an acknowledgement.
+short headers versus skipped bodies, unchanged forwarded prefixes, requiring
+a real tagged success before discarding an acknowledgement, a hold that stops
+forwarding without closing, and a rule another connection used meanwhile.
+
+A driver's deadline for a command is 80% of the harness's. A command that runs
+out of time answers a timeout, never a refusal, so it can't pass as an expected
+rejection; the harness stops a driver that timed out, so a late reply can't
+answer the next command (`test_harness.py`).
 
 ## Confirmed failures and fixes
 
@@ -100,10 +108,11 @@ provider scenario in `files.py`.
 | A removed uploader's old file reappears on re-admission | Pending uploads were rejected only at commit, which could never run without the new epoch's key. Invalid pending operations are now discarded when revocation is learned and before worker transfers. The regression also covers writer-to-reader downgrade and later promotion. |
 | A successful fetch returns a missing path | Eviction removed a file larger than the cache budget immediately after downloading it. Eviction now retains the file being returned and can remove it on the next fetch. |
 
-The manifest isolation fix also has a deterministic Go race regression: a good
-request waits on an in-flight bad layout with the same content hash, then must
-complete independently. Test synchronization uses a blocked fetch and a context
-wait handshake rather than sleeps.
+The manifest isolation fix also has a deterministic race regression in both
+engines (Go `TestBlobConcurrentLayoutsDoNotShareFailure`, Swift
+`testConcurrentLayoutsDoNotShareFailure`): a good request waits on an in-flight
+bad layout with the same content hash, then must complete independently. Test
+synchronization uses a blocked fetch, without sleeps.
 
 An additional lifecycle scenario deletes and recreates only its isolated blob
 folder, restores actual encrypted messages, and requires a real UIDVALIDITY

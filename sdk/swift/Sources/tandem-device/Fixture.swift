@@ -5,14 +5,22 @@ import Tandem
 // successful real append. These fixtures are not linked into the SDK libraries.
 actor FixtureFeed: PushStore {
     let inner: any PushStore
-    var offline = false, watching = false
-    var waiters: [CheckedContinuation<Void, Never>] = []
+    var offline = false, watching = false, ended: (any Error)?
+    var waiters: [CheckedContinuation<Void, any Error>] = []
     init(_ inner: any PushStore) { self.inner = inner }
     func setOffline(_ value: Bool) { offline = value }
     func check() throws { if offline { throw Failure(message: "injected transport interruption") } }
-    func waitForWatch() async {
+    /// Returns once the run's watch is up, or throws what ended the run before it.
+    func waitForWatch() async throws {
         if watching { return }
-        await withCheckedContinuation { waiters.append($0) }
+        if let ended { throw ended }
+        try await withCheckedThrowingContinuation { waiters.append($0) }
+    }
+    func runEnded(_ error: any Error) {
+        guard !watching else { return }
+        ended = error
+        for waiter in waiters { waiter.resume(throwing: error) }
+        waiters.removeAll()
     }
     func watch() async throws -> AsyncThrowingStream<Void, any Error> {
         try check()

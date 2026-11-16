@@ -25,6 +25,8 @@ class Connection:
     blobs: bool = False
     idle: bool = False
     append_blobs: bool = False
+    held: bool = False
+    release: asyncio.Event = field(default_factory=asyncio.Event)  # ends a hold; the shutdown cancels it anyway
 
     def abort(self):
         self.downstream.transport.abort()
@@ -108,13 +110,20 @@ class WireProxy:
             self.tasks.discard(task)
 
     def cut(self, c, kind, **proof):
-        self.evidence.append(dict(kind=kind, **proof))
-        if self.rule.get('repeat', 1) > 1:
-            self.rule['repeat'] -= 1
+        """Applies the armed rule once. A held connection stops forwarding without closing, so the process at the
+        other end can be killed at that boundary before it learns anything; the shutdown or its death closes it."""
+        rule = self.rule
+        self.evidence.append(dict(kind=kind, **proof, **({'held': True} if rule.get('hold') else {})))
+        if rule.get('repeat', 1) > 1:
+            rule['repeat'] -= 1
         else:
             self.rule = None
-        c.abort()
+        if rule.get('hold'):
+            c.held = True
+        else:
+            c.abort()
         self.fired.set()
+        return c.held
 
     async def relay(self, reader, writer, c, client):
         while True:
@@ -137,7 +146,8 @@ class WireProxy:
             if not client and parts[0] in c.commands:
                 verb = c.commands.pop(parts[0])
                 if self.rule and self.rule['kind'] == 'append_ack' and verb == b'APPEND' and c.append_blobs and parts[1].upper() == b'OK':
-                    self.cut(c, 'append_ack', server_accepted=True)
+                    if self.cut(c, 'append_ack', server_accepted=True):
+                        await c.release.wait()  # held until the connection or the proxy ends
                     return  # The tagged success never reaches the client.
             writer.write(line)
             await writer.drain()
@@ -154,26 +164,29 @@ class WireProxy:
                 eligible = False
             while forwarded < length:
                 remaining = length - forwarded
-                armed = self.rule and self.rule['kind'] == kind and eligible
+                # The rule as of this step: another connection may use it while this one awaits.
+                rule = self.rule if self.rule and self.rule['kind'] == kind and eligible else None
                 n = min(65536, remaining)
-                if armed:
-                    n = min(n, max(1, self.rule['after'] - forwarded))
+                if rule:
+                    n = min(n, max(1, rule['after'] - forwarded))
                 body = await reader.readexactly(n)
                 writer.write(body)
                 await writer.drain()
                 forwarded += len(body)
-                if armed and forwarded >= self.rule['after']:
-                    self.cut(c, kind, literal_bytes=length, forwarded_bytes=forwarded)
+                if rule and rule is self.rule and forwarded >= rule['after']:
+                    if self.cut(c, kind, literal_bytes=length, forwarded_bytes=forwarded):
+                        await c.release.wait()  # held until the connection or the proxy ends
                     return
 
-    def arm(self, kind, after=8192, skip=0, repeat=1):
+    def arm(self, kind, after=8192, skip=0, repeat=1, hold=False):
+        """`hold`: stop forwarding at the boundary instead of cutting, for a crash there."""
         if kind not in ('upload', 'download', 'append_ack', 'idle') or after < 1 or skip < 0 or repeat < 1:
             raise ValueError('invalid wire fault')
         done = threading.Event()
         self.fired.clear()
 
         def set_rule():
-            self.rule = dict(kind=kind, after=after, skip=skip, repeat=repeat)
+            self.rule = dict(kind=kind, after=after, skip=skip, repeat=repeat, hold=hold)
             if kind == 'idle':
                 for c in self.connections:
                     if c.idle:
