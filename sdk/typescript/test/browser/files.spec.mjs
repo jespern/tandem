@@ -89,6 +89,27 @@ test('a file attached offline stays pending across a reload, is not on the feed,
   expect(result).toEqual({offline: {state: 'uploading', problem: true, chunks: 0}, other: {title: 'Scan', file: null, mine: null}, reloaded: 'uploading', after: 'here', problem: null, same: true, counts: [1, 1, 1, 1]});
 });
 
+test('a file whose commit was not sent before a reload still reaches the other device', async ({page}) => {
+  const result = await page.evaluate(async () => {
+    const {h, t} = window, house = await h.household({chunkSize: 65536}), {b, list} = house; let {a} = house;
+    const record = t.randomBytes(16), content = h.random(100_000);
+    try {
+      // The page goes away the moment the file is in: the feed is still sending the item and its file.
+      await a.device.writeFields(list, record, [{field: 'title', op: 1, value: new TextEncoder().encode('Scan')}]);
+      await a.device.attach(list, record, 'scan', new Blob([content])); await a.until(d => d.blob(list, record, 'scan')?.state === 'here');
+      a.abort.abort(); await a.run.catch(() => {});
+      const before = {state: a.device.blob(list, record, 'scan').state, queued: (await a.journal.allPending(a.hubID)).length > 0};
+      const {journalName, keysName, hubID} = a; await a.device.close(); a.journal.close(); a.keys.close();
+      a = await h.start('A', house.hub, journalName, keysName, (journal, keys) => t.BrowserDevice.resume(t.unb64u(hubID), journal, keys));
+      await a.device.useBlobs(new h.DeviceFolder(house.folder), {chunkSize: 65536});
+      await a.sent();
+      const seen = await Promise.race([b.until(d => !!d.state.record(list, record)?.value('_blob:scan')).then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 10_000))]);
+      return {before, mine: !!a.device.state.record(list, record)?.value('_blob:scan'), seen, destroyed: house.hub.log.filter(e => e.kind === 'removed').length};
+    } finally { await a.stop(); await b.stop(); }
+  });
+  expect(result).toMatchObject({before: {state: 'here', queued: true}, mine: true, seen: true});
+});
+
 test('an interrupted download resumes where it stopped', async ({page}) => {
   const result = await page.evaluate(async () => {
     const {h, t} = window, house = await h.household({chunkSize: 65536}), {a, b, list} = house, record = t.randomBytes(16), content = h.random(600_000);
