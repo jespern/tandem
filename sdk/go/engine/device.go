@@ -502,14 +502,8 @@ const (
 // Sync reads everything new on the hub and applies what this device can read, then retries
 // what was held. It returns how many messages it applied. Syncs never interleave.
 func (d *Device) Sync(ctx context.Context) (int, error) {
-	n, err := func() (int, error) {
-		defer d.begin()()
-		return d.sync(ctx)
-	}()
-	if err == nil {
-		d.afterSync()
-	}
-	return n, err
+	defer d.begin()()
+	return d.sync(ctx)
 }
 
 func (d *Device) sync(ctx context.Context) (int, error) {
@@ -544,7 +538,11 @@ func (d *Device) sync(ctx context.Context) (int, error) {
 	if err := d.repairClaim(ctx); err != nil {
 		return count, err
 	}
-	return count, d.followUp(ctx)
+	if err := d.followUp(ctx); err != nil {
+		return count, err
+	}
+	d.afterSyncLocked()
+	return count, nil
 }
 
 // takeBatch saves one batch of changes and its cursor, in one transaction.

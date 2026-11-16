@@ -1037,3 +1037,109 @@ func TestBlobCopyRefusesAttachmentsBeforeCreatingAList(t *testing.T) {
 		}
 	}
 }
+
+// A staged copy waits for its write to reach the feed. If a key change makes the author sign the
+// write again before that, under a new ID, the copy is released once the feed holds the new one:
+// the content is what was waiting, not that write's ID.
+func TestBlobStagedCopyIsReleasedWhenARotationSignsItsWriteAgain(t *testing.T) {
+	hub, f, _, bob := found(t, "Bob’s Mac", nil)
+	defer bob.Close()
+	offline := &atomic.Bool{}
+	link := try(bob.Invite(bg, "Alice", account, f.ManagementSeed, 0))
+	alice := try(Join(bg, link, newKeys(t), "Alice’s phone", MemoryStore(), switchedAppends{hub.Connect(), offline}))
+	defer alice.Close()
+	syncAll(t, bob)
+	list := try(bob.CreateList(bg, "Photos"))
+	must(t, bob.Share(bg, list, me(t, alice).Participant, Writer, "Alice"))
+	syncAll(t, alice)
+	must(t, alice.Accept(bg, list))
+	syncAll(t, bob, alice)
+	blobs := NewMemoryBlobHub()
+	must(t, bob.UseBlobs(blobs, smallBlobs))
+	must(t, alice.UseBlobs(blobs, smallBlobs))
+	settle(t, bob, alice)
+
+	record, data := NewRecordID(), content(3000)
+	offline.Store(true)
+	must(t, alice.AttachBytes(bg, list, record, "file", data))
+	settle(t, alice) // chunks uploaded, the write committed, the feed out of reach
+	if n := len(try(alice.store.Values("blobs.staged."))); n != 1 {
+		t.Fatal("expected one staged copy waiting for the feed, got", n)
+	}
+	must(t, bob.Rekey(bg, list))
+	offline.Store(false)
+	for range 4 {
+		clean(t, alice, bob)
+	}
+	if got := fetched(t, bob, list, record, "file"); !bytes.Equal(got, data) {
+		t.Fatal("Bob reads another file")
+	}
+	if n := len(try(alice.store.Values("blobs.staged."))); n != 0 {
+		t.Fatal("staged markers left:", n)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(alice.blobState().dir, "staged")); len(entries) != 0 {
+		t.Fatal("staged copies left:", len(entries))
+	}
+}
+
+// An upload journal can outlive its staged copy: the commit of an earlier version moved the copy
+// into the cache and could crash before removing the journal entry. The cached content is the
+// same bytes, so the upload resumes from it, as the Swift engine does.
+func TestBlobUploadResumesWhenOnlyTheCachedContentIsLeft(t *testing.T) {
+	w := newBlobWorld(t)
+	record, data := NewRecordID(), content(3200)
+	w.blobs.SetFailAppends(true)
+	must(t, w.bob.AttachBytes(bg, w.list, record, "file", data))
+	settle(t, w.bob)
+	sql := "CREATE TRIGGER fail_file_commit BEFORE INSERT ON writes WHEN NEW.record = X'" + hexs(record) + "' BEGIN SELECT RAISE(ABORT, 'injected durable commit failure'); END"
+	_, err := w.bob.store.conn.ExecContext(bg, sql)
+	must(t, err)
+	w.blobs.SetFailAppends(false)
+	settle(t, w.bob) // chunks uploaded, the content linked into the cache, the commit refused
+	ups := try(w.bob.store.Uploads())
+	if len(ups) != 1 {
+		t.Fatal("expected the upload still journalled, got", len(ups))
+	}
+	must(t, os.Remove(filepath.Join(w.bob.store.BlobDir(), "staged", ups[0].Staged)))
+	_, err = w.bob.store.conn.ExecContext(bg, "DROP TRIGGER fail_file_commit")
+	must(t, err)
+	settle(t, w.bob)
+	if n := len(try(w.bob.store.Uploads())); n != 0 {
+		t.Fatal("the upload stays pending without its staged copy")
+	}
+	syncAll(t, w.alice)
+	if !bytes.Equal(fetched(t, w.alice, w.list, record, "file"), data) {
+		t.Fatal("Alice reads another file")
+	}
+}
+
+// Evicting the cached copy of content a staged copy still holds frees no disk (they are one
+// inode), so eviction leaves it and goes on to what it can free; it still counts its size.
+func TestBlobEvictionSkipsContentAStagedCopyHolds(t *testing.T) {
+	hub, _, _, bob := found(t, "Bob’s Mac", nil)
+	feed := &failingHub{PushStore: hub.Connect()}
+	list := try(bob.CreateList(bg, "Photos"))
+	blobs := NewMemoryBlobHub()
+	must(t, bob.UseBlobs(blobs, smallBlobs))
+	older, newer := NewRecordID(), NewRecordID()
+	bob.hub = feed
+	feed.fail(true)
+	must(t, bob.AttachBytes(bg, list, older, "photo", content(2600))) // committed, not on the feed: staged
+	settle(t, bob)
+	feed.fail(false)
+	must(t, bob.AttachBytes(bg, list, newer, "photo", content(2500)))
+	settle(t, bob)
+	fetched(t, bob, list, newer, "photo") // opened after the staged one
+	if len(try(bob.store.Values("blobs.staged."))) != 1 {
+		t.Fatal("expected the first file staged")
+	}
+	held, other := manifestOf(t, bob, list, older, "photo"), manifestOf(t, bob, list, newer, "photo")
+	bob.SetBlobSettings(BlobSettings{ChunkSize: 1000, Inline: 100, StoreLimit: 3000})
+	bob.evict(bob.blobState(), "")
+	if !fileExists(filepath.Join(bob.store.BlobDir(), hexs(held.Hash))) {
+		t.Fatal("evicted the cached copy of staged content: no space freed")
+	}
+	if fileExists(filepath.Join(bob.store.BlobDir(), hexs(other.Hash))) {
+		t.Fatal("the cache stays over its limit: eviction counted space it didn't free")
+	}
+}

@@ -682,6 +682,8 @@ extension Device {
     /// Removes content opened longest ago while the store is over its limit; it becomes remote again.
     func evict(_ b: BlobRuntime, keeping: String) {
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: b.directory.path) else { return }
+        // Content a staged copy holds is one inode with it: evicting the cached link frees nothing.
+        let held = Set(((try? store.values(prefix: "blobs.staged.")) ?? []).filter { $0.1.count == 64 }.map { Array($0.1.suffix(32)).hex })
         var files: [(name: String, size: Int, opened: UInt64)] = [], total = 0
         for name in names where name.count == 64 {
             let size = ((try? FileManager.default.attributesOfItem(atPath: b.directory.appendingPathComponent(name).path))?[.size] as? NSNumber)?.intValue ?? 0
@@ -690,6 +692,7 @@ extension Device {
         }
         for f in files.sorted(by: { $0.opened < $1.opened }) where total > b.settings.storeLimit {
             if f.name == keeping { continue } // an explicit fetch must return a readable file
+            if held.contains(f.name) { continue } // its size still counts: the disk holds it either way
             if (try? FileManager.default.removeItem(at: b.directory.appendingPathComponent(f.name))) != nil {
                 total -= f.size
                 try? store.removeValue("blobs.opened." + f.name)

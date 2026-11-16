@@ -230,13 +230,15 @@ func (d *Device) blobHygiene(ctx context.Context, b *blobs) error {
 		d.mu.RUnlock()
 		return err
 	}
-	named := d.namedContent()
+	named, known := d.namedContent()
 	rows, err := d.store.Chunks()
 	d.mu.RUnlock()
 	if err != nil {
 		return err
 	}
-	d.dropUnnamed(b, named)
+	if known {
+		d.dropUnnamed(b, named)
+	}
 	settings := b.current()
 	b.mu.Lock()
 	heal := !b.healed
@@ -487,7 +489,9 @@ func scopeView(scopes []*blobScope) []byte {
 // lock. A gone list's files stay as long as its replica does (gc.go).
 type named struct{ hashes, writes map[string]bool }
 
-func (d *Device) namedContent() named {
+// namedContent is the content and writes live records and pending uploads name; false if the
+// upload journal can't be read, when nothing may be taken as unnamed.
+func (d *Device) namedContent() (named, bool) {
 	out := named{map[string]bool{}, map[string]bool{}}
 	name := func(value []byte) {
 		if m, kind := tandem.ParseManifest(value); kind == tandem.ManifestV1 && !m.Inline() {
@@ -507,10 +511,35 @@ func (d *Device) namedContent() named {
 			}
 		}
 	}
-	ups, _ := d.store.Uploads()
+	ups, err := d.store.Uploads()
+	if err != nil {
+		return out, false
+	}
 	for _, u := range ups {
 		if w := storedWrite(u.Payload, d.pin.Hub, u.Scope); w != nil {
 			name(w.Value)
+		}
+	}
+	return out, true
+}
+
+// publishedContent is the content hashes that live blob writes on the feed name.
+// The caller holds the state lock.
+func (d *Device) publishedContent() map[string]bool {
+	out := map[string]bool{}
+	for _, c := range d.collections {
+		for _, r := range c.records {
+			if r.Deleted() {
+				continue
+			}
+			for _, e := range r.Entries() {
+				if e.W.Op != tandem.OpAssign || !strings.HasPrefix(e.W.Field, BlobPrefix) {
+					continue
+				}
+				if m, kind := tandem.ParseManifest(e.W.Value); kind == tandem.ManifestV1 && !m.Inline() && d.store.OnFeed(e.ID) {
+					out[hex.EncodeToString(m.Hash)] = true
+				}
+			}
 		}
 	}
 	return out
@@ -548,6 +577,7 @@ func (d *Device) dropUnnamed(b *blobs, n named) {
 	if uploadErr == nil && stageErr == nil {
 		pending := map[string]bool{}
 		markers := map[string]string{}
+		var published map[string]bool
 		for _, v := range stages {
 			name := strings.TrimPrefix(v.Name, "blobs.staged.")
 			markers[name] = v.Name
@@ -561,9 +591,20 @@ func (d *Device) dropUnnamed(b *blobs, n named) {
 				if !fileExists(cache) {
 					_ = os.Link(source, cache)
 				}
-				if !fileExists(cache) || !d.store.OnFeed(id) {
+				if !fileExists(cache) {
 					pending[name] = true
 					continue
+				}
+				// What waits is the content, not that write's ID: a key change can sign the write
+				// again under a new one (§11.6), and then the feed holds that one instead.
+				if !d.store.OnFeed(id) {
+					if published == nil {
+						published = d.publishedContent()
+					}
+					if !published[hash] {
+						pending[name] = true
+						continue
+					}
 				}
 			}
 			if !fileExists(filepath.Join(b.dir, "staged", name)) {

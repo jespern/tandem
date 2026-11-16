@@ -18,13 +18,19 @@ final class BlobTests: XCTestCase {
 
     func content(_ n: Int) -> Bytes { (0..<n).map { _ in UInt8.random(in: 0...255) } }
 
-    func world(store: Store? = nil) async throws -> World {
+    /// `aliceNetwork`: what Alice's device reaches the hub through, made from a plain connection.
+    func world(store: Store? = nil, bobNetwork: ((MemoryHub.Connection) -> any PushStore)? = nil,
+               aliceNetwork: ((MemoryHub.Connection) -> any PushStore)? = nil) async throws -> World {
         let hub = MemoryHub(), keys = DeviceKeys()
         let f = try Founder.found(account: account, keys: keys, label: "Bob’s Mac")
-        let bob = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try store ?? Store(path: ":memory:"), hub: await hub.connect())
+        let bobConnection = await hub.connect()
+        let bob = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try store ?? Store(path: ":memory:"),
+                                  hub: bobNetwork?(bobConnection) ?? bobConnection)
         try await bob.publish(f)
         let link = try await bob.invite(label: "Alice", account: account, ms: f.managementSeed)
-        let alice = try await Device.join(link: link, keys: DeviceKeys(), label: "Alice’s iPhone", store: try Store(path: ":memory:"), hub: await hub.connect())
+        let connection = await hub.connect()
+        let alice = try await Device.join(link: link, keys: DeviceKeys(), label: "Alice’s iPhone", store: try Store(path: ":memory:"),
+                                          hub: aliceNetwork?(connection) ?? connection)
         try await bob.sync()
         let list = try await bob.createList(name: "Photos")
         let aliceID = try some(await alice.me?.participant)
@@ -111,6 +117,32 @@ final class BlobTests: XCTestCase {
         XCTAssertEqual(got, data, "a malformed manifest cannot poison valid content with the same hash")
     }
 
+    /// Two manifests for the same content download at once: the malformed one fails, and the valid one waiting on it must
+    /// not inherit that failure (as Go's TestBlobConcurrentLayoutsDoNotShareFailure).
+    func testConcurrentLayoutsDoNotShareFailure() async throws {
+        let w = try await world()
+        let good = w.bob.newRecordID(), bad = w.bob.newRecordID(), data = content(5500)
+        try await w.bob.attach(list: w.list, record: good, name: "photo", content: data)
+        await w.bob.settleBlobs()
+        var m = try await manifest(w.bob, w.list, good, "photo")
+        m.chunks!.swapAt(0, 1)
+        try await w.bob.setField(list: w.list, record: bad, field: "_blob:photo", value: Blob.encode(m))
+        try await w.alice.sync()
+        let gated = GatedBlobs(inner: w.blobs)
+        await w.alice.replaceBlobHub(gated)
+        let badFetch = Task { try await w.alice.fetchBlob(list: w.list, record: bad, name: "photo") }
+        await gated.entered()
+        let goodFetch = Task { try await w.alice.fetchBlob(list: w.list, record: good, name: "photo") }
+        // The valid download joins the malformed one's: the same content hash. No event says so; yield until it waits.
+        for _ in 0..<10_000 where await w.alice.downloadWaiters(m.hash) == 0 { await Task.yield() }
+        let waiting = await w.alice.downloadWaiters(m.hash)
+        XCTAssertEqual(waiting, 1, "the valid download didn't wait on the malformed one")
+        gated.open()
+        do { _ = try await badFetch.value; XCTFail("malformed order was accepted") } catch BlobError.unreadable {}
+        let url = try await goodFetch.value
+        XCTAssertEqual(Bytes(try Data(contentsOf: url)), data, "a valid download inherited a different manifest's failure")
+    }
+
     func testInlineHashCannotPoisonContentCache() async throws {
         let w = try await world()
         let good = w.bob.newRecordID(), bad = w.bob.newRecordID(), data = content(2500)
@@ -140,6 +172,51 @@ final class BlobTests: XCTestCase {
         try await w.alice.sync(); await w.alice.settleBlobs()
         let pending = try await w.alice.store.uploads()
         XCTAssertTrue(pending.isEmpty, "an observed removal left its blocked upload resumable")
+    }
+
+    /// A staged copy waits for its write to reach the feed. If a key change makes the author sign the write again before
+    /// that, under a new ID, the copy is released once the feed holds the new one: the content is what was waiting.
+    func testStagedCopyIsReleasedWhenARotationSignsItsWriteAgain() async throws {
+        var network: SwitchedAppends!
+        let w = try await world(aliceNetwork: { network = SwitchedAppends($0); return network })
+        let photo = w.alice.newRecordID(), data = content(3000)
+        network.online = false
+        try await w.alice.attach(list: w.list, record: photo, name: "photo", content: data)
+        await w.alice.settleBlobs()   // chunks uploaded, the write committed, the feed out of reach
+        let waiting = try await w.alice.store.values(prefix: "blobs.staged.").count
+        XCTAssertEqual(waiting, 1, "a staged copy waits for the feed")
+        try await w.bob.rekey(list: w.list)
+        network.online = true
+        for _ in 0..<4 { try await clean(w.alice, w.bob) }
+        let got = try await fetched(w.bob, w.list, photo, "photo")
+        XCTAssertEqual(got, data)
+        let markers = try await w.alice.store.values(prefix: "blobs.staged.").count
+        XCTAssertEqual(markers, 0, "staged markers left")
+        let left = await w.alice.stagedFiles()
+        XCTAssertEqual(left, [], "staged copies left")
+    }
+
+    /// Evicting the cached copy of content a staged copy still holds frees no disk (one inode), so eviction leaves it and
+    /// goes on to what it can free; it still counts its size.
+    func testEvictionSkipsContentAStagedCopyHolds() async throws {
+        var network: SwitchedAppends!
+        let w = try await world(bobNetwork: { network = SwitchedAppends($0); return network })
+        let older = w.bob.newRecordID(), newer = w.bob.newRecordID()
+        network.online = false
+        try await w.bob.attach(list: w.list, record: older, name: "photo", content: content(2600))   // committed, not on the feed
+        await w.bob.settleBlobs()
+        network.online = true
+        try await w.bob.attach(list: w.list, record: newer, name: "photo", content: content(2500))
+        await w.bob.settleBlobs()
+        _ = try await fetched(w.bob, w.list, newer, "photo")   // opened after the staged one
+        let staged = try await w.bob.store.values(prefix: "blobs.staged.").count
+        XCTAssertEqual(staged, 1, "expected the first file staged")
+        let held = try await manifest(w.bob, w.list, older, "photo"), other = try await manifest(w.bob, w.list, newer, "photo")
+        await w.bob.setBlobSettings(BlobSettings(chunkSize: small.chunkSize, inline: small.inline, storeLimit: 3000))
+        await w.bob.evictNow()
+        let kept = await w.bob.cached(held.hash), evicted = await !w.bob.cached(other.hash)
+        XCTAssertTrue(kept, "evicted the cached copy of staged content: no space freed")
+        XCTAssertTrue(evicted, "the cache stays over its limit: eviction counted space it didn't free")
     }
 
     func testInventoryMarkDropsBlockedUpload() async throws {
@@ -692,4 +769,18 @@ final class GatedBlobs: BlobHub, @unchecked Sendable {
         await inner.release()
     }
 
+}
+
+extension Device {
+    func evictNow() { if let b = blobs { evict(b, keeping: "") } }
+    func cached(_ hash: Bytes) -> Bool { blobs.map { FileManager.default.fileExists(atPath: $0.content(hash).path) } ?? false }
+
+    /// How many fetches wait on the download of this content.
+    func downloadWaiters(_ hash: Bytes) -> Int { blobs?.downloads[hash]?.waiters.count ?? 0 }
+
+    /// The files in the staged folder: uploads, and committed content waiting for the feed.
+    func stagedFiles() -> [String] {
+        guard let b = blobs else { return [] }
+        return (try? FileManager.default.contentsOfDirectory(atPath: b.staged.path)) ?? []
+    }
 }

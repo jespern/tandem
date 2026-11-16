@@ -185,10 +185,26 @@ extension Device {
         }
     }
 
+    /// The content hashes that live blob writes on the feed name.
+    func publishedContent() -> Set<String> {
+        var out: Set<String> = []
+        for c in collections.values {
+            for r in c.records.values where !r.deleted {
+                for e in r.kept where e.write.op == .assign && Self.isBlobField(e.write.field) {
+                    if case let .manifest(m) = Blob.parse(e.write.value), m.chunks != nil, (try? store.onFeed(e.id)) == true { out.insert(m.hash.hex) }
+                }
+            }
+        }
+        return out
+    }
+
     /// Removes content no record names any more, downloaded or half downloaded: a deleted record's, a replaced
     /// version's, a collected list's, and what was kept about it. A gone list's files stay as long as its replica does.
     func dropUnnamed(_ b: BlobRuntime) {
-        guard let uploads = try? store.uploads(), let stages = try? store.values(prefix: "blobs.staged.") else { return }
+        // Without the upload journal the content still in use isn't known: nothing is taken as unnamed. Without the staged
+        // markers, the staged folder is left alone.
+        guard let uploads = try? store.uploads() else { return }
+        let markers = try? store.values(prefix: "blobs.staged.")
         var hashes: Set<String> = [], writes: Set<String> = [], staged: Set<String> = []
         for c in collections.values {
             for r in c.records.values where !r.deleted {
@@ -204,18 +220,27 @@ extension Device {
                case let .manifest(m) = Blob.parse(w.value), m.chunks != nil { hashes.insert(m.hash.hex) }
         }
         let fm = FileManager.default
-        for (key, value) in stages {
+        var published: Set<String>?
+        for (key, value) in markers ?? [] {
             let name = String(key.dropFirst("blobs.staged.".count)), source = b.staged.appendingPathComponent(name)
             guard value.count == 64 else { staged.insert(name); continue }
             let id = Array(value.prefix(32)), hash = Array(value.suffix(32)).hex
             if hashes.contains(hash) {
                 let cache = b.directory.appendingPathComponent(hash)
                 if !fm.fileExists(atPath: cache.path) { try? fm.linkItem(at: source, to: cache) }
-                if !fm.fileExists(atPath: cache.path) || (try? store.onFeed(id)) != true { staged.insert(name); continue }
+                if !fm.fileExists(atPath: cache.path) { staged.insert(name); continue }
+                // What waits is the content, not that write's ID: a key change can sign the write again under a new
+                // one (§11.6), and then the feed holds that one instead.
+                if (try? store.onFeed(id)) != true {
+                    if published == nil { published = publishedContent() }
+                    if published?.contains(hash) != true { staged.insert(name); continue }
+                }
             }
             if !fm.fileExists(atPath: source.path) { try? store.removeValue(key) }
         }
-        for (dir, marker, names) in [(b.directory, "blobs.opened.", hashes), (b.partial, "blobs.partial.", hashes), (b.staged, "", staged)] {
+        var folders = [(b.directory, "blobs.opened.", hashes), (b.partial, "blobs.partial.", hashes)]
+        if markers != nil { folders.append((b.staged, "", staged)) }
+        for (dir, marker, names) in folders {
             for name in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] where name.count == 64 && !names.contains(name) && Bytes(hex: name) != nil {
                 if (try? fm.removeItem(at: dir.appendingPathComponent(name))) != nil {
                     try? store.removeValue((marker.isEmpty ? "blobs.staged." : marker) + name)

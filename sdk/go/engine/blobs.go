@@ -189,6 +189,12 @@ func (b *blobs) current() BlobSettings {
 // afterSync asks the worker for a clean-up and healing pass.
 func (d *Device) afterSync() {
 	defer d.begin()()
+	d.afterSyncLocked()
+}
+
+// afterSyncLocked runs at the end of every sync, internal ones too: it cancels uploads that can't
+// go out any more and asks the worker for a clean-up and healing pass. The caller holds the lock.
+func (d *Device) afterSyncLocked() {
 	if err := d.discardInvalidUploads(); err != nil {
 		d.changed(Event{Kind: EventSyncFailed, Message: err.Error()})
 	}
@@ -305,10 +311,12 @@ func (d *Device) blobWorker(b *blobs) {
 func (d *Device) blobRound(ctx context.Context, b *blobs) (bool, error) {
 	d.mu.Lock()
 	if err := d.discardInvalidUploads(); err != nil {
+		d.flushEvents()
 		d.mu.Unlock()
 		return false, err
 	}
 	ups, err := d.store.Uploads()
+	d.flushEvents()
 	d.mu.Unlock()
 	if err != nil {
 		return false, err
@@ -743,8 +751,12 @@ func (d *Device) commit(ctx context.Context, b *blobs, u Upload) error {
 	staged := filepath.Join(b.dir, "staged", u.Staged)
 	// Keep the staged inode until the manifest and journal removal commit
 	// together. A crash or a failed transaction must leave a resumable upload.
-	if err := os.Link(staged, content); err != nil && !errors.Is(err, os.ErrExist) {
-		return err
+	// The cached content may already be there without the staged copy: an earlier commit moved it
+	// and crashed before removing the journal entry. It is the same bytes (named by their hash).
+	if !fileExists(content) {
+		if err := os.Link(staged, content); err != nil && !errors.Is(err, os.ErrExist) {
+			return err
+		}
 	}
 	stageMark := "blobs.staged." + hex.EncodeToString(u.Write)
 	id := writeID(w)
@@ -1261,6 +1273,15 @@ func (d *Device) evict(b *blobs, keep string) {
 	var files []file
 	var total int64
 	d.mu.RLock()
+	// Content a staged copy holds is one inode with it: evicting the cached link frees nothing.
+	held := map[string]bool{}
+	if stages, err := d.store.Values("blobs.staged."); err == nil {
+		for _, v := range stages {
+			if len(v.Value) == 64 {
+				held[hex.EncodeToString(v.Value[32:])] = true
+			}
+		}
+	}
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -1284,6 +1305,9 @@ func (d *Device) evict(b *blobs, keep string) {
 		}
 		if f.name == keep {
 			continue // FetchBlob must return a readable file, including oversized ones.
+		}
+		if held[f.name] {
+			continue // its size still counts: the disk holds it either way
 		}
 		if os.Remove(filepath.Join(b.dir, f.name)) == nil {
 			total -= f.size
