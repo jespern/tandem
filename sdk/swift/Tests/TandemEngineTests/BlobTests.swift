@@ -142,6 +142,21 @@ final class BlobTests: XCTestCase {
         XCTAssertTrue(pending.isEmpty, "an observed removal left its blocked upload resumable")
     }
 
+    func testInventoryMarkDropsBlockedUpload() async throws {
+        let w = try await world()
+        await w.blobs.set(failAppends: true)
+        let photo = w.alice.newRecordID()
+        try await w.alice.attach(list: w.list, record: photo, name: "photo", content: content(2500))
+        await w.alice.settleBlobs()
+        try await w.bob.deleteRecord(list: w.list, record: photo)
+        try await w.bob.rekey(list: w.list)
+        try await w.alice.sync(); await w.alice.settleBlobs()
+        let marked = await w.alice.item(list: w.list, id: photo)
+        XCTAssertEqual(marked?.deleted, true)
+        let pending = try await w.alice.store.uploads()
+        XCTAssertTrue(pending.isEmpty, "a deletion compacted into an inventory mark left its upload resumable")
+    }
+
     func testDowngradeDropsBlockedUpload() async throws {
         let w = try await world()
         await w.blobs.set(failAppends: true)

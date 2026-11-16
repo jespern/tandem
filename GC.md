@@ -213,6 +213,9 @@ including after reopen or a fresh sync; an unknown ID still returns no item.
 Marked IDs are included in item-change notifications, while live-record listings
 exclude them. This public distinction retains no old writes, fields or authors:
 the signed inventory remains the evidence of deletion.
+Pending file uploads for a marked record are cancelled too, before waiting for
+chunk transfer or a later commit; collection of the tombstone must not leave an
+upload stuck behind an unwritable record.
 
 What is given up: a write made concurrently with a delete is kept under the tombstone today, and
 the app never shows it (the record is deleted). After a mark it is gone. A blob manifest kept under

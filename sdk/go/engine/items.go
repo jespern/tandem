@@ -107,23 +107,29 @@ func (d *Device) Item(list, id []byte) (Item, bool) {
 	if c == nil {
 		return Item{}, false
 	}
-	for _, ref := range slices.Backward(chain(c, c.head())) {
-		epoch := c.epochOf(ref)
-		if inv, known := d.inventories[string(epoch)]; known {
-			if inv.Marks(id) {
-				r, err := tandem.NewRecord(d.pin.Hub, list, id)
-				if err != nil {
-					return Item{}, false
-				}
-				return Item{ID: id, record: r, markedDeleted: true}, true
-			}
-			break
+	if d.recordMarked(c, id) {
+		r, err := tandem.NewRecord(d.pin.Hub, list, id)
+		if err != nil {
+			return Item{}, false
 		}
+		return Item{ID: id, record: r, markedDeleted: true}, true
 	}
 	if c.records[string(id)] == nil {
 		return Item{}, false
 	}
 	return Item{ID: id, record: c.records[string(id)]}, true
+}
+
+// recordMarked uses the newest assembled inventory on the roster line. Until
+// a new inventory arrives, the previous epoch's state remains readable.
+// The caller holds the device state lock.
+func (d *Device) recordMarked(c *collection, id []byte) bool {
+	for _, ref := range slices.Backward(chain(c, c.head())) {
+		if inv, known := d.inventories[string(c.epochOf(ref))]; known {
+			return inv.Marks(id)
+		}
+	}
+	return false
 }
 
 // Items is the list's records that aren't deleted, without the named ones, by ID.

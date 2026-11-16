@@ -485,6 +485,24 @@ func TestBlobRemovalDropsBlockedUpload(t *testing.T) {
 	}
 }
 
+func TestBlobInventoryMarkDropsBlockedUpload(t *testing.T) {
+	w := newBlobWorld(t)
+	w.blobs.SetFailAppends(true)
+	photo := NewRecordID()
+	must(t, w.alice.AttachBytes(bg, w.list, photo, "photo", content(2500)))
+	settle(t, w.alice)
+	must(t, w.bob.DeleteRecord(bg, w.list, photo))
+	must(t, w.bob.Rekey(bg, w.list))
+	syncAll(t, w.alice)
+	settle(t, w.alice)
+	if item, ok := w.alice.Item(w.list, photo); !ok || !item.Deleted() {
+		t.Fatal("the inventory must expose the pending record's deletion")
+	}
+	if len(try(w.alice.store.Uploads())) != 0 {
+		t.Fatal("a deletion compacted into an inventory mark left its upload resumable")
+	}
+}
+
 func TestBlobDowngradeDropsBlockedUpload(t *testing.T) {
 	w := newBlobWorld(t)
 	w.blobs.SetFailAppends(true)

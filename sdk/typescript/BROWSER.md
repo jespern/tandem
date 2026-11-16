@@ -319,6 +319,7 @@ It explicitly enables browser CORS and publishes real loopback URLs, with no pro
    - `#uploadAll` can wait for missing chunks or a missing current tag before
      `prepareBlobCommit` checks lost writing permission. Exercise observed
      removal/downgrade during a blocked upload, followed by re-admission/promotion.
+     Also exercise a pending record deleted and compacted into an inventory mark.
 
    These are code-review integration gates, not claims that new browser
    reproductions have already run. Pending-write causal reissue and retaining an

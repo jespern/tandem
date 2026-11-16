@@ -166,7 +166,8 @@ extension Device {
     /// unavailable key. Later re-admission cannot revive the pending write.
     func discardInvalidUploads() throws {
         for u in try store.uploads() {
-            guard let me, let c = collections[u.scope], !c.dead, c.records[u.record]?.deleted != true else {
+            guard let me, let c = collections[u.scope], !c.dead, c.records[u.record]?.deleted != true,
+                  !recordMarked(c, id: u.record) else {
                 try dropUpload(u); continue
             }
             if case .invalid = registry.activity(me.certificate) { try dropUpload(u); continue }

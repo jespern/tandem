@@ -212,7 +212,7 @@ func (d *Device) discardInvalidUploads() error {
 		c := d.collections[string(u.Scope)]
 		invalid := c == nil || d.me == nil
 		if !invalid {
-			invalid = c.dead() || d.registry.Activity(d.me.Certificate).IsInvalid()
+			invalid = c.dead() || d.registry.Activity(d.me.Certificate).IsInvalid() || d.recordMarked(c, u.Record)
 			if r := c.records[string(u.Record)]; r != nil && r.Deleted() {
 				invalid = true
 			}

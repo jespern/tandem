@@ -60,18 +60,21 @@ extension Device {
     public func item(list cid: Bytes, id: Bytes) -> Item? {
         try? takeExternalChanges()
         guard let c = collections[cid] else { return nil }
-        if let head = c.head {
-            // Until a new inventory is assembled, reads retain the previous
-            // epoch's state, including its deletion marks.
-            for ref in chain(c, to: head).reversed() {
-                guard let epoch = c.epoch(of: ref), let inv = inventories[epoch] else { continue }
-                if inv.marks(id), let empty = try? Record(hub: pin.hub, scope: cid, id: id) {
-                    return Item(id: id, record: empty, markedDeleted: true)
-                }
-                break
-            }
+        if recordMarked(c, id: id), let empty = try? Record(hub: pin.hub, scope: cid, id: id) {
+            return Item(id: id, record: empty, markedDeleted: true)
         }
         return c.records[id].map { Item(id: id, record: $0) }
+    }
+
+    /// Until a new inventory is assembled, the previous epoch's state remains
+    /// readable, including its deletion marks.
+    func recordMarked(_ c: CollectionState, id: Bytes) -> Bool {
+        guard let head = c.head else { return false }
+        for ref in chain(c, to: head).reversed() {
+            guard let epoch = c.epoch(of: ref), let inv = inventories[epoch] else { continue }
+            return inv.marks(id)
+        }
+        return false
     }
 
     /// The list's records that aren't deleted, without the named ones, by ID.
