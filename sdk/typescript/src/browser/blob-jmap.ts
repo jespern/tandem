@@ -59,13 +59,15 @@ export class JMAPBlobFolder implements BlobFolder {
   get identity(): string { return `jmap:${JSON.stringify([new URL(this.#api).origin, this.#account, this.#folder])}`; }
   #url(value: string): string {
     const url = new URL(value);
-    const fastmail = this.#cfg.provider === 'fastmail' && !url.port && (url.hostname === 'api.fastmail.com' || url.hostname.endsWith('.api.fastmail.com'));
+    // Fastmail serves downloads from its content host (www.fastmailusercontent.com), not the API's.
+    const fastmail = this.#cfg.provider === 'fastmail' && !url.port && (url.hostname === 'api.fastmail.com' || url.hostname.endsWith('.api.fastmail.com') || url.hostname.endsWith('.fastmailusercontent.com'));
     if (url.protocol !== 'https:' || url.username || url.password || url.hash || !(this.#origins.has(url.origin) || fastmail)) throw new Error('untrusted JMAP URL');
     return url.href;
   }
   async #fetch(url: string, init: RequestInit, signal: AbortSignal, discovery = false): Promise<Response> {
-    let response: Response;
-    try { response = await fetch(this.#url(url), {...init, redirect: discovery ? 'follow' : 'error', credentials: 'omit', headers: {...init.headers, Authorization: this.#cfg.authorization},
+    // An untrusted URL is refused as such, not taken for a network failure that a retry could fix.
+    const trusted = this.#url(url); let response: Response;
+    try { response = await fetch(trusted, {...init, redirect: discovery ? 'follow' : 'error', credentials: 'omit', headers: {...init.headers, Authorization: this.#cfg.authorization},
       signal: AbortSignal.any([signal, this.#abort.signal, AbortSignal.timeout(this.#cfg.commandTimeout)])}); }
     catch (error) { signal.throwIfAborted(); this.#abort.signal.throwIfAborted(); throw new NetworkFailure(error); }
     if (discovery) { try { this.#url(response.url); } catch (error) { await response.body?.cancel(); throw error; } }
