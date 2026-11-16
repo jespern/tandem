@@ -22,9 +22,21 @@ public protocol PushStore: Sendable {
     func watch() async throws -> AsyncThrowingStream<Void, any Error>
     func changes(since cursor: String) async throws -> ChangeBatch
     func append(channel: String, body: Bytes) async throws -> String
+    /// Several messages, in as few round trips as the store allows (IMAP: MULTIAPPEND). The IDs are in order; a
+    /// failure partway may leave a prefix on the hub, as separate appends would.
+    func append(_ messages: [(channel: String, body: Bytes)]) async throws -> [String]
     func fetch(ids: [String]) async throws -> [Message]
     func destroy(ids: [String]) async throws
     func close() async
+}
+
+extension PushStore {
+    /// One append after another, for stores with nothing better.
+    public func append(_ messages: [(channel: String, body: Bytes)]) async throws -> [String] {
+        var ids: [String] = []
+        for m in messages { ids.append(try await append(channel: m.channel, body: m.body)) }
+        return ids
+    }
 }
 
 fileprivate actor SessionChannel<Element: Sendable> {

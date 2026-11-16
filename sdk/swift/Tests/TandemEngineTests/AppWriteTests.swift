@@ -47,6 +47,82 @@ final class AppWriteTests: XCTestCase {
         XCTAssertEqual(gone, true)
     }
 
+    /// Many records written at once reach the hub in one batched append, still a message each (§10.7).
+    func testManyRecordsGoOutTogether() async throws {
+        let hub = MemoryHub(), keys = DeviceKeys()
+        let f = try Founder.found(account: account, keys: keys, label: "Bob’s Mac")
+        let counting = CountingAppends(await hub.connect())
+        let bob = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try Store(path: ":memory:"),
+                                  hub: counting)
+        try await bob.publish(f)
+        let list = try await bob.createList(name: "Groceries")
+        let ids = (0..<250).map { _ in bob.newRecordID() }
+        let before = await hub.messages.count
+        counting.reset()
+        try await bob.write(list: list, records: ids.enumerated().map { i, id in
+            (id, [.set("title", Bytes("Item \(i)".utf8)), .set("sortKey", Bytes("a\(i)".utf8))])
+        })
+        XCTAssertEqual(counting.batches, [250])
+        let after = await hub.messages.count
+        XCTAssertEqual(after - before, 250)
+
+        let laptop = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try Store(path: ":memory:"),
+                                     hub: await hub.connect())
+        try await laptop.sync()
+        for (i, id) in ids.enumerated() {
+            let item = await laptop.item(list: list, id: id)
+            XCTAssertEqual(item?.text("title"), "Item \(i)")
+        }
+    }
+
+    /// Offline, a batch stays saved; the next sync's healing sends it (§12.2).
+    func testABatchWrittenOfflineIsSentLater() async throws {
+        let hub = MemoryHub(), keys = DeviceKeys()
+        let f = try Founder.found(account: account, keys: keys, label: "Bob’s Mac")
+        let switched = SwitchedAppends(await hub.connect())
+        let bob = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try Store(path: ":memory:"),
+                                  hub: switched)
+        try await bob.publish(f)
+        let list = try await bob.createList(name: "Groceries")
+        let milk = bob.newRecordID(), eggs = bob.newRecordID()
+        switched.online = false
+        try await bob.write(list: list, records: [(milk, [.set("title", Bytes("Milk".utf8))]), (eggs, [.set("title", Bytes("Eggs".utf8))])])
+        let here = await bob.item(list: list, id: eggs)?.text("title")
+        XCTAssertEqual(here, "Eggs")
+        switched.online = true
+        try await bob.sync()
+
+        let laptop = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try Store(path: ":memory:"),
+                                     hub: await hub.connect())
+        try await laptop.sync()
+        let titles = [await laptop.item(list: list, id: milk)?.text("title"), await laptop.item(list: list, id: eggs)?.text("title")]
+        XCTAssertEqual(titles, ["Milk", "Eggs"])
+    }
+
+    /// A batch with one write that can't be made writes nothing; a record named twice goes out once, with both changes.
+    func testABatchIsAllOrNothingAndNamesARecordOnce() async throws {
+        let (hub, f, bob, keys) = try await founded()
+        let list = try await bob.createList(name: "Groceries")
+        let milk = bob.newRecordID()
+        do {
+            try await bob.write(list: list, records: [(milk, [.set("title", Bytes("Milk".utf8))]), (Device.metaRecord, [.delete])])
+            XCTFail("a named record was deleted")
+        } catch {}
+        let unwritten = await bob.item(list: list, id: milk)
+        XCTAssertNil(unwritten)
+
+        let before = await hub.messages.count
+        try await bob.write(list: list, records: [(milk, [.set("title", Bytes("Milk".utf8))]), (milk, [.set("notes", Bytes("Oat".utf8))])])
+        let after = await hub.messages.count
+        XCTAssertEqual(after - before, 1)
+        let laptop = try Device.open(genesis: f.genesis, directoryKey: f.directoryKey, keys: keys, store: try Store(path: ":memory:"),
+                                     hub: await hub.connect())
+        try await laptop.sync()
+        let item = await laptop.item(list: list, id: milk)
+        XCTAssertEqual(item?.text("title"), "Milk")
+        XCTAssertEqual(item?.text("notes"), "Oat")
+    }
+
     /// The owner keeps the app's list properties in `_meta`; another device reads them.
     func testTheOwnerWritesListPropertiesInMeta() async throws {
         let (hub, f, bob, keys) = try await founded()
@@ -209,6 +285,28 @@ final class SwitchedAppends: PushStore, @unchecked Sendable {
     func append(channel: String, body: Bytes) async throws -> String {
         guard online else { throw TandemError.invalid("offline") }
         return try await inner.append(channel: channel, body: body)
+    }
+    func fetch(ids: [String]) async throws -> [Message] { try await inner.fetch(ids: ids) }
+    func destroy(ids: [String]) async throws { try await inner.destroy(ids: ids) }
+    func close() async { await inner.close() }
+}
+
+/// Records each batched append's size.
+final class CountingAppends: PushStore, @unchecked Sendable {
+    // @unchecked: `batches` is only read between awaited steps, and the device appends one batch at a time.
+    let inner: MemoryHub.Connection
+    private(set) var batches: [Int] = []
+    init(_ inner: MemoryHub.Connection) { self.inner = inner }
+    func reset() { batches = [] }
+    func watch() async throws -> AsyncThrowingStream<Void, any Error> { try await inner.watch() }
+    func changes(since cursor: String) async throws -> ChangeBatch { try await inner.changes(since: cursor) }
+    func append(channel: String, body: Bytes) async throws -> String {
+        batches.append(1)
+        return try await inner.append(channel: channel, body: body)
+    }
+    func append(_ messages: [(channel: String, body: Bytes)]) async throws -> [String] {
+        batches.append(messages.count)
+        return try await inner.append(messages)
     }
     func fetch(ids: [String]) async throws -> [Message] { try await inner.fetch(ids: ids) }
     func destroy(ids: [String]) async throws { try await inner.destroy(ids: ids) }

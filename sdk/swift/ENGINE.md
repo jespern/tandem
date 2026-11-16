@@ -23,6 +23,24 @@ One `Device` per installation per hub, an actor. Everything it knows is in a `St
 
 A review agent attacked the engine and proved seven bugs, each now a test in `ReviewFindingTests` that fails on the code before its fix: another participant could start someone's home epoch and read their list keys; a forged grant could replace an epoch key; a revoked owner keychain could extend the roster in the same epoch; deleting an announcement stranded a lagging member where the removed one could read; late writes of another keychain were signed again as one's own; a stale device sharing killed the list; a member added after a key change couldn't use the list. The fixes: keys from the inbox, grants, packages and recovery boxes are candidates until the signed start or statement commits to them; home epochs must be signed by the participant's own keychain, extend their parents' policy and admit their recipients; same-epoch statements extend the owner floor; a verified grant counts as the announcement (§11.6) and old channels' announcements are healed; only the same keychain and installation signs a late write again; same-epoch changes sync and check before publishing. Also fixed from its list: inventory fragments healed and checked before step 6; a dropped change clears its own note; one-part inventories can't be blocked by bogus fragments; the late-write marker is set after the write is stored; removed members don't follow (`removedLists`); revoked keychains' profiles and pairing cancellations are refused; one key change per list at a time; a share's grant survives a crash. Open from it: another admin can't finish a certified pairing whose release never went out (the approving device's journal finishes it).
 
+## Asked by Liszto, 2026-11-16 (branch `engine/batched-writes`)
+
+A first sync of about 950 items went up one `APPEND` each on the feed connection, about half a second apiece on
+Fastmail (DESIGN §10.3's measurement), and everything else waited behind them: an invitation took a minute.
+
+- **`write(list:records:)`** writes several records of one list: each record is still its own message (§10.7), but
+  the messages go to the hub in one `PushStore.append(_:)`, which `IMAPStore` sends as `MULTIAPPEND` (100 messages
+  or 8 MiB a command) where offered. Local effects are all or nothing: the list checks and every record's checks
+  pass before anything is signed. A record named twice goes out once, with both changes. Offline, the writes stay
+  saved and healing sends them, as for one record.
+- **`PushStore.append(_:)`** is a protocol requirement with a default of one `append(channel:body:)` after another,
+  so wrappers that only override the single append keep working. `MemoryHub` and `JMAPStore` use the default.
+- Tests: `AppWriteTests.testManyRecordsGoOutTogether`, `testABatchWrittenOfflineIsSentLater`,
+  `testABatchIsAllOrNothingAndNamesARecordOnce`.
+- Not done: healing still republishes record by record (`tidy`'s callback), so a first sync made offline goes up
+  one message per command; `JMAPStore` could batch in one `Email/import`; the Go and TypeScript engines have no
+  batched write yet. The wire format is unchanged, so none of this affects interop.
+
 ## Asked by Liszto, 2026-11-15 (branch `liszto/api`)
 
 Built by the Liszto session at Jesper's request, from its handover; tests in `AppWriteTests`.

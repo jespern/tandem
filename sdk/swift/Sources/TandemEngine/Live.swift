@@ -44,6 +44,11 @@ struct Watched: PushStore {
         await watch.device?.didPublish()
         return id
     }
+    func append(_ messages: [(channel: String, body: Bytes)]) async throws -> [String] {
+        let ids = try await inner.append(messages)
+        if !messages.isEmpty { await watch.device?.didPublish() }
+        return ids
+    }
     func fetch(ids: [String]) async throws -> [Message] { try await inner.fetch(ids: ids) }
     func destroy(ids: [String]) async throws { try await inner.destroy(ids: ids) }
     func close() async { await inner.close() }

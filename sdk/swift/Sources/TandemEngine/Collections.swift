@@ -136,18 +136,31 @@ extension Device {
     /// Several changes to one record, signed in one call and published as one message (§10.7): what an app
     /// writes when it saves an item with several fields. Offline, they stay saved and the next sync sends them.
     public func write(list cid: Bytes, record: Bytes, _ changes: [ItemWriter.Change]) async throws {
-        guard !changes.isEmpty else { return }
+        try await write(list: cid, records: [(record, changes)])
+    }
+
+    /// Several records of one list, each with its changes, as `write(list:record:_:)` does for one: each record is
+    /// still its own message (§10.7), but the messages go to the hub together, in as few round trips as it allows.
+    /// For a first sync or a change to many items. All or nothing locally: if one record can't be written (deleted,
+    /// say), none is.
+    public func write(list cid: Bytes, records: [(record: Bytes, changes: [ItemWriter.Change])]) async throws {
+        let batch = records.filter { !$0.changes.isEmpty }
+        guard !batch.isEmpty else { return }
+        try await writeRecords(cid, try batch.map { r in (r.record, try Self.operations(r.changes, record: r.record)) })
+    }
+
+    static func operations(_ changes: [ItemWriter.Change], record: Bytes) throws -> [(field: Bytes, op: Op, value: Bytes, element: Bytes?)] {
         if changes.contains(where: { if case .delete = $0 { true } else { false } }) {
             guard record != Self.meta, record != Roster.record else { throw TandemError.invalid("device: a named record is never deleted") }
         }
-        try await writeRecord(cid, record: record, changes.map { change in
+        return changes.map { change in
             switch change {
             case let .set(f, v): (Bytes(f.utf8), .assign, v, nil)
             case let .add(f, e): (Bytes(f.utf8), .add, [], e)
             case let .remove(f, e): (Bytes(f.utf8), .remove, [], e)
             case .delete: ([], .delete, [], nil)
             }
-        })
+        }
     }
 
     /// Set a field of a record in a list, as this device, in the list's current epoch.
@@ -197,39 +210,57 @@ extension Device {
 
     /// Several changes to one record, sent as one message.
     func writeRecord(_ cid: Bytes, record: Bytes, _ changes: [(field: Bytes, op: Op, value: Bytes, element: Bytes?)]) async throws {
-        try takeExternalChanges()   // an extension may have written this record meanwhile
+        try await writeRecords(cid, [(record, changes)])
+    }
+
+    /// Changes to several records of a list: each record's are sent as one message, and the messages go out together.
+    func writeRecords(_ cid: Bytes, _ batch: [(record: Bytes, changes: [(field: Bytes, op: Op, value: Bytes, element: Bytes?)])]) async throws {
+        try takeExternalChanges()   // an extension may have written these records meanwhile
         guard let me, var c = collections[cid], !c.dead, let head = c.head, let epoch = c.epoch(of: head), c.keys[epoch] != nil,
               c.statements[head]?.statement.deleted == false
         else { throw TandemError.invalid("device: no such list, no key for its current epoch yet, or it can't sync or was deleted") }
         guard let member = c.statements[head]?.statement.members.first(where: { $0.uid == me.participant }),
-              member.role != .reader, record != Self.meta || member.role == .owner
+              member.role != .reader, member.role == .owner || !batch.contains(where: { $0.record == Self.meta })
         else { throw TandemError.invalid("device: this participant may not write here") }
         guard exposure(cid).isEmpty else { throw TandemError.invalid("device: waiting for the list's owner to change its key") }
-        guard inventory(epoch)?.marks(record) != true else { throw TandemError.invalid("device: the record was deleted") }
-        var writes: [Write] = []
-        if record == Self.meta, c.records[record]?.value(Bytes("_name".utf8)) == nil {
-            writes.append(try signRecord(c, me: me, record: record, field: Bytes("_name".utf8), op: .assign,
-                                         value: Bytes("_meta".utf8), element: nil, head: head, epoch: epoch, after: []))
+        guard !batch.contains(where: { inventory(epoch)?.marks($0.record) == true }) else { throw TandemError.invalid("device: the record was deleted") }
+        let n = c.statements[head]!.statement.keyN
+        var signed: [(record: Bytes, writes: [Write])] = []
+        for (record, changes) in batch {
+            var writes: [Write] = []
+            if record == Self.meta, c.records[record]?.value(Bytes("_name".utf8)) == nil {
+                writes.append(try signRecord(c, me: me, record: record, field: Bytes("_name".utf8), op: .assign,
+                                             value: Bytes("_meta".utf8), element: nil, head: head, epoch: epoch, after: []))
+            }
+            for x in changes {
+                writes.append(try signRecord(c, me: me, record: record, field: x.field, op: x.op, value: x.value, element: x.element,
+                                             head: head, epoch: epoch, after: writes))
+            }
+            var r = try c.records[record] ?? Record(hub: pin.hub, scope: cid, id: record)
+            try r.merge(try writes.map { try Entry($0, epoch: epoch, epochNumber: n) })
+            c.records[record] = r
+            signed.append((record, writes))
         }
-        for x in changes {
-            writes.append(try signRecord(c, me: me, record: record, field: x.field, op: x.op, value: x.value, element: x.element,
-                                         head: head, epoch: epoch, after: writes))
-        }
-        var r = try c.records[record] ?? Record(hub: pin.hub, scope: cid, id: record)
-        try r.merge(try writes.map { try Entry($0, epoch: epoch, epochNumber: c.statements[head]!.statement.keyN) })
-        c.records[record] = r
         collections[cid] = c
         try store.transaction {
-            for w in writes {
-                try store.putWrite(id: try w.id(), scope: cid, record: record, epoch: epoch, payload: try recordPayload(record: record, writes: [w]))
+            for (record, writes) in signed {
+                for w in writes {
+                    try store.putWrite(id: try w.id(), scope: cid, record: record, epoch: epoch, payload: try recordPayload(record: record, writes: [w]))
+                }
             }
         }
-        changed(.items(list: cid, records: [record]))
-        if record == Self.meta { changed(.lists) }
+        let records = signed.map(\.record)
+        changed(.items(list: cid, records: records))
+        if records.contains(Self.meta) { changed(.lists) }
         flushEvents()
-        // A record is published with its whole current state, so this message dominates the ones before it (§10.7).
-        // Offline, the write stays saved: the next sync's healing publishes what the hub lacks (§12.2).
-        do { try await publish(cid: cid, epoch: epoch, record: record, writes: r.kept.map(\.write)) }
+        // A record is published with its whole current state, so its message dominates the ones before it (§10.7);
+        // a record named twice goes out once. Offline, the writes stay saved: the next sync's healing publishes
+        // what the hub lacks (§12.2).
+        var seen = Set<Bytes>(), latest: [(record: Bytes, writes: [Write])] = []
+        for record in records.reversed() where seen.insert(record).inserted {
+            latest.append((record, c.records[record]?.kept.map(\.write) ?? []))
+        }
+        do { try await publish(cid: cid, epoch: epoch, records: latest.reversed()) }
         catch { changed(.syncFailed("\(error)")); flushEvents() }
     }
 
@@ -247,14 +278,23 @@ extension Device {
     }
 
     func publish(cid: Bytes, epoch: ID, record: Bytes, writes: [Write]) async throws {
-        guard let key = collections[cid]?.keys[epoch] else { return }
+        try await publish(cid: cid, epoch: epoch, records: [(record, writes)])
+    }
+
+    /// One message per record, appended together.
+    func publish(cid: Bytes, epoch: ID, records: [(record: Bytes, writes: [Write])]) async throws {
+        guard let key = collections[cid]?.keys[epoch], !records.isEmpty else { return }
         let tag = Tandem.collectionTag(key: key, hub: pin.hub, epoch: epoch)
-        let envelope = try Envelope.seal(key: key, hub: pin.hub, kind: 1, tag: tag, plaintext: try recordPayload(record: record, writes: writes))
-        let id = try await hub.append(channel: tag, body: envelope)
+        let envelopes = try records.map { r in
+            try Envelope.seal(key: key, hub: pin.hub, kind: 1, tag: tag, plaintext: try recordPayload(record: r.record, writes: r.writes))
+        }
+        let ids = try await hub.append(envelopes.map { (channel: tag, body: $0) })
         try store.transaction {
-            try store.noteMessage(id: id, channel: tag, hash: H(envelope))
-            try store.markApplied(id)
-            try store.noteContents(message: id, record: record, writes: try writes.map { try $0.id() })
+            for (i, id) in ids.enumerated() where i < records.count {
+                try store.noteMessage(id: id, channel: tag, hash: H(envelopes[i]))
+                try store.markApplied(id)
+                try store.noteContents(message: id, record: records[i].record, writes: try records[i].writes.map { try $0.id() })
+            }
         }
     }
 
