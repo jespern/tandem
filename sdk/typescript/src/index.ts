@@ -2,6 +2,7 @@ export * from './crypto.js';
 export * from './json.js';
 export * from './core.js';
 export * from './blob.js';
+export * from './blob-folder.js';
 export * from './session.js';
 export * from './control.js';
 export * from './registry.js';
@@ -16,3 +17,4 @@ export * from './operation.js';
 
 // HTTPS JMAP uses standard fetch and also runs directly in Node.
 export * from './browser/jmap.js';
+export * from './browser/blob-jmap.js';

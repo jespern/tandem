@@ -267,7 +267,7 @@ actor Driver {
             return ["from": try await dev().copyOf(list: try b("list")).map(B64u.encode) ?? NSNull()]
         case "useBlobs":
  guard blobs == nil else {throw Failure(message: "blobs already enabled")}
-            let store = BlobStore(try configuration(), options: .init(folder: folder + "-blobs", transferConnections: c["connections"] as? Int))
+            let store = BlobStore(try configuration(), options: .init(folder: folder + "-Blobs", transferConnections: c["connections"] as? Int))
             blobs = store
             let fixture = FixtureBlobs(store); faultBlobs = fixture
             try await dev().useBlobs(fixture, settings: BlobSettings(chunkSize: c["chunkSize"] as? Int ?? Blob.defaultChunk,

@@ -15,11 +15,16 @@ import {BrowserKeychain} from './keychain.js';
 import {BrowserReplica,type PreparedStore,untilAbort} from './replica.js';
 import {Invalidation} from './events.js';
 import {openCapsule,sealCapsule,type CapsuleOptions} from './capsule.js';
+import {BlobRuntime,BlobError,type BlobInfo,type BlobSettings} from './blobs.js';
+import type {BlobFolder,BlobQuota} from '../blob-folder.js';
 
 interface Enrollment {link:PairingLink;label:string;proposal?:PairingProposal;complete?:{epoch:Uint8Array;key:Uint8Array;certificate:Uint8Array};founding?:{auth:Uint8Array;messages:OutgoingMessage[]}}
 export interface BrowserFoundingOptions extends CapsuleOptions {setupID?:string;device?:DeviceStateOptions}
 export type BrowserDeviceStatus='material'|'approval'|'home'|'ready'|'revoked';
-export interface BrowserDeviceUpdate {status:BrowserDeviceStatus;revision:number}
+/** `blobs`: the records whose files started, moved or ended an upload or download since the last update this
+ * consumer saw. `blobProblem`: why uploads or clean-up stopped (a full hub, a chunk over the server's limit, the
+ * network), until the worker gets through again. */
+export interface BrowserDeviceUpdate {status:BrowserDeviceStatus;revision:number;blobs?:{collection:Uint8Array;records:Uint8Array[]}[];blobProblem?:string}
 export class StaleDeviceState extends Error {constructor(){super('new durable events arrived; replay them before signing');}}
 const encode=(value:unknown):Buffer=>Buffer.from(JSON.stringify(value));
 const raw=(value:unknown,n?:number)=>{if(typeof value!=='string')throw new Error('invalid enrollment bytes');return bytes(unb64u(value),n);};
@@ -57,6 +62,7 @@ export class BrowserDevice {
   readonly #kept=new Map<string,OutgoingMessage>();readonly #actionKey:Uint8Array;readonly #activeActions=new Map<string,DeviceAction>();readonly #present=new Map<string,Set<string>>();readonly #remote=new Map<string,string>();
   readonly #hub:string;readonly #slot:string;readonly #lock:string;readonly #replica:BrowserReplica;readonly #changes=new Invalidation();
   readonly #messages=new Map<string,Message>();#local:DeviceLocalState={v:2,processed:[],unshared:{}};#enrollment:Enrollment;#registry:Registry|undefined;#view:DeviceState|undefined;
+  #blobs:BlobRuntime|undefined;#blobProblem:string|undefined;#blobStamp='';readonly #blobListeners=new Set<Map<string,{collection:Uint8Array;records:Map<string,Uint8Array>}>>();
   #sequence=0;#messageBytes=0;#lastLate='';#lastHygiene='';#presenceSequence=-1;#presenceCache:MailboxPresence[]=[];#closed=false;#running:Promise<void>|undefined;#abort:AbortController|undefined;#status:BrowserDeviceStatus='material';
   private constructor(journal:BrowserJournal,keychain:BrowserKeychain,keys:PairingKeys,enrollment:Enrollment,options:DeviceStateOptions,actionKey:Uint8Array){
     this.#actionKey=bytes(actionKey,32);
@@ -106,9 +112,12 @@ export class BrowserDevice {
     const device=new BrowserDevice(journal,keychain,await keychain.deviceKeys(),loadEnrollment(saved),options,await keychain.localSecret(`actions:${b64u(hub)}`));await device.#lockedRefresh();return device;
   }
   get state():DeviceState|undefined{return this.#enrollment.complete?this.#view:undefined;}
-  get update():BrowserDeviceUpdate{return{status:this.#status,revision:this.#view?.revision??0};}
+  get update():BrowserDeviceUpdate{return{status:this.#status,revision:this.#view?.revision??0,...(this.#blobProblem?{blobProblem:this.#blobProblem}:{})};}
   async *updates(signal:AbortSignal):AsyncGenerator<BrowserDeviceUpdate>{
-    while(!signal.aborted&&!this.#closed){const changed=this.#changes.snapshot();yield this.update;await untilAbort(changed,signal);}
+    const pending=new Map<string,{collection:Uint8Array;records:Map<string,Uint8Array>}>();this.#blobListeners.add(pending);
+    try{while(!signal.aborted&&!this.#closed){const changed=this.#changes.snapshot(),blobs=[...pending.values()].map(p=>({collection:p.collection,records:[...p.records.values()]}));pending.clear();
+      yield{...this.update,...(blobs.length?{blobs}:{})};await untilAbort(changed,signal);}}
+    finally{this.#blobListeners.delete(pending);}
   }
   async #lockedRefresh():Promise<void>{await navigator.locks.request(this.#lock,()=>this.#refresh());}
   async #refresh():Promise<void>{
@@ -162,6 +171,7 @@ export class BrowserDevice {
     if(record.complete&&this.#view&&await this.#hygiene())return this.#refresh();
     this.#local=localState(await this.#journal.state(this.#hub));
     const activity=record.complete&&this.#registry?.activity(record.complete.certificate);
+    const stamp=`${this.#sequence}:${this.#view?.revision??0}`;if(this.#blobs&&record.complete&&stamp!==this.#blobStamp){this.#blobStamp=stamp;this.#blobs.afterSync();}
     this.#status=record.complete?(activity&&activity.kind==='invalid'&&activity.reason==='revoked'?'revoked':this.#view?.certificate?(this.#view.homeReady?'ready':'home'):'material'):record.proposal?'approval':'material';
     this.#changes.signal();
   }
@@ -313,5 +323,36 @@ export class BrowserDevice {
     const prepared=state.prepareCreateList(name,reserve);collection=prepared.collection;return[...prepared.messages,...state.prepareHome(home.record,[{field:home.field,op:2,element:collection}],reserve)];
   });return collection!;}
   async accept(collection:Uint8Array):Promise<void>{const cid=bytes(collection,16);await this.#edit((state,reserve)=>state.prepareAccept(cid,reserve));}
-  async close():Promise<void>{if(this.#closed)return;this.#closed=true;this.#abort?.abort();this.#changes.end();await this.#running?.catch(()=>{});}
+  // Files (DESIGN.md §17; BROWSER.md, Files).
+  /** Turns files on: `folder` is the blob folder of this device's hub. Pending uploads resume. */
+  async useBlobs(folder:BlobFolder,settings:Partial<BlobSettings>={}):Promise<void>{
+    if(this.#closed)throw new Error('browser device closed');await this.#blobs?.close();this.#blobs=undefined;
+    const localKey=await this.#keychain.localSecret(`blobs:${this.#hub}`);
+    this.#blobs=await BlobRuntime.open({hub:this.hub,journal:this.#journal,localKey,lockName:this.#lock,view:()=>this.state,presence:()=>this.#presence(),commit:prepare=>this.#commitPlan(prepare),
+      changed:(collection,records)=>{const key=b64u(collection);for(const pending of this.#blobListeners){const row=pending.get(key)??{collection:bytes(collection),records:new Map<string,Uint8Array>()};for(const r of records)row.records.set(b64u(r),bytes(r));pending.set(key,row);}this.#changes.signal();},
+      problem:message=>{if(message!==this.#blobProblem){this.#blobProblem=message;this.#changes.signal();}}},folder,settings);
+  }
+  #blobRuntime():BlobRuntime{if(!this.#blobs)throw new BlobError('no-blobs');return this.#blobs;}
+  /** Attaches a copy of `file` to a record as the field `_blob:<name>`. Content up to the inline size is written at
+   * once; anything larger is a pending write, shown as uploading, until every chunk is on the hub. Works offline. */
+  attach(collection:Uint8Array,record:Uint8Array,name:string,file:Blob):Promise<void>{return this.#blobRuntime().attach(collection,record,name,file);}
+  /** Drops a pending attachment of the field; its write is never published. */
+  cancelAttach(collection:Uint8Array,record:Uint8Array,name:string):Promise<void>{return this.#blobRuntime().cancelAttach(collection,record,name);}
+  /** The file in the field `_blob:<name>` of a record as this device sees it now, or undefined. */
+  blob(collection:Uint8Array,record:Uint8Array,name:string):BlobInfo|undefined{return this.#blobs?this.#blobs.blob(this.state,collection,record,name):BlobRuntime.peek(this.state,collection,record,name);}
+  /** The verified content of a file, fetched from the hub if it is not here. Treat it as the SDK's: a file that is
+   * evicted or replaced later can no longer be read through it, so copy it if the app needs to keep it. */
+  fetchBlob(collection:Uint8Array,record:Uint8Array,name:string,signal?:AbortSignal):Promise<Blob>{return this.#blobRuntime().fetchBlob(this.state,collection,record,name,signal);}
+  /** Whether this device fetches every file of a list unasked, up to the `unasked` size. */
+  keepFiles(collection:Uint8Array,keep:boolean):Promise<void>{return this.#blobRuntime().keepFiles(collection,keep);}
+  get blobSettings():BlobSettings{return this.#blobRuntime().settings;}
+  setBlobSettings(settings:Partial<BlobSettings>):void{this.#blobRuntime().settings=settings;}
+  /** Checks that the chunks of files this device holds are still on the hub and restores those that aren't, as
+   * after a start (§17.8); for instance when the app comes to the foreground. */
+  checkBlobs():void{this.#blobRuntime().check();}
+  /** Wakes the blob worker and resolves once it has run a whole round after now. */
+  settleBlobs():Promise<void>{return this.#blobs?this.#blobs.settle():Promise.resolve();}
+  /** The blob folder's storage quota: unknown where the server reports none, never zero. */
+  blobQuota():Promise<BlobQuota>{return this.#blobRuntime().quota();}
+  async close():Promise<void>{if(this.#closed)return;this.#closed=true;this.#abort?.abort();this.#changes.end();await this.#running?.catch(()=>{});await this.#blobs?.close();}
 }

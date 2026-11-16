@@ -12,7 +12,8 @@ implementations on `testbed` are separate.
 The [browser target](typescript/BROWSER.md) adds direct JMAP push, an IndexedDB
 journal, remembered browser keys and worker-based admin capsules for Liszto.
 Its durable controller supports pairing, verified reads/edits, sharing and
-home/collection rotation, removal and healing. Browser administration and pairing/invitation creation are implemented. Browser hub founding is implemented; invitation acceptance and creator recovery
+home/collection rotation, removal and healing, and files (DESIGN §17) over a
+JMAP blob folder, as the Swift and Go engines have them. Browser administration and pairing/invitation creation are implemented. Browser hub founding is implemented; invitation acceptance and creator recovery
 still need controller entry points. Liszto’s web workspace lives in its own repository. All four SDKs also offer an
 [optional JMAP transport](JMAP.md); native applications keep IMAP as the default.
 
@@ -144,8 +145,8 @@ the session tests; it is not a proof that a third-party transport never polls.
 ## Files
 
 All four cores implement the file encodings and manifests of DESIGN §17. Go and
-Swift also upload, fetch, resume and heal files over IMAP. Browser file transport
-is not implemented. Files are optional; clients without them still merge their
+Swift also upload, fetch, resume and heal files over IMAP; the browser does so over a
+JMAP blob folder ([BROWSER.md](typescript/BROWSER.md)). Files are optional; clients without them still merge their
 manifest fields. Replacing a file uploads it whole; delta sync and version history
 remain future work. Copying a collection with attachments is refused until files
 can be re-encrypted into the new scope. See [BLOBS.md](../BLOBS.md) for measured provider costs and

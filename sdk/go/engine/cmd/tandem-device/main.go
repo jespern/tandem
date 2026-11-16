@@ -56,7 +56,7 @@ func (d *driver) blobOp(ctx context.Context, dev *engine.Device, op string, a ar
 		size, _ := a["chunkSize"].(float64)
 		limit, _ := a["storeLimit"].(float64)
 		connections, _ := a["connections"].(float64)
-		opts := imap.BlobOptions{Folder: d.folder + "-blobs"}
+		opts := imap.BlobOptions{Folder: d.folder + "-Blobs"}
 		if connections > 0 {
 			n := int(connections)
 			opts.TransferConnections = n

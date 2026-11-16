@@ -3,7 +3,8 @@
 Tandem v2 core for **Node.js 26+**, with a browser build for Liszto.
 See the [shared scope and real-time contract](../README.md).
 The [browser guide](BROWSER.md) covers JMAP, IndexedDB, browser keys, worker
-capsules and the durable device controller.
+capsules, the durable device controller and files (DESIGN §17). The pure file
+core, chunk messages and an in-memory blob folder are in the main entry point.
 
 ```sh
 cd sdk/typescript

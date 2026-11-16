@@ -5,6 +5,8 @@ import type {PrivateKey} from './key.js';
 
 export const randomBytes = (size: number): Buffer => nativeRandom(size);
 export const hash256 = (data: Uint8Array): Uint8Array => createHash('sha256').update(data).digest();
+/** Incremental SHA-256, for content too large to hold at once. */
+export function hashStream(): {update(data: Uint8Array): void; digest(): Uint8Array} { const h = createHash('sha256'); return {update: data => { h.update(data); }, digest: () => h.digest()}; }
 export const hash512 = (data: Uint8Array): Uint8Array => createHash('sha512').update(data).digest();
 export const hmac256 = (key: Uint8Array, data: Uint8Array): Uint8Array => createHmac('sha256', key).update(data).digest();
 export const hkdf = (key: Uint8Array, salt: Uint8Array, info: Uint8Array, size: number): Uint8Array => new Uint8Array(hkdfSync('sha256', key, salt, info, size));

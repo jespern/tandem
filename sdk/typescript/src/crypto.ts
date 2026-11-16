@@ -1,7 +1,7 @@
 import {Buffer} from "buffer";
-import {randomBytes, hash256, hash512, hmac256, hkdf, privateKey, publicKey, sign, sharedSecret, encrypt, decrypt} from "#platform-crypto";
+import {randomBytes, hash256, hash512, hashStream, hmac256, hkdf, privateKey, publicKey, sign, sharedSecret, encrypt, decrypt} from "#platform-crypto";
 import type {PrivateKey} from "./key.js";
-export {randomBytes, privateKey, publicKey, sign, encrypt, decrypt};
+export {randomBytes, privateKey, publicKey, sign, encrypt, decrypt, hashStream};
 export type {PrivateKey} from "./key.js";
 
 export const sha = (...parts: Uint8Array[]): Buffer => Buffer.from(hash256(Buffer.concat(parts)));

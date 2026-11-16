@@ -12,6 +12,8 @@ export interface OutboxEntry {guard?:ExportGuard;deferred?:boolean;id: string; h
 export interface JournalEvent {guard?:ExportGuard;deferred?:boolean;sequence: number; hub: string; kind: 'queued' | 'received' | 'removed'; id: string; channel: string; body: Uint8Array; remoteId?: string}
 export interface LocalMessage {guard?:ExportGuard;deferred?:boolean;channel: string; body: Uint8Array}
 export interface LocalTransaction {
+  /** The pending blob writes of this hub (`upload:` entries of the blob store), read under the same lock. */
+  readonly uploads: ReadonlyMap<string, unknown>;
   /** Opaque device state, read under the same transaction lock as the outbox. */
   readonly state: Uint8Array | undefined;
   /** Last durable envelope event in this hub, read under the write lock. */
@@ -25,13 +27,19 @@ export interface LocalPlan {
   actions?: readonly {id:string;sealed:Uint8Array|null}[];
   cancel?: readonly string[];
   destroy?: readonly string[];
+  /** Blob store entries to put, or to remove with null, in the same transaction. */
+  blobs?: readonly {key:string;value:unknown}[];
   /** Omit to preserve state; null removes it. Secrets must be wrapped before use. */
   state?: Uint8Array | null;
 }
 export interface Delivery {hub: string; remoteId: string; id: string; channel: string; body: Uint8Array; present: boolean}
 type EventRow = Omit<JournalEvent, 'sequence'>;
-const SCHEMA = ['meta', 'clocks', 'outbox', 'received', 'cursors', 'events', 'actions', 'deletions'] as const;
+/** One message of the blob folder as this device knows it (DESIGN.md §17.4.3): its claims, when this device first
+ * saw it by its own clock, and whether it verified (1) or rejected (2) the body. */
+export interface ChunkRow {id:string;address:string;channel:string;seen:number;state:0|1|2}
+const SCHEMA = ['meta', 'clocks', 'outbox', 'received', 'cursors', 'events', 'actions', 'deletions', 'blobs', 'chunks'] as const;
 const request = <T>(req: IDBRequest<T>): Promise<T> => new Promise((resolve, reject) => { req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
+const prefix = (hub: string, start: string): IDBKeyRange => IDBKeyRange.bound([hub, start], [hub, start + '\uffff']);
 const finished = (tx: IDBTransaction): Promise<void> => new Promise((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onabort = () => reject(tx.error ?? new Error('transaction aborted')); tx.onerror = () => {}; });
 
 /** Separate SDK-owned IndexedDB. All preparation inside a write transaction is synchronous. */
@@ -45,7 +53,7 @@ export class BrowserJournal {
   }
   static async open(name = 'tandem'): Promise<BrowserJournal> {
     if (!name) throw new Error('database name is required');
-    const opening = indexedDB.open(name, 2);
+    const opening = indexedDB.open(name, 3);
     opening.onupgradeneeded = event => {
       const db = opening.result;
       const upgrade = () => {
@@ -53,6 +61,7 @@ export class BrowserJournal {
           const store = db.objectStoreNames.contains(name) ? opening.transaction!.objectStore(name) : db.createObjectStore(name, name === 'events' ? {keyPath:'sequence',autoIncrement:true} : undefined);
           if (['events','outbox','received','actions','deletions'].includes(name) && !store.indexNames.contains('hub')) store.createIndex('hub','hub');
           if (name === 'events' && !store.indexNames.contains('hubSequence')) store.createIndex('hubSequence',['hub','sequence']);
+          if (name === 'chunks' && !store.indexNames.contains('address')) store.createIndex('address',['hub','address']);
         }
         if(event.oldVersion===0)opening.transaction!.objectStore('meta').put('tandem-v2','application');
       };
@@ -92,7 +101,7 @@ export class BrowserJournal {
   async commit(hub: string, installation: Uint8Array, now: number, prepare: (tx: LocalTransaction) => LocalPlan): Promise<string[]> {
     if (installation.length !== 8 || !Number.isInteger(now) || now < 0 || now >= 2**48 || !hub) throw new Error('invalid installation, clock or hub');
     const localID = Uint8Array.from(installation);
-    const tx = this.#db.transaction(['meta', 'clocks', 'outbox', 'events', 'actions', 'deletions'], 'readwrite', {durability: 'strict'}), done = finished(tx);
+    const tx = this.#db.transaction(['meta', 'clocks', 'outbox', 'events', 'actions', 'deletions', 'blobs'], 'readwrite', {durability: 'strict'}), done = finished(tx);
     void done.catch(() => {});
     try {
       const clockKey = b64u(localID), clocks = tx.objectStore('clocks'), meta = tx.objectStore('meta');
@@ -105,9 +114,10 @@ export class BrowserJournal {
       const sequence = latest ? (latest.value as JournalEvent).sequence : 0;
       const savedActions = await request(tx.objectStore('actions').index('hub').getAll(hub)) as JournalAction[];
       const actions = new Map(savedActions.map(action => [action.id, Uint8Array.from(action.sealed)]));
+      const uploads = new Map((await request(tx.objectStore('blobs').getAll(prefix(hub, 'upload:'))) as {key:string;value:unknown}[]).map(row => [row.key, row.value]));
       let reserved = false, preparing = true;
       const plan = (() => {
-        try { return prepare({sequence, clock:clock?{...clock}:undefined, actions, state: state === undefined ? undefined : Uint8Array.from(state), nextDot: () => {
+        try { return prepare({sequence, clock:clock?{...clock}:undefined, actions, uploads, state: state === undefined ? undefined : Uint8Array.from(state), nextDot: () => {
           if (!preparing) throw new Error('clock reservation outside preparation');
           clock = clock ? nextClock(clock.millis, clock.counter, now) : {millis: now, counter: 0}; reserved = true;
           return {...clock, device: Uint8Array.from(localID)};
@@ -126,6 +136,8 @@ export class BrowserJournal {
       const actionUpdates = (plan.actions ?? []).map(action => {if(!action.id)throw new Error('action ID required');return {id:action.id,sealed:action.sealed===null?null:Uint8Array.from(action.sealed)};});
       for(const action of actionUpdates){if(action.sealed===null)tx.objectStore('actions').delete([hub,action.id]);else tx.objectStore('actions').put({id:action.id,hub,sealed:action.sealed} satisfies JournalAction,[hub,action.id]);}
       const outbox = tx.objectStore('outbox'), events = tx.objectStore('events'); let queued = false;
+      const blobUpdates = (plan.blobs ?? []).map(entry => { if (!entry.key) throw new Error('blob key required'); return {key: entry.key, value: entry.value === null ? null : structuredClone(entry.value)}; });
+      for (const entry of blobUpdates) { if (entry.value === null) tx.objectStore('blobs').delete([hub, entry.key]); else tx.objectStore('blobs').put({hub, key: entry.key, value: entry.value}, [hub, entry.key]); }
       for(const id of plan.cancel??[])outbox.delete([hub,id]);
       for(const id of plan.destroy??[]){if(!id)throw new Error('delivery ID required');tx.objectStore('deletions').put({hub,id} satisfies PendingDelete,[hub,id]);}
       for (const message of messages) {
@@ -136,7 +148,7 @@ export class BrowserJournal {
           outbox.put(entry, [hub, entry.id]); events.add({hub, kind: 'queued', id: entry.id, channel: entry.channel, body: entry.body, ...(entry.guard?{guard:entry.guard}:{}), ...(entry.deferred?{deferred:true}:{})} satisfies EventRow); queued = true;
         }
       }
-      await done; if (queued || reserved || updated !== undefined || !active || actionUpdates.length || plan.cancel?.length || plan.destroy?.length) this.#notify(queued || !!plan.destroy?.length); return messages.map(message => message.id);
+      await done; if (queued || reserved || updated !== undefined || !active || actionUpdates.length || plan.cancel?.length || plan.destroy?.length || blobUpdates.length) this.#notify(queued || !!plan.destroy?.length); return messages.map(message => message.id);
     } catch (error) { try { tx.abort(); } catch {} await done.catch(() => {}); throw error; }
   }
   async cursor(hub: string): Promise<string> { return (await request(this.#db.transaction('cursors').objectStore('cursors').get(hub)) as string | undefined) ?? ''; }
@@ -200,6 +212,45 @@ export class BrowserJournal {
       cursor.onsuccess = () => { const row = cursor.result; if (!row || out.length === limit) { resolve(out); return; }
         const event = row.value as JournalEvent; if (event.hub === hub) out.push(event); row.continue(); };
     });
+  }
+  // The blob store (DESIGN.md §17): small values under string keys per hub, and the chunk index.
+  async blobValue(hub: string, key: string): Promise<unknown> { const row = await request(this.#db.transaction('blobs').objectStore('blobs').get([hub, key])) as {value: unknown} | undefined; return row?.value; }
+  async blobValues(hub: string, start: string): Promise<[string, unknown][]> { return (await request(this.#db.transaction('blobs').objectStore('blobs').getAll(prefix(hub, start))) as {key: string; value: unknown}[]).map(row => [row.key, row.value]); }
+  /** Puts values, or removes them where the value is null, in one transaction. */
+  async setBlobValues(hub: string, entries: readonly {key: string; value: unknown}[]): Promise<void> {
+    if (!entries.length) return;
+    const tx = this.#db.transaction('blobs', 'readwrite', {durability: 'strict'}), done = finished(tx), store = tx.objectStore('blobs');
+    for (const entry of entries) { if (entry.value === null) store.delete([hub, entry.key]); else store.put({hub, key: entry.key, value: entry.value}, [hub, entry.key]); }
+    await done;
+  }
+  /** One page of the blob folder's changes with its cursor: a new message keeps what this device already knows of it. */
+  async noteChunks(hub: string, added: readonly {id: string; address: string; channel: string}[], removed: readonly string[], cursor: string, seen: number): Promise<void> {
+    const tx = this.#db.transaction(['chunks', 'blobs'], 'readwrite', {durability: 'strict'}), done = finished(tx), chunks = tx.objectStore('chunks');
+    void done.catch(() => {});
+    try {
+      for (const id of removed) chunks.delete([hub, id]);
+      for (const r of added) if (await request(chunks.getKey([hub, r.id])) === undefined) chunks.put({hub, id: r.id, address: r.address, channel: r.channel, seen, state: 0}, [hub, r.id]);
+      tx.objectStore('blobs').put({hub, key: 'cursor', value: cursor}, [hub, 'cursor']); await done;
+    } catch (error) { try { tx.abort(); } catch {} await done.catch(() => {}); throw error; }
+  }
+  /** Forgets the whole chunk index of a hub, for a blob folder that is not the one it was built from. */
+  async forgetChunkIndex(hub: string): Promise<void> {
+    const tx = this.#db.transaction('chunks', 'readwrite', {durability: 'strict'}), done = finished(tx);
+    tx.objectStore('chunks').delete(IDBKeyRange.bound([hub, ''], [hub, '\uffff'])); await done;
+  }
+  async chunks(hub: string, address?: string): Promise<ChunkRow[]> {
+    const store = this.#db.transaction('chunks').objectStore('chunks');
+    const rows = await request(address === undefined ? store.getAll(IDBKeyRange.bound([hub, ''], [hub, '\uffff'])) : store.index('address').getAll([hub, address])) as (ChunkRow & {hub: string})[];
+    return rows.map(({hub: _, ...row}) => row);
+  }
+  async setChunkStates(hub: string, states: readonly {id: string; state: 0 | 1 | 2 | null}[]): Promise<void> {
+    if (!states.length) return;
+    const tx = this.#db.transaction('chunks', 'readwrite', {durability: 'strict'}), done = finished(tx), chunks = tx.objectStore('chunks');
+    void done.catch(() => {});
+    try {
+      for (const s of states) { if (s.state === null) { chunks.delete([hub, s.id]); continue; } const row = await request(chunks.get([hub, s.id])) as ChunkRow | undefined; if (row) chunks.put({...row, state: s.state}, [hub, s.id]); }
+      await done;
+    } catch (error) { try { tx.abort(); } catch {} await done.catch(() => {}); throw error; }
   }
   /** Event notifications include commits made by another tab, through BroadcastChannel. */
   eventsChanged(): Promise<void> { return this.#events.snapshot(); }
