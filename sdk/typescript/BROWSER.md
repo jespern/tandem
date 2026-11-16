@@ -300,3 +300,29 @@ It explicitly enables browser CORS and publishes real loopback URLs, with no pro
 3. Fastmail passes direct Chromium CORS/push/replay/deletion and byte-exact IMAP
    interchange. A live run measured 265 ms browser push, 587 ms IMAP→browser and
    **60.6 s JMAP→IMAP IDLE**. Jesper accepted this delay for mixed mode and kept native IMAP as the default. A browser using JMAP does not make Fastmail’s IMAP push immediate.
+4. Browser files remain on `liszto/files` (reviewed at `2e27165`, 2026-11-16).
+   The independent JMAP destroy race fix has been taken separately: `notFound`
+   means another device already completed deletion; other refusals still fail.
+   Before integrating the file engine, add browser regressions for the native
+   campaign's remaining recovery/integrity cases and reconcile these code paths
+   in `src/browser/blobs.ts`:
+
+   - `peek`, `blob` and `#fetchManifest` currently accept inline content without
+     checking its advertised whole-file hash.
+   - `#download` resumes per-index pieces under a content-hash directory using
+     their lengths, without binding the manifest's order and keys. `#downloads`
+     also shares a promise by hash alone. Exercise an interrupted inconsistent
+     layout followed by a good manifest with that same hash, and concurrent reads.
+   - `#commit` removes the staged source after the local journal/outbox commit,
+     before feed confirmation. Exercise cache eviction and remote chunk loss
+     while the feed remains offline, then reopen and repair.
+   - `#uploadAll` can wait for missing chunks or a missing current tag before
+     `prepareBlobCommit` checks lost writing permission. Exercise observed
+     removal/downgrade during a blocked upload, followed by re-admission/promotion.
+
+   These are code-review integration gates, not claims that new browser
+   reproductions have already run. Pending-write causal reissue and retaining an
+   oversized just-fetched file are already implemented on the branch. Its native
+   driver folder rename also needs matching updates to the interop provider and
+   socket-fixture folder checks; resolving only the three reported merge
+   conflicts would leave those tests pointing at a different folder.
